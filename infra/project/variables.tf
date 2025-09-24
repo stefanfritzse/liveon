@@ -31,7 +31,7 @@ variable "folder_id" {
 variable "default_region" {
   description = "Default region used by the Google provider."
   type        = string
-  default     = "us-central1"
+  default     = "europe-north2"
 }
 
 variable "skip_project_deletion" {

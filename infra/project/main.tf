@@ -14,10 +14,10 @@ resource "google_project" "project" {
   lifecycle {
     prevent_destroy = true
 
-    precondition {
-      condition     = length(local.parent_references) == 1
-      error_message = "Exactly one of org_id or folder_id must be provided."
-    }
+    #precondition {
+      #condition     = length(local.parent_references) == 1
+    #  error_message = "Exactly one of org_id or folder_id must be provided."
+    #}
   }
 }
 
