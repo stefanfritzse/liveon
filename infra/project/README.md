@@ -1,7 +1,7 @@
 # Project Bootstrap Terraform
 
-This configuration manages the Google Cloud project linkage to billing and enables
-foundational APIs required by later infrastructure stages.
+
+This configuration manages the Google Cloud project linkage to billing and enables foundational APIs required by later infrastructure stages.
 
 ## Prerequisites
 
@@ -40,6 +40,7 @@ foundational APIs required by later infrastructure stages.
 
 4. If the project `live-on-473112` already exists, import it into state before planning:
 
+
    ```powershell
    terraform import google_project.project live-on-473112
    ```
@@ -52,9 +53,11 @@ foundational APIs required by later infrastructure stages.
 
 6. Apply the configuration when ready:
 
+
    ```powershell
    terraform apply
    ```
 
 After the apply completes, the project will be attached to the billing account and the listed
 APIs will remain enabled under remote state management.
+
