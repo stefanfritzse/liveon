@@ -71,4 +71,6 @@ addition to the project and IAM automation described above:
   tailored for Autopilot GKE workloads.
 - Two secondary IP ranges on the subnetwork reserved for Kubernetes Pods and Services,
   enabling VPC-native cluster networking.
+- A regional Artifact Registry repository configured for Docker images with immutable tags
+  to host application containers close to the target GKE cluster.
 

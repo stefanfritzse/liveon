@@ -76,6 +76,24 @@ variable "service_ip_cidr_range" {
   default     = "10.30.0.0/20"
 }
 
+variable "artifact_registry_location" {
+  description = "Region where the Artifact Registry repository will be created."
+  type        = string
+  default     = "europe-north2"
+}
+
+variable "artifact_registry_repository_id" {
+  description = "Identifier to assign to the Artifact Registry repository."
+  type        = string
+  default     = "longevity-app"
+}
+
+variable "artifact_registry_repository_description" {
+  description = "Human-readable description for the Artifact Registry repository."
+  type        = string
+  default     = "Container images for the Live On platform."
+}
+
 variable "skip_project_deletion" {
   description = "Prevent Terraform from deleting the project."
   type        = bool

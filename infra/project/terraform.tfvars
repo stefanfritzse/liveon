@@ -15,6 +15,10 @@ pod_ip_cidr_range     = "10.20.0.0/16"
 service_ip_range_name = "gke-services"
 service_ip_cidr_range = "10.30.0.0/20"
 
+artifact_registry_location               = "europe-north2"
+artifact_registry_repository_id          = "longevity-app"
+artifact_registry_repository_description = "Container images for the Live On platform."
+
 # Repository that is allowed to impersonate the Terraform service account via Workload Identity Federation.
 github_repository = "your-org/your-repo"
 # github_default_branch = "main"
