@@ -62,6 +62,14 @@ jobs:
           docker push "${IMAGE_URI}"
           echo "IMAGE_URI=${IMAGE_URI}" >> $GITHUB_ENV
 
+      - name: Allow runner IP to GKE master (MAN)
+        run: |
+          RUNNER_IP=$(curl -s ifconfig.me)
+          gcloud container clusters update "$GKE_CLUSTER" \
+            --region "$REGION" --project "$PROJECT_ID" \
+            --enable-master-authorized-networks \
+            --master-authorized-networks 203.0.113.0/24,${RUNNER_IP}/32
+
       - name: Fetch fresh GKE credentials
         run: |
           gcloud container clusters get-credentials "$GKE_CLUSTER" --region "$REGION" --project "$PROJECT_ID"
