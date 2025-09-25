@@ -1,10 +1,8 @@
 resource "google_container_cluster" "primary" {
-  provider = google-beta
-
-  name     = var.gke_cluster_name
-  location = var.default_region
-  project  = google_project.project.project_id
-
+  provider            = google-beta
+  name                = var.gke_cluster_name
+  location            = var.default_region
+  project             = google_project.project.project_id
   description         = "Autopilot GKE cluster for the Longevity Coach platform."
   enable_autopilot    = true
   networking_mode     = "VPC_NATIVE"
@@ -13,9 +11,7 @@ resource "google_container_cluster" "primary" {
   network    = google_compute_network.primary.id
   subnetwork = google_compute_subnetwork.primary.id
 
-  release_channel {
-    channel = "REGULAR"
-  }
+  release_channel { channel = "REGULAR" }
 
   private_cluster_config {
     enable_private_nodes    = true
@@ -42,18 +38,11 @@ resource "google_container_cluster" "primary" {
   }
 
   master_auth {
-    client_certificate_config {
-      issue_client_certificate = false
-    }
+    client_certificate_config { issue_client_certificate = false }
   }
 
   workload_identity_config {
     workload_pool = "${google_project.project.project_id}.svc.id.goog"
-  }
-
-  auto_provisioning_defaults {
-    service_account = google_service_account.gke_nodes.email
-    oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
   }
 
   depends_on = [google_project_service.services]
