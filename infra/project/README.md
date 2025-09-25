@@ -80,4 +80,21 @@ addition to the project and IAM automation described above:
 - An Autopilot GKE cluster configured with private nodes, master authorized networks,
   and Workload Identity so that workloads can securely call Google Cloud APIs without
   long-lived keys.
+- A hardened Compute Engine VM that lives on the same VPC/subnet as the private GKE
+  control plane and serves as the self-hosted GitHub Actions runner required by the
+  `Build and Deploy` workflow.
+
+## GitHub Actions Runner onboarding
+
+The workflow definition for `Build and Deploy` expects to target a `self-hosted` runner
+that can directly reach the private GKE control plane endpoint. The Terraform resources in
+this module provision an `e2-micro` Debian VM on the same VPC/subnetwork as the cluster and
+install Docker, the Google Cloud SDK, and `kubectl` during boot so it can run `kubectl apply`
+steps against the cluster API server.
+
+After `terraform apply` completes, register the instance with GitHub as a self-hosted runner
+for your repository/organization and add any repository-level labels referenced by your
+workflow. For security-sensitive environments you can disable the ephemeral external IP by
+setting `runner_enable_public_ip = false` and ensure that Private Google Access or a Cloud
+NAT provides egress for package installation.
 

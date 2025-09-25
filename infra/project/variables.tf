@@ -195,3 +195,90 @@ variable "github_default_branch" {
   type        = string
   default     = "main"
 }
+
+variable "enable_runner" {
+  description = "Whether to provision the self-hosted GitHub Actions runner VM."
+  type        = bool
+  default     = true
+}
+
+variable "runner_instance_name" {
+  description = "Name of the Compute Engine instance that will host the GitHub Actions runner."
+  type        = string
+  default     = "gha-runner"
+}
+
+variable "runner_zone" {
+  description = "Compute Engine zone where the GitHub Actions runner VM should be created."
+  type        = string
+  default     = "europe-north2-a"
+}
+
+variable "runner_machine_type" {
+  description = "Machine type to use for the GitHub Actions runner VM."
+  type        = string
+  default     = "e2-micro"
+}
+
+variable "runner_disk_size_gb" {
+  description = "Boot disk size (in GB) allocated to the GitHub Actions runner VM."
+  type        = number
+  default     = 30
+}
+
+variable "runner_boot_image" {
+  description = "Source image used for the GitHub Actions runner VM boot disk."
+  type        = string
+  default     = "projects/debian-cloud/global/images/family/debian-12"
+}
+
+variable "runner_service_account_id" {
+  description = "Account ID assigned to the service account used by the GitHub Actions runner VM."
+  type        = string
+  default     = "sa-gh-runner"
+}
+
+variable "runner_service_account_display_name" {
+  description = "Display name for the service account used by the GitHub Actions runner VM."
+  type        = string
+  default     = "GitHub Actions Runner"
+}
+
+variable "runner_metadata" {
+  description = "Additional metadata key/value pairs to attach to the GitHub Actions runner VM."
+  type        = map(string)
+  default     = {}
+}
+
+variable "runner_labels" {
+  description = "Resource labels applied to the GitHub Actions runner VM."
+  type        = map(string)
+  default = {
+    role = "gha-runner"
+  }
+}
+
+variable "runner_network_tags" {
+  description = "Network tags assigned to the GitHub Actions runner VM."
+  type        = list(string)
+  default     = []
+}
+
+variable "runner_enable_public_ip" {
+  description = "Whether to attach an ephemeral public IP address to the GitHub Actions runner VM."
+  type        = bool
+  default     = true
+}
+
+variable "runner_startup_script" {
+  description = "Optional custom startup script executed on the GitHub Actions runner VM."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
+variable "runner_os_user" {
+  description = "Linux user that should be added to the docker group on the runner VM."
+  type        = string
+  default     = "google"
+}

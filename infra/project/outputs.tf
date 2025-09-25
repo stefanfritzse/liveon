@@ -65,3 +65,18 @@ output "gke_workload_identity_pool" {
   description = "Workload Identity pool attached to the GKE cluster."
   value       = google_container_cluster.primary.workload_identity_config[0].workload_pool
 }
+
+output "runner_instance_self_link" {
+  description = "Self link of the GitHub Actions runner Compute Engine instance."
+  value       = try(google_compute_instance.runner[0].self_link, null)
+}
+
+output "runner_instance_internal_ip" {
+  description = "Internal IP address assigned to the GitHub Actions runner instance."
+  value       = try(google_compute_instance.runner[0].network_interface[0].network_ip, null)
+}
+
+output "runner_service_account_email" {
+  description = "Service account email used by the GitHub Actions runner instance."
+  value       = try(google_service_account.runner[0].email, null)
+}

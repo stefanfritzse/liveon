@@ -33,6 +33,13 @@ artifact_registry_repository_description = "Container images for the Live On pla
 github_repository = "stefanfritzse/liveon"
 # github_default_branch = "main"
 
+# GitHub Actions runner configuration. Disable or override defaults as needed.
+enable_runner           = true
+runner_zone             = "europe-north2-a"
+runner_machine_type     = "e2-micro"
+runner_enable_public_ip = true
+# runner_startup_script   = file("./custom-runner-startup.sh")
+
 # Uncomment to override the default API enablement list.
 # activate_apis = [
 #   "cloudresourcemanager.googleapis.com",

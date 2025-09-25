@@ -6,6 +6,12 @@ locals {
     "roles/logging.logWriter",
     "roles/artifactregistry.reader",
   ]
+  runner_sa_roles = [
+    "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
+    "roles/container.developer",
+    "roles/artifactregistry.reader",
+  ]
 }
 
 resource "google_project" "project" {
