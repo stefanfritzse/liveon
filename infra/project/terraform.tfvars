@@ -30,7 +30,7 @@ artifact_registry_repository_id          = "longevity-app"
 artifact_registry_repository_description = "Container images for the Live On platform."
 
 # Repository that is allowed to impersonate the Terraform service account via Workload Identity Federation.
-github_repository = "your-org/your-repo"
+github_repository = "stefanfritzse/liveon"
 # github_default_branch = "main"
 
 # Uncomment to override the default API enablement list.
