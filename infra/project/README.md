@@ -62,3 +62,13 @@ This configuration manages the Google Cloud project linkage to billing and enabl
 After the apply completes, the project will be attached to the billing account and the listed
 APIs will remain enabled under remote state management.
 
+## Managed Resources
+
+This stage of the configuration now provisions the following foundational resources in
+addition to the project and IAM automation described above:
+
+- A dedicated VPC network (`google_compute_network.primary`) with a regional subnetwork
+  tailored for Autopilot GKE workloads.
+- Two secondary IP ranges on the subnetwork reserved for Kubernetes Pods and Services,
+  enabling VPC-native cluster networking.
+
