@@ -81,4 +81,5 @@ jobs:
           # Om du tidigare fick OpenAPI timeouts från API-servern, kan du tillfälligt lägga till --validate=false:
           # kubectl apply --validate=false -f k8s/
           kubectl apply -f k8s/
-          kubectl rollout status deploy/$(yq '.metadata.name' k8s/deployment.yaml) --timeout=120s
+          kubectl rollout status deploy/longevity-app --timeout=180s
+          kubectl get pods -l app=longevity-app -o wide
