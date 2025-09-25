@@ -45,3 +45,8 @@ output "gke_secondary_ip_ranges" {
     services = { name = google_compute_subnetwork.primary.secondary_ip_range[1].range_name, cidr = google_compute_subnetwork.primary.secondary_ip_range[1].ip_cidr_range }
   }
 }
+
+output "artifact_registry_repository" {
+  description = "Fully-qualified identifier of the Artifact Registry repository storing application images."
+  value       = google_artifact_registry_repository.app.id
+}
