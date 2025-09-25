@@ -54,3 +54,57 @@ variable "activate_apis" {
     "cloudbuild.googleapis.com"
   ]
 }
+
+variable "terraform_service_account_id" {
+  description = "Account ID of the Terraform service account created during bootstrap."
+  type        = string
+  default     = "sa-terraform"
+}
+
+variable "gke_nodes_service_account_id" {
+  description = "Account ID to assign to the dedicated GKE node service account."
+  type        = string
+  default     = "sa-gke-nodes"
+}
+
+variable "gke_nodes_service_account_display_name" {
+  description = "Display name for the dedicated GKE node service account."
+  type        = string
+  default     = "GKE Node Service Account"
+}
+
+variable "workload_identity_pool_id" {
+  description = "Identifier to use for the GitHub Actions Workload Identity Pool."
+  type        = string
+  default     = "github-actions"
+}
+
+variable "workload_identity_pool_display_name" {
+  description = "Display name for the Workload Identity Pool."
+  type        = string
+  default     = "GitHub Actions"
+}
+
+variable "workload_identity_provider_id" {
+  description = "Identifier to use for the GitHub Actions Workload Identity Provider."
+  type        = string
+  default     = "github"
+}
+
+variable "workload_identity_provider_display_name" {
+  description = "Display name for the Workload Identity Provider."
+  type        = string
+  default     = "GitHub"
+}
+
+variable "github_repository" {
+  description = "GitHub repository (ORG/REPO) that is trusted to access the Terraform service account."
+  type        = string
+  default     = "your-org/your-repo"
+}
+
+variable "github_default_branch" {
+  description = "Default GitHub branch that is authorized to use Workload Identity Federation."
+  type        = string
+  default     = "main"
+}
