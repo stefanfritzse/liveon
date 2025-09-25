@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    # If your runner registration used labels (e.g. gcp-runner), add them here:
+    # runs-on: [self-hosted, gcp-runner]
     env:
       PROJECT_ID: live-on-473112
       REGION: europe-north2
