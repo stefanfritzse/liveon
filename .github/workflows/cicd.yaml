@@ -1,0 +1,64 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: live-on-473112
+      REGION: europe-north2
+      GKE_CLUSTER: gke-longevity-primary
+      ARTIFACT_REPOSITORY: longevity-app
+      IMAGE_NAME: app
+      WORKLOAD_IDENTITY_PROVIDER: projects/192823657524/locations/global/workloadIdentityPools/github-actions/providers/github
+      SERVICE_ACCOUNT: sa-terraform@live-on-473112.iam.gserviceaccount.com
+      ARTIFACT_REGISTRY_HOST: europe-north2-docker.pkg.dev
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          install_components: gke-gcloud-auth-plugin
+
+      - name: Install kubectl component
+        run: gcloud components install kubectl --quiet
+
+      - name: Configure Docker authentication
+        run: gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY_HOST }} --quiet
+
+      - name: Build and push container image
+        env:
+          IMAGE_URI: ${{ env.ARTIFACT_REGISTRY_HOST }}/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          docker build -t "${IMAGE_URI}" -f Dockerfile .
+          docker push "${IMAGE_URI}"
+
+      - name: Configure kubectl context
+        run: gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --region ${{ env.REGION }} --project ${{ env.PROJECT_ID }}
+
+      - name: Deploy to GKE
+        env:
+          IMAGE_URI: ${{ env.ARTIFACT_REGISTRY_HOST }}/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          sed -i "s|IMAGE_PLACEHOLDER|${IMAGE_URI}|g" k8s/deployment.yaml
+          kubectl apply -f k8s/

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: longevity-app
+  labels:
+    app: longevity-app
+spec:
+  selector:
+    app: longevity-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
