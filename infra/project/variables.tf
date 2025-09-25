@@ -34,6 +34,48 @@ variable "default_region" {
   default     = "europe-north2"
 }
 
+variable "network_name" {
+  description = "Name of the primary VPC network for the platform."
+  type        = string
+  default     = "vpc-longevity"
+}
+
+variable "subnetwork_name" {
+  description = "Name of the regional subnetwork dedicated to the GKE cluster."
+  type        = string
+  default     = "subnet-gke-primary"
+}
+
+variable "subnetwork_cidr_range" {
+  description = "Primary IPv4 CIDR range allocated to the regional subnetwork."
+  type        = string
+  default     = "10.10.0.0/20"
+}
+
+variable "pod_ip_range_name" {
+  description = "Identifier for the secondary IP range dedicated to Kubernetes Pods."
+  type        = string
+  default     = "gke-pods"
+}
+
+variable "pod_ip_cidr_range" {
+  description = "CIDR block assigned to the Kubernetes Pod secondary IP range."
+  type        = string
+  default     = "10.20.0.0/16"
+}
+
+variable "service_ip_range_name" {
+  description = "Identifier for the secondary IP range dedicated to Kubernetes Services."
+  type        = string
+  default     = "gke-services"
+}
+
+variable "service_ip_cidr_range" {
+  description = "CIDR block assigned to the Kubernetes Service secondary IP range."
+  type        = string
+  default     = "10.30.0.0/20"
+}
+
 variable "skip_project_deletion" {
   description = "Prevent Terraform from deleting the project."
   type        = bool

@@ -56,7 +56,7 @@ resource "google_project_iam_member" "gke_node_sa_roles" {
 
 resource "google_iam_workload_identity_pool" "github" {
   project                   = google_project.project.project_id
-  workload_identity_pool_id = var.workload_identity_pool_id           # ex: "github-actions-pool"
+  workload_identity_pool_id = var.workload_identity_pool_id # ex: "github-actions-pool"
   display_name              = var.workload_identity_pool_display_name
   description               = "Federated identity pool for GitHub Actions workflows."
 }
@@ -64,7 +64,7 @@ resource "google_iam_workload_identity_pool" "github" {
 resource "google_iam_workload_identity_pool_provider" "github" {
   project                            = google_project.project.project_id
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
-  workload_identity_pool_provider_id = var.workload_identity_provider_id  # ex: "github-provider"
+  workload_identity_pool_provider_id = var.workload_identity_provider_id # ex: "github-provider"
   display_name                       = var.workload_identity_provider_display_name
   description                        = "OIDC provider configuration for GitHub Actions."
 
@@ -74,10 +74,10 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 
   # Mappar claims -> attribut
   attribute_mapping = {
-    "google.subject"        = "assertion.sub"
-    "attribute.actor"       = "assertion.actor"
-    "attribute.repository"  = "assertion.repository"
-    "attribute.ref"         = "assertion.ref"
+    "google.subject"       = "assertion.sub"
+    "attribute.actor"      = "assertion.actor"
+    "attribute.repository" = "assertion.repository"
+    "attribute.ref"        = "assertion.ref"
   }
 
   # Begränsa till repo + default branch (använder mappade attribut)
