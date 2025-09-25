@@ -1,7 +1,7 @@
 # Project Bootstrap Terraform
 
 
-This configuration manages the Google Cloud project linkage to billing and enables foundational APIs required by later infrastructure stages.
+This configuration manages the Google Cloud project linkage to billing and enables foundational APIs required by later infrastructure stages .
 
 ## Prerequisites
 
