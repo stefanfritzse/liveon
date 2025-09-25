@@ -55,41 +55,40 @@ resource "google_project_iam_member" "gke_node_sa_roles" {
 }
 
 resource "google_iam_workload_identity_pool" "github" {
-  provider = google-beta
-
   project                   = google_project.project.project_id
-  location                  = "global"
-  workload_identity_pool_id = var.workload_identity_pool_id
+  workload_identity_pool_id = var.workload_identity_pool_id           # ex: "github-actions-pool"
   display_name              = var.workload_identity_pool_display_name
   description               = "Federated identity pool for GitHub Actions workflows."
 }
 
 resource "google_iam_workload_identity_pool_provider" "github" {
-  provider = google-beta
-
   project                            = google_project.project.project_id
-  location                           = "global"
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
-  workload_identity_pool_provider_id = var.workload_identity_provider_id
+  workload_identity_pool_provider_id = var.workload_identity_provider_id  # ex: "github-provider"
   display_name                       = var.workload_identity_provider_display_name
   description                        = "OIDC provider configuration for GitHub Actions."
-
-  attribute_mapping = {
-    "google.subject"       = "assertion.sub"
-    "attribute.actor"      = "assertion.actor"
-    "attribute.repository" = "assertion.repository"
-    "attribute.ref"        = "assertion.ref"
-  }
-
-  attribute_condition = "assertion.repository == '${var.github_repository}' && assertion.ref == 'refs/heads/${var.github_default_branch}'"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
   }
+
+  # Mappar claims -> attribut
+  attribute_mapping = {
+    "google.subject"        = "assertion.sub"
+    "attribute.actor"       = "assertion.actor"
+    "attribute.repository"  = "assertion.repository"
+    "attribute.ref"         = "assertion.ref"
+  }
+
+  # Begränsa till repo + default branch (använder mappade attribut)
+  attribute_condition = "attribute.repository == \"${var.github_repository}\" && attribute.ref == \"refs/heads/${var.github_default_branch}\""
 }
 
+# Tillåt WIF att agera som Terraform-SA:t
 resource "google_service_account_iam_member" "terraform_wif" {
   service_account_id = data.google_service_account.terraform.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repository}"
+
+  # principalSet som pekar på poolen, filtrerad på repo-attribut
+  member = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repository}"
 }
