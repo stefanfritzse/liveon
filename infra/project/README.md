@@ -23,6 +23,10 @@ This configuration manages the Google Cloud project linkage to billing and enabl
    Update `terraform.tfvars` with the correct `project_id`, `billing_account_id`, and either
    `org_id` or `folder_id`. Set `github_repository` to the `<owner>/<repo>` string for the
    GitHub repository whose workflows should be allowed to assume the Terraform service account.
+   Provide the CIDR blocks that should have API server access in
+   `gke_master_authorized_networks` and adjust the optional
+   `gke_master_ipv4_cidr_block` if the default master address range conflicts with existing
+   allocations.
 
 2. Configure the backend to use the remote state bucket created by the bootstrap step. Either
    update `backend.tf.example` with your bucket name and rename it to `backend.tf`, or pass
@@ -73,4 +77,7 @@ addition to the project and IAM automation described above:
   enabling VPC-native cluster networking.
 - A regional Artifact Registry repository configured for Docker images with immutable tags
   to host application containers close to the target GKE cluster.
+- An Autopilot GKE cluster configured with private nodes, master authorized networks,
+  and Workload Identity so that workloads can securely call Google Cloud APIs without
+  long-lived keys.
 

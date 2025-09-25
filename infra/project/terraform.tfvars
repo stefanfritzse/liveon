@@ -15,6 +15,16 @@ pod_ip_cidr_range     = "10.20.0.0/16"
 service_ip_range_name = "gke-services"
 service_ip_cidr_range = "10.30.0.0/20"
 
+gke_cluster_name           = "gke-longevity-primary"
+gke_master_ipv4_cidr_block = "172.16.0.16/28"
+# gke_enable_private_endpoint = false
+gke_master_authorized_networks = [
+  {
+    name       = "trusted-admin"
+    cidr_block = "203.0.113.0/24"
+  },
+]
+
 artifact_registry_location               = "europe-north2"
 artifact_registry_repository_id          = "longevity-app"
 artifact_registry_repository_description = "Container images for the Live On platform."

@@ -76,6 +76,33 @@ variable "service_ip_cidr_range" {
   default     = "10.30.0.0/20"
 }
 
+variable "gke_cluster_name" {
+  description = "Name to assign to the Autopilot GKE cluster."
+  type        = string
+  default     = "gke-longevity-primary"
+}
+
+variable "gke_master_ipv4_cidr_block" {
+  description = "RFC 1918 CIDR block allocated for the private GKE control plane endpoint."
+  type        = string
+  default     = "172.16.0.16/28"
+}
+
+variable "gke_enable_private_endpoint" {
+  description = "Enable access to the GKE control plane via a private endpoint inside the VPC."
+  type        = bool
+  default     = false
+}
+
+variable "gke_master_authorized_networks" {
+  description = "List of CIDR blocks allowed to reach the public control plane endpoint."
+  type = list(object({
+    name       = string
+    cidr_block = string
+  }))
+  default = []
+}
+
 variable "artifact_registry_location" {
   description = "Region where the Artifact Registry repository will be created."
   type        = string

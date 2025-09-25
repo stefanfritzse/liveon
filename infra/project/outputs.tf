@@ -50,3 +50,18 @@ output "artifact_registry_repository" {
   description = "Fully-qualified identifier of the Artifact Registry repository storing application images."
   value       = google_artifact_registry_repository.app.id
 }
+
+output "gke_cluster_name" {
+  description = "Name of the Autopilot GKE cluster provisioned for the platform."
+  value       = google_container_cluster.primary.name
+}
+
+output "gke_cluster_endpoint" {
+  description = "Public endpoint used by kubectl to reach the GKE control plane."
+  value       = google_container_cluster.primary.endpoint
+}
+
+output "gke_workload_identity_pool" {
+  description = "Workload Identity pool attached to the GKE cluster."
+  value       = google_container_cluster.primary.workload_identity_config[0].workload_pool
+}
