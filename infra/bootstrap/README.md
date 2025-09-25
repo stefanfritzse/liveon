@@ -54,15 +54,15 @@ backend.
      --role=roles/iam.serviceAccountTokenCreator
    ```
 
-5. Update the remaining Terraform configurations (for example `infra/project`) to use the new
+5. Update the remaining Terraform configurations (for example `infra/environments/prod`) to use the new
    GCS backend. A sample backend block is shown below—ensure that the bucket name matches
    the value you created in step 1:
 
    ```hcl
    terraform {
      backend "gcs" {
-       bucket = "live-on-473112-tf-state"
-       prefix = "project"
+       bucket = "your-tf-state-bucket"
+       prefix = "prod"
      }
    }
    ```

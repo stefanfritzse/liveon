@@ -13,6 +13,10 @@ resource "google_container_cluster" "primary" {
 
   release_channel { channel = "REGULAR" }
 
+  node_config_defaults {
+    service_account = google_service_account.gke_nodes.email
+  }
+
   private_cluster_config {
     enable_private_nodes    = true
     enable_private_endpoint = var.gke_enable_private_endpoint

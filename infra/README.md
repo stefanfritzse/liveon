@@ -6,6 +6,8 @@ This directory contains Terraform configurations and supporting assets for the L
 
 - `bootstrap/` – one-time configuration that provisions the remote state bucket and the
   Terraform runner service account.
-- `project/` – project-level Terraform responsible for billing linkage and enabling core APIs.
+- `environments/prod/` – production environment configuration that links the project to
+  billing, enables foundational APIs, and provisions the VPC, Artifact Registry, GKE
+  cluster, and GitHub Actions runner described in the Phase 1 implementation plan.
 
-Additional environments (network, cluster, etc.) will be added as the project evolves.
+Additional environments can be added under `environments/` as the project evolves.

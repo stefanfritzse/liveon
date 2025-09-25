@@ -1,7 +1,7 @@
-# Project Bootstrap Terraform
+# Production environment Terraform
 
-
-This configuration manages the Google Cloud project linkage to billing and enables foundational APIs required by later infrastructure stages .
+This configuration manages the Google Cloud project linkage to billing and enables
+foundational APIs required by later infrastructure stages.
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@ This configuration manages the Google Cloud project linkage to billing and enabl
   billing account.
 - Either the organization ID or the folder ID that owns the project.
 - The remote state bucket and `sa-terraform` service account created with
-  `../bootstrap`.
+  `../../bootstrap`.
 
 ## Usage
 
@@ -34,7 +34,7 @@ This configuration manages the Google Cloud project linkage to billing and enabl
 
    ```powershell
    Copy-Item backend.tf.example backend.tf
-   (Get-Content backend.tf).Replace("<STATE_BUCKET_NAME>", "live-on-473112-tf-state") | Set-Content backend.tf
+   (Get-Content backend.tf).Replace("<STATE_BUCKET_NAME>", "your-tf-state-bucket") | Set-Content backend.tf
    ```
 
 3. Initialize Terraform:
@@ -43,11 +43,11 @@ This configuration manages the Google Cloud project linkage to billing and enabl
    terraform init -migrate-state
    ```
 
-4. If the project `live-on-473112` already exists, import it into state before planning:
+4. If the project already exists, import it into state before planning:
 
 
    ```powershell
-   terraform import google_project.project live-on-473112
+   terraform import google_project.project <YOUR_PROJECT_ID>
    ```
 
 5. Review the proposed changes:
@@ -78,8 +78,8 @@ addition to the project and IAM automation described above:
 - A regional Artifact Registry repository configured for Docker images with immutable tags
   to host application containers close to the target GKE cluster.
 - An Autopilot GKE cluster configured with private nodes, master authorized networks,
-  and Workload Identity so that workloads can securely call Google Cloud APIs without
-  long-lived keys.
+  Workload Identity, and the dedicated `sa-gke-nodes` service account so that
+  workloads can securely call Google Cloud APIs without long-lived keys.
 - A hardened Compute Engine VM that lives on the same VPC/subnet as the private GKE
   control plane and serves as the self-hosted GitHub Actions runner required by the
   `Build and Deploy` workflow.
