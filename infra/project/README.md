@@ -21,7 +21,8 @@ This configuration manages the Google Cloud project linkage to billing and enabl
    ```
 
    Update `terraform.tfvars` with the correct `project_id`, `billing_account_id`, and either
-   `org_id` or `folder_id`.
+   `org_id` or `folder_id`. Set `github_repository` to the `<owner>/<repo>` string for the
+   GitHub repository whose workflows should be allowed to assume the Terraform service account.
 
 2. Configure the backend to use the remote state bucket created by the bootstrap step. Either
    update `backend.tf.example` with your bucket name and rename it to `backend.tf`, or pass

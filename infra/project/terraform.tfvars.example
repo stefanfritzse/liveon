@@ -8,6 +8,10 @@ billing_account_id  = "01CCEE-C77C3F-9321F1"
 # folder_id         = "folders/123456789012"
 default_region      = "europe-north2"
 
+# Repository that is allowed to impersonate the Terraform service account via Workload Identity Federation.
+github_repository = "your-org/your-repo"
+# github_default_branch = "main"
+
 # Uncomment to override the default API enablement list.
 # activate_apis = [
 #   "cloudresourcemanager.googleapis.com",
