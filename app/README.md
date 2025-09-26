@@ -26,15 +26,24 @@ Phase 2 introduces a Firestore-backed content system for articles and
 coaching tips. The data access layer lives in `app/services/firestore.py`
 with the corresponding domain models in `app/models/content.py`.
 
-## Aggregator agent scaffolding
+## Aggregator and publisher agents
 
-The next milestone begins the AI-driven content pipeline. The
+The AI-driven content pipeline has begun to take shape. The
 `LongevityNewsAggregator` in `app/services/aggregator.py` pulls longevity
 research updates from configured RSS/Atom feeds and normalises them into
 `AggregatedContent` records (`app/models/aggregator.py`). The module is
 testable in isolation thanks to injectable HTTP fetchers, ensuring the
 future multi-agent workflow can rely on deterministic data during
 development.
+
+Once an article has been drafted and edited, the `GitPublisher` in
+`app/services/publisher.py` converts the payload into Markdown with YAML
+front matter and commits it to the repository, treating content as code.
+The corresponding tests in `app/tests/test_publisher.py` initialise a
+temporary Git repository to validate that files are created correctly,
+front matter stays structured, and Git commits are produced with the
+expected metadata. This lays the groundwork for integrating the
+multi-agent workflow with GitOps tooling in later milestones.
 
 ### Requirements
 
