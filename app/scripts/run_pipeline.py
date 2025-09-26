@@ -10,7 +10,7 @@ pipeline to be exercised without external LLM access.
 from __future__ import annotations
 
 import json
-import logging
+import logging, sys
 import os
 from typing import Protocol, Sequence
 
@@ -25,6 +25,16 @@ from app.services.publisher import FirestorePublisher
 from app.services.summarizer import SummarizerAgent
 
 LOGGER = logging.getLogger("liveon.pipeline")
+if not LOGGER.handlers:  # avoid dupes on re-import
+    h = logging.StreamHandler(sys.stdout)
+    h.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    ))
+    LOGGER.addHandler(h)
+    LOGGER.setLevel(logging.INFO)
+    LOGGER.propagate = False
+
+LOGGER.info("PIPELINE_START")
 
 DEFAULT_FEEDS: Sequence[FeedSource] = (
     FeedSource(
