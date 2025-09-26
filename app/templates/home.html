@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block hero %}
+  <div class="grid">
+    <div>
+      <h1>Your AI-guided path to longevity.</h1>
+      <p>
+        Live On curates the latest science-backed guidance on healthy aging. Explore
+        featured articles, actionable tips, and soon chat with an AI longevity coach.
+      </p>
+      <div class="grid">
+        <a role="button" href="/articles">Browse Articles</a>
+        <a role="button" class="secondary" href="/tips">See Daily Tips</a>
+      </div>
+    </div>
+    <div>
+      <article>
+        <header>
+          <h3>What is coming next?</h3>
+        </header>
+        <p>
+          Phase 2 establishes our Firestore-backed content hub and frontend experience.
+          Next, multi-agent pipelines will keep this site refreshed with new longevity
+          insights automatically.
+        </p>
+      </article>
+    </div>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <section>
+    <h2>Latest Articles</h2>
+    {% if articles %}
+      <div class="card-grid">
+        {% for article in articles %}
+          <article>
+            <header>
+              <h3>{{ article.title }}</h3>
+              <p class="article-meta">Published {{ article.published_date.strftime("%B %d, %Y") }}</p>
+            </header>
+            {% if article.summary %}
+              <p>{{ article.summary }}</p>
+            {% else %}
+              <p>{{ article.content_body[:200] }}{% if article.content_body|length > 200 %}…{% endif %}</p>
+            {% endif %}
+            {% if article.id %}
+              <footer><a href="/articles/{{ article.id }}">Read full article</a></footer>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p>No articles are available yet. Seed Firestore to preview dynamic content.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Coaching Tips</h2>
+    {% if tips %}
+      <div class="card-grid">
+        {% for tip in tips %}
+          <article>
+            <header>
+              <h3>{{ tip.title }}</h3>
+              <p class="article-meta">Published {{ tip.published_date.strftime("%B %d, %Y") }}</p>
+            </header>
+            <p>{{ tip.content_body }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p>No tips yet. Seed Firestore to preview coaching snippets.</p>
+    {% endif %}
+  </section>
+{% endblock %}
