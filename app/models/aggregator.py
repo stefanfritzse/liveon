@@ -1,0 +1,60 @@
+"""Data models supporting the longevity content aggregation agent."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Mapping
+
+import feedparser
+
+
+@dataclass(slots=True)
+class FeedSource:
+    """Configuration for a single external content feed."""
+
+    name: str
+    url: str
+    topic: str | None = None
+
+
+@dataclass(slots=True)
+class AggregatedContent:
+    """Structured representation of raw longevity updates gathered by agents."""
+
+    title: str
+    url: str
+    summary: str
+    published_at: datetime
+    source: str
+    topic: str | None = None
+    raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_feed_entry(cls, entry: feedparser.FeedParserDict, source: FeedSource) -> "AggregatedContent":
+        """Build an :class:`AggregatedContent` instance from a feedparser entry."""
+
+        title = (entry.get("title") or "").strip() or "Untitled update"
+        link = (entry.get("link") or "").strip()
+        summary = (entry.get("summary") or entry.get("description") or "").strip()
+        published_at = _coerce_datetime(entry)
+
+        return cls(
+            title=title,
+            url=link,
+            summary=summary,
+            published_at=published_at,
+            source=source.name,
+            topic=source.topic,
+            raw=dict(entry),
+        )
+
+
+def _coerce_datetime(entry: Mapping[str, Any]) -> datetime:
+    """Extract a timezone-aware timestamp from a feed entry."""
+
+    for candidate_key in ("published_parsed", "updated_parsed"):
+        value = entry.get(candidate_key)
+        if value is not None:
+            return datetime(*value[:6], tzinfo=timezone.utc)
+    return datetime.now(timezone.utc)
