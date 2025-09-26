@@ -23,6 +23,7 @@ spec:
               imagePullPolicy: Always
               command:
                 - python
+              args:
                 - -m
                 - app.scripts.run_pipeline
               env:
