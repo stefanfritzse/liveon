@@ -2,6 +2,15 @@
 
 Application source code for the Live On platform will live here.
 
+## Phase 2 status
+
+All deliverables from the Phase 2 implementation plan are in place: the
+FastAPI frontend renders Firestore-backed content, the multi-agent
+pipeline produces and publishes longevity articles, and operational
+automation is covered through the CI/CD workflow and scheduled
+Kubernetes CronJob. The project is now ready to proceed with the Phase 3
+objectives.
+
 ## FastAPI web application
 
 Phase 2 introduces a user-facing FastAPI application that renders HTML
