@@ -22,9 +22,9 @@ WORKDIR /app
 
 # Copy the preinstalled virtual environment and application source.
 COPY --from=builder /opt/venv /opt/venv
-COPY app/ ./
+COPY app /app/app
 
 EXPOSE 8080
 
 # Run the FastAPI application with uvicorn in exec form for proper signal handling.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
