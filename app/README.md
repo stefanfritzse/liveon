@@ -2,14 +2,15 @@
 
 Application source code for the Live On platform will live here.
 
-## Phase 2 status
+## Phase status
 
-All deliverables from the Phase 2 implementation plan are in place: the
-FastAPI frontend renders Firestore-backed content, the multi-agent
-pipeline produces and publishes longevity articles, and operational
-automation is covered through the CI/CD workflow and scheduled
-Kubernetes CronJob. The project is now ready to proceed with the Phase 3
-objectives.
+Phases 1–3 from the implementation plan are complete and validated:
+
+- **Phase 1 – Foundation:** The repository, container build, GKE manifests, and CI/CD plumbing are in place so code changes build and deploy automatically.
+- **Phase 2 – Web experience:** The FastAPI frontend renders Firestore-backed content with graceful fallbacks for local development and includes navigation for the planned longevity resources.
+- **Phase 3 – AI content agents:** Aggregator, summariser, and editor agents collaborate through the content pipeline to generate, refine, and publish longevity articles via the Firestore publisher. The pipeline can be executed locally or on the scheduled Kubernetes CronJob using deterministic local responders or live LLMs.
+
+With the agent workflow operating end-to-end, the project is ready to proceed to Phase 4 tasks that integrate the generated content more deeply into the user-facing experience.
 
 ## FastAPI web application
 
