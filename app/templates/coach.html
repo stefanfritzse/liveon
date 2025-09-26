@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block hero %}
+  <h1>Ask the Longevity Coach</h1>
+  <p>A conversational coach experience is coming soon.</p>
+{% endblock %}
+
+{% block content %}
+  <article>
+    <p>
+      Phase 3 will introduce an interactive AI coach that can answer questions about
+      nutrition, exercise, and healthy aging. For now this page acts as a placeholder so
+      the navigation and user journey are fully mapped in Phase 2.
+    </p>
+    <p>
+      Behind the scenes we are implementing a multi-agent pipeline with LangChain and
+      Vertex AI. Once complete, the coach will ground answers in our Firestore content and
+      external trusted sources while keeping a friendly, motivational tone.
+    </p>
+    <p>
+      Stay tuned! In the meantime explore our articles and tips for curated longevity
+      insights.
+    </p>
+  </article>
+{% endblock %}

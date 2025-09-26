@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or "Live On Longevity Coach" }}</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css"
+    />
+    <style>
+      body {
+        background-color: #f6f9fc;
+      }
+      header {
+        background: linear-gradient(135deg, #1c64f2, #7c3aed);
+        color: white;
+        padding: 2rem 0;
+        margin-bottom: 2rem;
+      }
+      header nav ul {
+        align-items: center;
+      }
+      header a {
+        color: white;
+      }
+      header .brand {
+        font-weight: 600;
+        letter-spacing: 0.05em;
+      }
+      main {
+        padding-bottom: 4rem;
+      }
+      footer {
+        background: #0f172a;
+        color: white;
+        padding: 1.5rem 0;
+        margin-top: 4rem;
+      }
+      .card-grid {
+        display: grid;
+        gap: 1.5rem;
+      }
+      @media (min-width: 768px) {
+        .card-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+      .article-meta {
+        font-size: 0.875rem;
+        color: #475569;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <nav class="container">
+        <ul>
+          <li class="brand"><a href="/">Live On</a></li>
+        </ul>
+        <ul>
+          <li><a href="/articles">Articles</a></li>
+          <li><a href="/tips">Tips</a></li>
+          <li><a href="/coach">Ask the Coach</a></li>
+        </ul>
+      </nav>
+      <div class="container">
+        {% block hero %}{% endblock %}
+      </div>
+    </header>
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+    <footer>
+      <div class="container">
+        <small>
+          © {{ now().year }} Live On Longevity Coach. Content is for educational purposes
+          only and should not replace advice from healthcare professionals.
+        </small>
+      </div>
+    </footer>
+  </body>
+</html>

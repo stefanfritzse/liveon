@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block hero %}
+  <h1>Longevity Tips</h1>
+  <p>Quick, actionable reminders from the Live On coach to keep your habits aligned with healthy aging.</p>
+{% endblock %}
+
+{% block content %}
+  {% if tips %}
+    <div class="card-grid">
+      {% for tip in tips %}
+        <article>
+          <header>
+            <h3>{{ tip.title }}</h3>
+            <p class="article-meta">Published {{ tip.published_date.strftime("%B %d, %Y") }}</p>
+          </header>
+          <p>{{ tip.content_body }}</p>
+          {% if tip.tags %}
+            <footer><strong>Tags:</strong> {{ tip.tags | join(', ') }}</footer>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p>No tips yet. Seed Firestore or run the upcoming AI pipeline to populate this section.</p>
+  {% endif %}
+{% endblock %}
