@@ -50,6 +50,30 @@ timestamps. This lays the groundwork for integrating the multi-agent
 workflow with GitOps tooling and the live Firestore content store in
 later milestones.
 
+### Running the AI content pipeline
+
+The pipeline can now be executed end-to-end using
+`python -m app.scripts.run_pipeline`. The runner wires together the
+aggregator, summariser, editor, and publisher agents and publishes the
+resulting article directly to Firestore so it appears on the FastAPI
+frontend.
+
+By default the runner uses a deterministic local responder so it works
+without external LLM access. To invoke Vertex AI or OpenAI models instead,
+set the environment variables `LIVEON_SUMMARIZER_MODEL` and
+`LIVEON_EDITOR_MODEL` to `vertex` or `openai` and provide the corresponding
+credentials. Additional configuration options include:
+
+| Variable | Purpose |
+| --- | --- |
+| `LIVEON_FEED_SOURCES` | JSON array overriding the default RSS/Atom feeds. |
+| `LIVEON_FEED_LIMIT` | Number of entries to pull per feed (default: 5). |
+| `LIVEON_LOG_LEVEL` | Logging level (default: `INFO`). |
+
+When deployed to GKE, the `k8s/cronjob-pipeline.yaml` manifest schedules the
+runner to execute daily so the site stays populated with fresh longevity
+content.
+
 ### Requirements
 
 Install the application dependencies in a virtual environment:
