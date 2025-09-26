@@ -26,6 +26,16 @@ Phase 2 introduces a Firestore-backed content system for articles and
 coaching tips. The data access layer lives in `app/services/firestore.py`
 with the corresponding domain models in `app/models/content.py`.
 
+## Aggregator agent scaffolding
+
+The next milestone begins the AI-driven content pipeline. The
+`LongevityNewsAggregator` in `app/services/aggregator.py` pulls longevity
+research updates from configured RSS/Atom feeds and normalises them into
+`AggregatedContent` records (`app/models/aggregator.py`). The module is
+testable in isolation thanks to injectable HTTP fetchers, ensuring the
+future multi-agent workflow can rely on deterministic data during
+development.
+
 ### Requirements
 
 Install the application dependencies in a virtual environment:
