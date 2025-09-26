@@ -5,6 +5,7 @@ locals {
     "roles/monitoring.viewer",
     "roles/logging.logWriter",
     "roles/artifactregistry.reader",
+    "roles/datastore.user",
   ]
   runner_sa_roles = [
     "roles/logging.logWriter",
@@ -39,6 +40,15 @@ resource "google_project_service" "services" {
   service = each.key
 
   disable_dependent_services = true
+}
+
+resource "google_firestore_database" "primary" {
+  project     = google_project.project.project_id
+  name        = "(default)"
+  location_id = var.firestore_location
+  type        = "FIRESTORE_NATIVE"
+
+  depends_on = [google_project_service.services]
 }
 
 data "google_service_account" "terraform" {
