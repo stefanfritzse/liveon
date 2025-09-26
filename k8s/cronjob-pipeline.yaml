@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: longevity-content-pipeline
+  labels:
+    app: longevity-app
+spec:
+  schedule: "0 5 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: longevity-app
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: longevity-app
+          containers:
+            - name: pipeline-runner
+              image: IMAGE_PLACEHOLDER
+              imagePullPolicy: Always
+              command:
+                - python
+                - -m
+                - app.scripts.run_pipeline
+              env:
+                - name: LIVEON_LOG_LEVEL
+                  value: INFO
+                - name: LIVEON_FEED_LIMIT
+                  value: "5"
