@@ -28,20 +28,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Python 3.11 dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3.11 python3.11-venv python3-pip python-is-python3
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          python3.11 -m pip install --upgrade pip
-          python3.11 -m pip install -r app/requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install -r app/requirements.txt
 
       - name: Run unit tests
         env:
           PYTHONPATH: .
-        run: python3.11 -m pytest -q
+        run: python -m pytest -q
 
       - name: Authenticate to Google Cloud (WIF)
         id: auth
