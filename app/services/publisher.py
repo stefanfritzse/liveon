@@ -1,16 +1,17 @@
-"""Publisher agent that commits polished articles to the repository."""
+"""Publisher agents responsible for persisting polished articles."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 import re
 import subprocess
-from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import yaml
 
+from app.models.content import Article
 from app.models.editor import EditedArticle
 from app.models.publisher import PublicationResult
 
@@ -25,6 +26,20 @@ def _slugify(value: str) -> str:
     normalised = _SLUG_PATTERN.sub("-", normalised)
     normalised = normalised.strip("-")
     return normalised or "article"
+
+
+class SupportsArticleRepository(Protocol):
+    """Subset of the Firestore repository relied upon by publishers."""
+
+    def get_article(self, article_id: str) -> Article | None:
+        """Retrieve an article by identifier."""
+
+    def save_article(self, article: Article) -> Article:
+        """Persist an article and return the stored representation."""
+
+    @property
+    def article_collection(self) -> Any:
+        """Return the backing collection reference (duck-typed in tests)."""
 
 
 @dataclass(slots=True)
@@ -126,4 +141,89 @@ class GitPublisher:
             command = " ".join(args)
             raise RuntimeError(f"git {command} failed: {result.stderr.strip()}")
         return result
+
+
+@dataclass(slots=True)
+class FirestorePublisher:
+    """Publish edited articles directly into the Firestore content repository."""
+
+    repository: SupportsArticleRepository
+
+    def publish(
+        self,
+        article: EditedArticle,
+        *,
+        slug: str | None = None,
+        commit_message: str | None = None,
+        published_at: datetime | None = None,
+    ) -> PublicationResult:
+        """Persist the article to Firestore and return metadata about the operation."""
+
+        _ = commit_message  # Git-specific metadata is ignored for Firestore publishes.
+
+        published = (published_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        base_slug = _slugify(slug or article.title)
+
+        resolved_slug, existing = self._resolve_target(base_slug, article)
+        if existing is not None and self._is_duplicate(existing, article):
+            return PublicationResult(
+                slug=existing.id or resolved_slug,
+                path=self._build_firestore_path(existing.id or resolved_slug),
+                commit_hash=None,
+                published_at=existing.published_date,
+            )
+
+        article_model = article.to_article()
+        article_model.id = resolved_slug
+        article_model.published_date = published
+
+        stored = self.repository.save_article(article_model)
+        return PublicationResult(
+            slug=stored.id or resolved_slug,
+            path=self._build_firestore_path(stored.id or resolved_slug),
+            commit_hash=None,
+            published_at=stored.published_date,
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _resolve_target(self, base_slug: str, article: EditedArticle) -> tuple[str, Article | None]:
+        slug = base_slug or "article"
+        existing = self.repository.get_article(slug)
+        if existing is not None and self._is_duplicate(existing, article):
+            return slug, existing
+
+        suffix = 2
+        while existing is not None:
+            slug = f"{base_slug}-{suffix}" if base_slug else f"article-{suffix}"
+            candidate = self.repository.get_article(slug)
+            if candidate is None or self._is_duplicate(candidate, article):
+                return slug, candidate
+            existing = candidate
+            suffix += 1
+
+        return slug, None
+
+    @staticmethod
+    def _is_duplicate(existing: Article, article: EditedArticle) -> bool:
+        """Return ``True`` when the edited article matches the stored Firestore entry."""
+
+        if existing.title.strip() != article.title.strip():
+            return False
+
+        rendered = article.to_article()
+        rendered.summary = rendered.summary.strip()
+        rendered.content_body = rendered.content_body.strip()
+
+        return (
+            existing.summary == rendered.summary
+            and existing.content_body == rendered.content_body
+            and set(existing.source_urls) == set(rendered.source_urls)
+            and set(existing.tags) == set(rendered.tags)
+        )
+
+    def _build_firestore_path(self, slug: str) -> Path:
+        collection = getattr(self.repository.article_collection, "id", "articles")
+        return Path("firestore") / str(collection) / slug
 

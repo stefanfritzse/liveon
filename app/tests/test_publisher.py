@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
+from app.models.content import Article
 from app.models.editor import EditedArticle
-from app.services.publisher import GitPublisher
+from app.services.publisher import FirestorePublisher, GitPublisher
 
 
 def sample_article() -> EditedArticle:
@@ -98,4 +101,60 @@ def test_publish_generates_unique_slug(tmp_path: Path) -> None:
     second_path = repo / "content" / "articles" / f"{second.slug}.md"
     assert first_path.exists()
     assert second_path.exists()
+
+
+@dataclass
+class StubArticleRepository:
+    articles: dict[str, Article] = field(default_factory=dict)
+
+    @property
+    def article_collection(self) -> SimpleNamespace:
+        return SimpleNamespace(id="articles")
+
+    def get_article(self, article_id: str) -> Article | None:
+        return self.articles.get(article_id)
+
+    def save_article(self, article: Article) -> Article:
+        if article.id is None:
+            raise ValueError("Article ID must be set before saving")
+        stored = Article(
+            id=article.id,
+            title=article.title,
+            summary=article.summary,
+            content_body=article.content_body,
+            published_date=article.published_date,
+            source_urls=list(article.source_urls),
+            tags=list(article.tags),
+        )
+        self.articles[article.id] = stored
+        return stored
+
+
+def test_firestore_publisher_persists_article() -> None:
+    repository = StubArticleRepository()
+    publisher = FirestorePublisher(repository=repository)
+
+    article = sample_article()
+    published_at = datetime(2024, 4, 1, tzinfo=timezone.utc)
+
+    result = publisher.publish(article, published_at=published_at)
+
+    assert result.slug in repository.articles
+    stored = repository.articles[result.slug]
+    assert stored.title == article.title
+    assert stored.published_date == published_at
+    assert "firestore/articles" in str(result.path)
+    assert result.commit_hash is None
+
+
+def test_firestore_publisher_skips_duplicates() -> None:
+    repository = StubArticleRepository()
+    publisher = FirestorePublisher(repository=repository)
+
+    article = sample_article()
+    first = publisher.publish(article)
+    second = publisher.publish(article)
+
+    assert first.slug == second.slug
+    assert len(repository.articles) == 1
 

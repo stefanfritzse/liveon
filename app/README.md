@@ -36,14 +36,19 @@ testable in isolation thanks to injectable HTTP fetchers, ensuring the
 future multi-agent workflow can rely on deterministic data during
 development.
 
-Once an article has been drafted and edited, the `GitPublisher` in
-`app/services/publisher.py` converts the payload into Markdown with YAML
-front matter and commits it to the repository, treating content as code.
-The corresponding tests in `app/tests/test_publisher.py` initialise a
-temporary Git repository to validate that files are created correctly,
-front matter stays structured, and Git commits are produced with the
-expected metadata. This lays the groundwork for integrating the
-multi-agent workflow with GitOps tooling in later milestones.
+Once an article has been drafted and edited, publishers in
+`app/services/publisher.py` persist the final content. The `GitPublisher`
+converts the payload into Markdown with YAML front matter and commits it
+to the repository, treating content as code. For dynamic Firestore-backed
+deployments, the `FirestorePublisher` writes articles directly to the
+`articles` collection, deduplicating updates so rerunning the pipeline
+does not spam users with repeated posts. The corresponding tests in
+`app/tests/test_publisher.py` cover both workflows: the Git path
+initialises a temporary repository to validate commits, while the
+Firestore path ensures articles are stored with deterministic slugs and
+timestamps. This lays the groundwork for integrating the multi-agent
+workflow with GitOps tooling and the live Firestore content store in
+later milestones.
 
 ### Requirements
 
