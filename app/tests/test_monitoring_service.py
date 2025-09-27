@@ -11,7 +11,7 @@ from app.services.monitoring import GCPMetricsService
 
 
 def test_fetch_run_pipeline_health_without_project_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The service surfaces a helpful error when the project ID is missing."""
+    """A missing project ID yields sample output but not a hard error."""
 
     monkeypatch.delenv("GCP_PROJECT", raising=False)
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
@@ -19,8 +19,10 @@ def test_fetch_run_pipeline_health_without_project_id(monkeypatch: pytest.Monkey
     service = GCPMetricsService(project_id=None)
     result = service.fetch_run_pipeline_health()
 
-    assert result["status"] == "error"
+    assert result["status"] == "warning"
+    assert result.get("using_sample_data") is True
     assert any("Project ID" in line for line in result["logs"])
+    assert any("sample" in line.lower() for line in result["logs"])
 
 
 def test_fetch_run_pipeline_health_handles_client_initialisation_error(
