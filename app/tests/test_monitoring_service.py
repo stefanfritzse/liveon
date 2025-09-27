@@ -23,40 +23,44 @@ def test_fetch_run_pipeline_health_without_project_id(monkeypatch: pytest.Monkey
     assert any("Project ID" in line for line in result["logs"])
 
 
-def test_fetch_run_pipeline_health_handles_client_initialisation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_run_pipeline_health_handles_client_initialisation_error(
+    monkeypatch: pytest.MonkeyPatch, gcp_project_id: str
+) -> None:
     """Credential errors from the monitoring client are converted into log output."""
 
     class _BrokenClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401 - test helper
             raise DefaultCredentialsError("ADC missing")
 
-    monkeypatch.setenv("GCP_PROJECT", "live-on-473112")
+    monkeypatch.setenv("GCP_PROJECT", gcp_project_id)
     monkeypatch.setattr(
         "app.services.monitoring.monitoring_v3.MetricServiceClient",
         _BrokenClient,
     )
 
-    service = GCPMetricsService(project_id="live-on-473112")
+    service = GCPMetricsService(project_id=gcp_project_id)
     result = service.fetch_run_pipeline_health()
 
     assert result["status"] == "error"
     assert any("Unable to initialise" in line for line in result["logs"])
 
 
-def test_fetch_run_pipeline_health_returns_warning_when_no_data(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_run_pipeline_health_returns_warning_when_no_data(
+    monkeypatch: pytest.MonkeyPatch, gcp_project_id: str
+) -> None:
     """When the API returns no time series the response is marked as a warning."""
 
     class _EmptyClient:
         def list_time_series(self, *args: Any, **kwargs: Any) -> list[Any]:
             return []
 
-    monkeypatch.setenv("GCP_PROJECT", "live-on-473112")
+    monkeypatch.setenv("GCP_PROJECT", gcp_project_id)
     monkeypatch.setattr(
         "app.services.monitoring.monitoring_v3.MetricServiceClient",
         lambda: _EmptyClient(),
     )
 
-    service = GCPMetricsService(project_id="live-on-473112")
+    service = GCPMetricsService(project_id=gcp_project_id)
     result = service.fetch_run_pipeline_health()
 
     assert result["status"] == "warning"
