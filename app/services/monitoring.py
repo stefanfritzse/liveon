@@ -59,9 +59,14 @@ class GCPMetricsService:
             log_lines.append(
                 "Project ID is not configured. Set the GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable."
             )
+            log_lines.append(
+                "Using sample telemetry so the dashboard remains interactive while local credentials are missing."
+            )
             log_lines.extend(self._local_debug_hints(job_id))
             return {
-                "status": "error",
+                "status": "warning",
+                "project_id": None,
+                "using_sample_data": True,
                 "logs": log_lines,
                 "retrieved_at": retrieved_at.isoformat(),
             }
