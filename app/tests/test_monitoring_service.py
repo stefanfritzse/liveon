@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,12 +17,13 @@ def test_fetch_run_pipeline_health_without_project_id(monkeypatch: pytest.Monkey
     monkeypatch.delenv("GCP_PROJECT", raising=False)
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
 
-    service = GCPMetricsService(project_id=None)
+    service = GCPMetricsService(project_id=None, tfvars_path=None)
     result = service.fetch_run_pipeline_health()
 
     assert result["status"] == "warning"
     assert result.get("using_sample_data") is True
     assert any("Project ID" in line for line in result["logs"])
+    assert any("Environment variables" in line for line in result["logs"])
     assert any("sample" in line.lower() for line in result["logs"])
 
 
@@ -67,3 +69,30 @@ def test_fetch_run_pipeline_health_returns_warning_when_no_data(
 
     assert result["status"] == "warning"
     assert any("No datapoints" in line for line in result["logs"])
+
+
+def test_fetch_run_pipeline_health_resolves_project_id_from_tfvars(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The service falls back to Terraform variables when env vars are missing."""
+
+    tfvars_path = tmp_path / "terraform.tfvars"
+    tfvars_path.write_text('project_id = "tfvars-project"\n')
+
+    class _EmptyClient:
+        def list_time_series(self, *args: Any, **kwargs: Any) -> list[Any]:
+            return []
+
+    monkeypatch.delenv("GCP_PROJECT", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setattr(
+        "app.services.monitoring.monitoring_v3.MetricServiceClient",
+        lambda: _EmptyClient(),
+    )
+
+    service = GCPMetricsService(project_id=None, tfvars_path=tfvars_path)
+    result = service.fetch_run_pipeline_health()
+
+    assert result["project_id"] == "tfvars-project"
+    assert result["status"] == "warning"
+    assert not result.get("using_sample_data", False)
