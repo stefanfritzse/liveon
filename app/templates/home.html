@@ -73,4 +73,75 @@
       <p>No tips yet. Seed Firestore to preview coaching snippets.</p>
     {% endif %}
   </section>
+
+  <section id="gcp-health">
+    <h2>run_pipeline Health Monitor</h2>
+    <p>
+      Capture fresh Cloud Scheduler metrics from Google Cloud when investigating the
+      <code>run_pipeline</code> cron job. Copy the output below into the
+      <code>logs/gcp_metrics</code> folder for deeper analysis later.
+    </p>
+    <div class="grid">
+      <button type="button" id="fetch-gcp-metrics">Fetch GCP health metrics</button>
+      <small>
+        The request queries Cloud Monitoring for the last 24 hours of
+        <code>run_pipeline</code> executions. Authentication relies on the server's
+        Application Default Credentials.
+      </small>
+    </div>
+    <article>
+      <header>
+        <h3>Log output</h3>
+      </header>
+      <pre id="gcp-metrics-log" class="log-window" data-status="idle">
+Press the button above to load the latest metrics…
+      </pre>
+    </article>
+  </section>
+
+  <script>
+    (() => {
+      const button = document.querySelector('#fetch-gcp-metrics');
+      const logWindow = document.querySelector('#gcp-metrics-log');
+      if (!button || !logWindow) {
+        return;
+      }
+
+      const renderLogs = (logs) => {
+        if (Array.isArray(logs) && logs.length > 0) {
+          return logs.join('\n');
+        }
+        if (typeof logs === 'string' && logs.length > 0) {
+          return logs;
+        }
+        return 'No log entries were returned by the monitoring endpoint.';
+      };
+
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        logWindow.dataset.status = 'loading';
+        logWindow.textContent = 'Fetching metrics from Google Cloud Monitoring…';
+
+        try {
+          const response = await fetch('/api/metrics/run-pipeline');
+          const payload = await response.json();
+          const status = payload?.status ?? (response.ok ? 'success' : 'error');
+          logWindow.dataset.status = response.ok ? status : 'error';
+          logWindow.textContent = renderLogs(payload?.logs) ?? '';
+
+          if (!response.ok) {
+            const detail = payload?.detail ?? payload?.message ?? 'Request failed.';
+            logWindow.textContent += `\n\nHTTP ${response.status}: ${detail}`;
+          }
+        } catch (error) {
+          logWindow.dataset.status = 'error';
+          logWindow.textContent = `Failed to fetch metrics: ${error}`;
+        } finally {
+          button.removeAttribute('aria-busy');
+          button.disabled = false;
+        }
+      });
+    })();
+  </script>
 {% endblock %}
