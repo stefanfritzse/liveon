@@ -9,19 +9,22 @@ from pathlib import Path
 from typing import Protocol
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import DefaultCredentialsError
 
 from app.models.content import Article, Tip
 from app.services.firestore import FirestoreContentRepository
+from app.services.monitoring import GCPMetricsService
 
 app = FastAPI(title="Live On Longevity Coach")
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 templates.env.globals.update(now=lambda: datetime.now(timezone.utc))
+
+metrics_service = GCPMetricsService()
 
 
 class ContentRepository(Protocol):
@@ -117,6 +120,17 @@ async def home(
             "tips": tips,
         },
     )
+
+
+@app.get("/api/metrics/run-pipeline", response_class=JSONResponse)
+async def fetch_run_pipeline_metrics() -> JSONResponse:
+    """Return health metrics for the ``run_pipeline`` Cloud Scheduler job."""
+
+    payload = metrics_service.fetch_run_pipeline_health()
+    status_code = 200
+    if payload.get("status") == "error":
+        status_code = 503
+    return JSONResponse(content=payload, status_code=status_code)
 
 
 @app.get("/articles", response_class=HTMLResponse)
