@@ -30,13 +30,13 @@ def test_fetch_run_pipeline_health_handles_client_initialisation_error(monkeypat
         def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401 - test helper
             raise DefaultCredentialsError("ADC missing")
 
-    monkeypatch.setenv("GCP_PROJECT", "demo-project")
+    monkeypatch.setenv("GCP_PROJECT", "live-on-473112")
     monkeypatch.setattr(
         "app.services.monitoring.monitoring_v3.MetricServiceClient",
         _BrokenClient,
     )
 
-    service = GCPMetricsService(project_id="demo-project")
+    service = GCPMetricsService(project_id="live-on-473112")
     result = service.fetch_run_pipeline_health()
 
     assert result["status"] == "error"
@@ -50,13 +50,13 @@ def test_fetch_run_pipeline_health_returns_warning_when_no_data(monkeypatch: pyt
         def list_time_series(self, *args: Any, **kwargs: Any) -> list[Any]:
             return []
 
-    monkeypatch.setenv("GCP_PROJECT", "demo-project")
+    monkeypatch.setenv("GCP_PROJECT", "live-on-473112")
     monkeypatch.setattr(
         "app.services.monitoring.monitoring_v3.MetricServiceClient",
         lambda: _EmptyClient(),
     )
 
-    service = GCPMetricsService(project_id="demo-project")
+    service = GCPMetricsService(project_id="live-on-473112")
     result = service.fetch_run_pipeline_health()
 
     assert result["status"] == "warning"
