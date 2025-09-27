@@ -96,3 +96,28 @@ def test_fetch_run_pipeline_health_resolves_project_id_from_tfvars(
     assert result["project_id"] == "tfvars-project"
     assert result["status"] == "warning"
     assert not result.get("using_sample_data", False)
+
+
+def test_missing_tfvars_includes_contextual_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Diagnostics should include context when the Terraform file is absent."""
+
+    monkeypatch.delenv("GCP_PROJECT", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+
+    missing_tfvars = tmp_path / "env" / "terraform.tfvars"
+
+    service = GCPMetricsService(project_id=None, tfvars_path=missing_tfvars)
+    result = service.fetch_run_pipeline_health()
+
+    logs = result["logs"]
+
+    assert any("Terraform lookup path (configured):" in line for line in logs)
+    assert any(
+        f"Terraform lookup path (absolute): {missing_tfvars.resolve()}" in line
+        for line in logs
+    )
+    assert any("Terraform lookup parent directory exists:" in line for line in logs)
+    assert any("Current working directory:" in line for line in logs)
+    assert any("Monitoring service module path:" in line for line in logs)
