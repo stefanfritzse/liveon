@@ -188,8 +188,28 @@ class GCPMetricsService:
             diagnostics.append("Terraform variable lookup was disabled via configuration.")
             return _ProjectIdResolution(None, diagnostics)
 
+        resolved_tfvars_path = tfvars_path
+        try:
+            resolved_tfvars_path = tfvars_path.resolve()
+        except OSError:
+            # ``Path.resolve`` may fail on some platforms for relative paths. Fall back to
+            # the configured value if resolution is unavailable.
+            resolved_tfvars_path = tfvars_path
+
+        terraform_context = [
+            f"Terraform lookup path (configured): {tfvars_path}",
+            f"Terraform lookup path (absolute): {resolved_tfvars_path}",
+            (
+                "Terraform lookup parent directory exists: "
+                f"{resolved_tfvars_path.parent.exists()} ({resolved_tfvars_path.parent})"
+            ),
+            f"Current working directory: {Path.cwd()}",
+            f"Monitoring service module path: {Path(__file__).resolve()}",
+        ]
+
         try:
             if not tfvars_path.exists():
+                diagnostics.extend(terraform_context)
                 diagnostics.append(
                     f"Terraform variables file not found at {tfvars_path}."
                 )
@@ -197,11 +217,13 @@ class GCPMetricsService:
 
             project_id_from_tfvars = extract_project_id(tfvars_path)
         except OSError as exc:
+            diagnostics.extend(terraform_context)
             diagnostics.append(
                 f"Terraform variables file at {tfvars_path} could not be read: {exc}."
             )
             return _ProjectIdResolution(None, diagnostics)
         except ValueError as exc:
+            diagnostics.extend(terraform_context)
             diagnostics.append(
                 f"Failed to parse Terraform variables from {tfvars_path}: {exc}."
             )
@@ -216,6 +238,7 @@ class GCPMetricsService:
                 ],
             )
 
+        diagnostics.extend(terraform_context)
         diagnostics.append(
             f"Terraform variables file located at {tfvars_path} but no 'project_id' entry was found."
         )
