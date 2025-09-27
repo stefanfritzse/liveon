@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import os
+from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from google.api_core.exceptions import GoogleAPIError
@@ -12,6 +13,8 @@ from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import ListTimeSeriesRequest, TimeInterval
 from google.protobuf.timestamp_pb2 import Timestamp
+
+from app.services.tfvars_loader import extract_project_id
 
 
 @dataclass(slots=True, frozen=True)
@@ -23,8 +26,18 @@ class _MetricQuery:
     description: str
 
 
+@dataclass(slots=True, frozen=True)
+class _ProjectIdResolution:
+    """Container for project ID resolution results and supporting diagnostics."""
+
+    value: str | None
+    diagnostics: list[str]
+
+
 class GCPMetricsService:
     """Fetch health signals for the ``run_pipeline`` Cloud Scheduler job."""
+
+    _DEFAULT_TFVARS_PATH = Path(__file__).resolve().parents[2] / "infra/environments/prod/terraform.tfvars"
 
     _METRIC_QUERIES: Sequence[_MetricQuery] = (
         _MetricQuery(
@@ -44,8 +57,15 @@ class GCPMetricsService:
         ),
     )
 
-    def __init__(self, *, project_id: str | None = None) -> None:
-        self._project_id = project_id or os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+    def __init__(
+        self,
+        *,
+        project_id: str | None = None,
+        tfvars_path: Path | None = _DEFAULT_TFVARS_PATH,
+    ) -> None:
+        resolution = self._resolve_project_id(project_id=project_id, tfvars_path=tfvars_path)
+        self._project_id = resolution.value
+        self._project_resolution_logs = resolution.diagnostics
 
     def fetch_run_pipeline_health(self, *, job_id: str = "run_pipeline") -> dict[str, Any]:
         """Return human-readable log lines summarising the job health metrics."""
@@ -56,6 +76,7 @@ class GCPMetricsService:
         ]
 
         if not self._project_id:
+            log_lines.extend(self._project_resolution_logs)
             log_lines.append(
                 "Project ID is not configured. Set the GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable."
             )
@@ -137,6 +158,68 @@ class GCPMetricsService:
             "logs": log_lines,
             "retrieved_at": retrieved_at.isoformat(),
         }
+
+    @classmethod
+    def _resolve_project_id(
+        cls, *, project_id: str | None, tfvars_path: Path | None
+    ) -> _ProjectIdResolution:
+        if project_id:
+            return _ProjectIdResolution(
+                project_id,
+                ["Project ID provided explicitly when initialising GCPMetricsService."],
+            )
+
+        diagnostics: list[str] = []
+
+        env_var_sources = ("GCP_PROJECT", "GOOGLE_CLOUD_PROJECT")
+        for env_var in env_var_sources:
+            env_value = os.getenv(env_var)
+            if env_value:
+                return _ProjectIdResolution(
+                    env_value,
+                    [f"Project ID resolved from environment variable '{env_var}'."],
+                )
+
+        diagnostics.append(
+            "Environment variables 'GCP_PROJECT' and 'GOOGLE_CLOUD_PROJECT' are not set."
+        )
+
+        if tfvars_path is None:
+            diagnostics.append("Terraform variable lookup was disabled via configuration.")
+            return _ProjectIdResolution(None, diagnostics)
+
+        try:
+            if not tfvars_path.exists():
+                diagnostics.append(
+                    f"Terraform variables file not found at {tfvars_path}."
+                )
+                return _ProjectIdResolution(None, diagnostics)
+
+            project_id_from_tfvars = extract_project_id(tfvars_path)
+        except OSError as exc:
+            diagnostics.append(
+                f"Terraform variables file at {tfvars_path} could not be read: {exc}."
+            )
+            return _ProjectIdResolution(None, diagnostics)
+        except ValueError as exc:
+            diagnostics.append(
+                f"Failed to parse Terraform variables from {tfvars_path}: {exc}."
+            )
+            return _ProjectIdResolution(None, diagnostics)
+
+        if project_id_from_tfvars:
+            return _ProjectIdResolution(
+                project_id_from_tfvars,
+                [
+                    "Project ID resolved from Terraform variables file.",
+                    f"Terraform source: {tfvars_path}",
+                ],
+            )
+
+        diagnostics.append(
+            f"Terraform variables file located at {tfvars_path} but no 'project_id' entry was found."
+        )
+        return _ProjectIdResolution(None, diagnostics)
 
     @staticmethod
     def _summarise_time_series(time_series: Iterable[monitoring_v3.TimeSeries]) -> list[str]:
