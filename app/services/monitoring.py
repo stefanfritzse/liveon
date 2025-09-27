@@ -38,6 +38,7 @@ class GCPMetricsService:
     """Fetch health signals for the ``run_pipeline`` Cloud Scheduler job."""
 
     _DEFAULT_TFVARS_PATH = Path(__file__).resolve().parents[2] / "infra/environments/prod/terraform.tfvars"
+    _FALLBACK_PROJECT_ID = "live-on-473112"
 
     _METRIC_QUERIES: Sequence[_MetricQuery] = (
         _MetricQuery(
@@ -74,6 +75,9 @@ class GCPMetricsService:
         log_lines: list[str] = [
             f"[{retrieved_at.isoformat()}] Cloud Scheduler health probe for job '{job_id}'",
         ]
+
+        if self._project_resolution_logs and self._project_id:
+            log_lines.extend(self._project_resolution_logs)
 
         if not self._project_id:
             log_lines.extend(self._project_resolution_logs)
@@ -186,7 +190,7 @@ class GCPMetricsService:
 
         if tfvars_path is None:
             diagnostics.append("Terraform variable lookup was disabled via configuration.")
-            return _ProjectIdResolution(None, diagnostics)
+            return cls._fallback_resolution(diagnostics)
 
         resolved_tfvars_path = tfvars_path
         try:
@@ -213,7 +217,7 @@ class GCPMetricsService:
                 diagnostics.append(
                     f"Terraform variables file not found at {tfvars_path}."
                 )
-                return _ProjectIdResolution(None, diagnostics)
+                return cls._fallback_resolution(diagnostics)
 
             project_id_from_tfvars = extract_project_id(tfvars_path)
         except OSError as exc:
@@ -221,13 +225,13 @@ class GCPMetricsService:
             diagnostics.append(
                 f"Terraform variables file at {tfvars_path} could not be read: {exc}."
             )
-            return _ProjectIdResolution(None, diagnostics)
+            return cls._fallback_resolution(diagnostics)
         except ValueError as exc:
             diagnostics.extend(terraform_context)
             diagnostics.append(
                 f"Failed to parse Terraform variables from {tfvars_path}: {exc}."
             )
-            return _ProjectIdResolution(None, diagnostics)
+            return cls._fallback_resolution(diagnostics)
 
         if project_id_from_tfvars:
             return _ProjectIdResolution(
@@ -242,7 +246,18 @@ class GCPMetricsService:
         diagnostics.append(
             f"Terraform variables file located at {tfvars_path} but no 'project_id' entry was found."
         )
-        return _ProjectIdResolution(None, diagnostics)
+        return cls._fallback_resolution(diagnostics)
+
+    @classmethod
+    def _fallback_resolution(cls, diagnostics: list[str]) -> _ProjectIdResolution:
+        diagnostics.append(
+            "Using built-in development project ID '"
+            f"{cls._FALLBACK_PROJECT_ID}'; adjust configuration before production deployment."
+        )
+        diagnostics.append(
+            "Hard-coded project configuration enables local monitoring without Terraform state."
+        )
+        return _ProjectIdResolution(cls._FALLBACK_PROJECT_ID, diagnostics)
 
     @staticmethod
     def _summarise_time_series(time_series: Iterable[monitoring_v3.TimeSeries]) -> list[str]:

@@ -12,19 +12,27 @@ from app.services.monitoring import GCPMetricsService
 
 
 def test_fetch_run_pipeline_health_without_project_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A missing project ID yields sample output but not a hard error."""
+    """The service falls back to a built-in project ID during local development."""
+
+    class _EmptyClient:
+        def list_time_series(self, *args: Any, **kwargs: Any) -> list[Any]:
+            return []
 
     monkeypatch.delenv("GCP_PROJECT", raising=False)
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setattr(
+        "app.services.monitoring.monitoring_v3.MetricServiceClient",
+        lambda: _EmptyClient(),
+    )
 
     service = GCPMetricsService(project_id=None, tfvars_path=None)
     result = service.fetch_run_pipeline_health()
 
     assert result["status"] == "warning"
-    assert result.get("using_sample_data") is True
-    assert any("Project ID" in line for line in result["logs"])
+    assert result["project_id"] == GCPMetricsService._FALLBACK_PROJECT_ID
+    assert not result.get("using_sample_data", False)
     assert any("Environment variables" in line for line in result["logs"])
-    assert any("sample" in line.lower() for line in result["logs"])
+    assert any("Using built-in development project ID" in line for line in result["logs"])
 
 
 def test_fetch_run_pipeline_health_handles_client_initialisation_error(
@@ -103,8 +111,16 @@ def test_missing_tfvars_includes_contextual_diagnostics(
 ) -> None:
     """Diagnostics should include context when the Terraform file is absent."""
 
+    class _EmptyClient:
+        def list_time_series(self, *args: Any, **kwargs: Any) -> list[Any]:
+            return []
+
     monkeypatch.delenv("GCP_PROJECT", raising=False)
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setattr(
+        "app.services.monitoring.monitoring_v3.MetricServiceClient",
+        lambda: _EmptyClient(),
+    )
 
     missing_tfvars = tmp_path / "env" / "terraform.tfvars"
 
@@ -121,3 +137,4 @@ def test_missing_tfvars_includes_contextual_diagnostics(
     assert any("Terraform lookup parent directory exists:" in line for line in logs)
     assert any("Current working directory:" in line for line in logs)
     assert any("Monitoring service module path:" in line for line in logs)
+    assert any("Using built-in development project ID" in line for line in logs)
