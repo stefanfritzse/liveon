@@ -1,3 +1,20 @@
+############################
+# runner.tf (fixed)
+############################
+
+# SSH-nycklar du vill lägga på instansens metadata.
+# Varje element ska ha keys: "username", "public_key" och valfritt "comment".
+# Ex i terraform.tfvars:
+# runner_ssh_keys = [
+#   { username = "stefan_fritz", public_key = "ecdsa-sha2-nistp256 AAAA...==", comment = "laptop-ecdsa" },
+#   { username = "stefan_fritz", public_key = "ssh-rsa AAAAB3NzaC1yc2EAAA...==", comment = "laptop-rsa" }
+# ]
+variable "runner_ssh_keys" {
+  description = "List of SSH keys to add on instance metadata (each is a map with username, public_key, optional comment)."
+  type        = list(map(string))
+  default     = []
+}
+
 locals {
   runner_startup_script_default = <<-EOT
     #!/bin/bash
@@ -27,6 +44,25 @@ locals {
       usermod -aG docker ${var.runner_os_user}
     fi
   EOT
+
+  # Bygg ssh-keys-rader: "username:public_key [comment]"
+  runner_ssh_key_lines = [
+    for k in var.runner_ssh_keys :
+    trimspace(
+      "${lookup(k, "username", "")}:${lookup(k, "public_key", "")}" +
+      "${length(trimspace(lookup(k, "comment", ""))) > 0 ? " ${trimspace(lookup(k, "comment", ""))}" : ""}"
+    )
+    if length(lookup(k, "username", "")) > 0 && length(lookup(k, "public_key", "")) > 0
+  ]
+
+  # Basmetadata (om var.runner_metadata är null -> tomt map)
+  runner_metadata_base = var.runner_metadata != null ? var.runner_metadata : {}
+
+  # Effektiv metadata: merga in "ssh-keys" om vi har några rader, annars lämna basen orörd
+  runner_metadata_effective = length(local.runner_ssh_key_lines) > 0 ? merge(
+    local.runner_metadata_base,
+    { "ssh-keys" = join("\n", local.runner_ssh_key_lines) }
+  ) : local.runner_metadata_base
 }
 
 resource "google_service_account" "runner" {
@@ -71,7 +107,8 @@ resource "google_compute_instance" "runner" {
     }
   }
 
-  metadata = var.runner_metadata
+  # Lägg in ssh-keys via Terraform + behåll ev. övrig metadata från var.runner_metadata
+  metadata = local.runner_metadata_effective
 
   metadata_startup_script = coalesce(var.runner_startup_script, local.runner_startup_script_default)
 

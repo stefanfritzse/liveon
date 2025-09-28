@@ -41,6 +41,9 @@ RUN useradd -u 10001 -m appuser
 # Bring in the prebuilt venv and your code
 COPY --from=builder /opt/venv /opt/venv
 COPY app /app/app
+# Provide infrastructure configuration files (e.g. terraform.tfvars) required at runtime
+# for resolving deployment-specific project IDs in the monitoring service.
+COPY infra/environments/prod /app/infra/environments/prod
 
 # Ensure app user can read the code (and write if your app needs it)
 RUN chown -R appuser:appuser /app

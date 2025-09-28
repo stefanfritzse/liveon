@@ -1,0 +1,38 @@
+Outputs:
+
+artifact_registry_repository = "projects/live-on-473112/locations/europe-north2/repositories/longevity-app"
+enabled_services = [
+  "artifactregistry.googleapis.com",
+  "cloudbuild.googleapis.com",
+  "cloudresourcemanager.googleapis.com",
+  "compute.googleapis.com",
+  "container.googleapis.com",
+  "firestore.googleapis.com",
+  "iam.googleapis.com",
+  "iamcredentials.googleapis.com",
+  "monitoring.googleapis.com",
+  "serviceusage.googleapis.com",
+]
+gke_cluster_endpoint = "34.51.219.53"
+gke_cluster_name = "gke-longevity-primary"
+gke_node_service_account_email = "sa-gke-nodes@live-on-473112.iam.gserviceaccount.com"
+gke_secondary_ip_ranges = {
+  "pods" = {
+    "cidr" = "10.20.0.0/16"
+    "name" = "gke-pods"
+  }
+  "services" = {
+    "cidr" = "10.30.0.0/20"
+    "name" = "gke-services"
+  }
+}
+gke_subnetwork_self_link = "https://www.googleapis.com/compute/v1/projects/live-on-473112/regions/europe-north2/subnetworks/subnet-gke-primary"
+gke_workload_identity_pool = "live-on-473112.svc.id.goog"
+project_id = "live-on-473112"
+project_number = "192823657524"
+runner_instance_internal_ip = "10.10.0.3"
+runner_instance_self_link = "https://www.googleapis.com/compute/v1/projects/live-on-473112/zones/europe-north2-a/instances/gha-runner"
+runner_service_account_email = "sa-gh-runner@live-on-473112.iam.gserviceaccount.com"
+vpc_network_name = "vpc-longevity"
+workload_identity_pool_name = "projects/192823657524/locations/global/workloadIdentityPools/github-actions"
+workload_identity_provider_name = "projects/192823657524/locations/global/workloadIdentityPools/github-actions/providers/github"
