@@ -32,6 +32,28 @@ SAMPLE_FEED = """<?xml version='1.0' encoding='UTF-8'?>
 </rss>
 """
 
+SAMPLE_FEED_WITH_TRACKING = """<?xml version='1.0' encoding='UTF-8'?>
+<rss version="2.0">
+  <channel>
+    <title>Longevity Research Updates</title>
+    <link>https://example.com</link>
+    <description>Recent news on healthy aging</description>
+    <item>
+      <title>Metabolic panel biomarkers improve</title>
+      <link>https://example.com/articles/longevity-biomarkers/?utm_source=newsletter&amp;utm_medium=email</link>
+      <description>Tracking parameters should not create duplicate entries.</description>
+      <pubDate>Thu, 04 Jan 2024 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Metabolic panel biomarkers improve (duplicate)</title>
+      <link>https://EXAMPLE.com/articles/longevity-biomarkers/?utm_source=social&amp;fbclid=tracking</link>
+      <description>Same story syndicated with altered parameters.</description>
+      <pubDate>Thu, 04 Jan 2024 11:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
 
 URL_VARIANTS_FEED = """<?xml version='1.0' encoding='UTF-8'?>
 <rss version="2.0">
@@ -106,6 +128,7 @@ def test_gather_handles_fetch_errors_gracefully() -> None:
     assert not result.items
     assert result.errors
     assert "Network failure" in result.errors[0]
+
 
 def test_gather_deduplicates_tracking_parameters() -> None:
     feeds = [FeedSource(name="Digest", url="https://example.com/feed")]
@@ -194,4 +217,5 @@ def test_gather_prefers_entries_with_urls_for_same_guid() -> None:
 
     assert len(result.items) == 1
     assert result.items[0].url == "https://example.com/articles/rejuvenation-trial"
+
 
