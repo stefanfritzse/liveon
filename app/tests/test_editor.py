@@ -40,24 +40,26 @@ def sample_draft() -> ArticleDraft:
     )
 
 
+def editor_payload() -> dict[str, Any]:
+    return {
+        "title": "Two Evidence-Backed Habits to Support Healthy Aging",
+        "summary": "Research-backed fasting and strength routines can improve biomarkers and metabolic health.",
+        "body": "## Refined Highlights\nClinical and longitudinal studies suggest fasting and strength work aid healthy aging.",
+        "takeaways": [
+            "Prioritise protein intake alongside strength training",
+            "Monitor biomarkers when attempting fasting protocols",
+        ],
+        "sources": [
+            "https://journal.example.com/intermittent-fasting",
+            "https://journal.example.com/strength-training",
+        ],
+        "tags": ["exercise", "nutrition", "longevity"],
+        "disclaimer": "Always consult a healthcare professional before changing your routine.",
+    }
+
+
 def test_revise_returns_polished_article() -> None:
-    fake_response = json.dumps(
-        {
-            "title": "Two Evidence-Backed Habits to Support Healthy Aging",
-            "summary": "Research-backed fasting and strength routines can improve biomarkers and metabolic health.",
-            "body": "## Refined Highlights\nClinical and longitudinal studies suggest fasting and strength work aid healthy aging.",
-            "takeaways": [
-                "Prioritise protein intake alongside strength training",
-                "Monitor biomarkers when attempting fasting protocols",
-            ],
-            "sources": [
-                "https://journal.example.com/intermittent-fasting",
-                "https://journal.example.com/strength-training",
-            ],
-            "tags": ["exercise", "nutrition", "longevity"],
-            "disclaimer": "Always consult a healthcare professional before changing your routine.",
-        }
-    )
+    fake_response = json.dumps(editor_payload())
     agent = EditorAgent(llm=DummyLLM(fake_response))
 
     edited = agent.revise(sample_draft())
@@ -74,6 +76,29 @@ def test_revise_returns_polished_article() -> None:
     assert article.title == edited.title
     assert "**Key Takeaways**" in article.content_body
     assert "> Always consult" in article.content_body
+
+
+def test_revise_handles_json_wrapped_in_code_fence() -> None:
+    fake_response = "```json\n" + json.dumps(editor_payload(), indent=2) + "\n```\nThanks!"
+    agent = EditorAgent(llm=DummyLLM(fake_response))
+
+    edited = agent.revise(sample_draft())
+
+    assert edited.title == "Two Evidence-Backed Habits to Support Healthy Aging"
+    assert edited.disclaimer == "Always consult a healthcare professional before changing your routine."
+
+
+def test_revise_extracts_json_from_surrounding_text() -> None:
+    fake_response = (
+        "Here is the polished article you requested:\n\n"
+        + json.dumps(editor_payload())
+        + "\n\nLet me know if you need anything else!"
+    )
+    agent = EditorAgent(llm=DummyLLM(fake_response))
+
+    edited = agent.revise(sample_draft())
+
+    assert edited.tags == ["nutrition", "exercise", "longevity"]
 
 
 def test_revise_requires_valid_json() -> None:
