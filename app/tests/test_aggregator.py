@@ -33,6 +33,50 @@ SAMPLE_FEED = """<?xml version='1.0' encoding='UTF-8'?>
 """
 
 
+URL_VARIANTS_FEED = """<?xml version='1.0' encoding='UTF-8'?>
+<rss version="2.0">
+  <channel>
+    <title>Longevity Research Updates</title>
+    <link>https://example.com</link>
+    <description>Recent news on healthy aging</description>
+    <item>
+      <title>Peptide therapy gains traction</title>
+      <link>HTTPS://EXAMPLE.COM/articles/peptide-therapy</link>
+      <description>Researchers explore standard protocols.</description>
+      <pubDate>Fri, 05 Jan 2024 10:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Peptide therapy gains traction</title>
+      <link>https://example.com/articles/peptide-therapy/</link>
+      <description>Researchers explore standard protocols.</description>
+      <pubDate>Fri, 05 Jan 2024 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+
+MISSING_URL_FEED = """<?xml version='1.0' encoding='UTF-8'?>
+<rss version="2.0">
+  <channel>
+    <title>Longevity Research Updates</title>
+    <link>https://example.com</link>
+    <description>Recent news on healthy aging</description>
+    <item>
+      <title>Cellular senescence markers fall after therapy</title>
+      <description>Trial indicates sustained biomarker improvements.</description>
+      <pubDate>Thu, 04 Jan 2024 11:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Cellular senescence markers fall after therapy</title>
+      <description>Trial indicates sustained biomarker improvements.</description>
+      <pubDate>Thu, 04 Jan 2024 11:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+
 def test_gather_returns_sorted_articles() -> None:
     feeds = [FeedSource(name="Longevity Research Digest", url="https://example.com/feed", topic="research")]
     aggregator = LongevityNewsAggregator(feeds, fetcher=lambda url: SAMPLE_FEED)
@@ -62,7 +106,6 @@ def test_gather_handles_fetch_errors_gracefully() -> None:
     assert not result.items
     assert result.errors
     assert "Network failure" in result.errors[0]
-
 
 def test_gather_deduplicates_tracking_parameters() -> None:
     feeds = [FeedSource(name="Digest", url="https://example.com/feed")]

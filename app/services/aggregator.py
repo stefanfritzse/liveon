@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import logging
 from typing import Iterable
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import feedparser
 import httpx
@@ -41,6 +41,7 @@ class LongevityNewsAggregator:
 
         collected: list[AggregatedContent] = []
         errors: list[str] = []
+
         index_by_url: dict[str, int] = {}
         index_by_guid: dict[str, int] = {}
         index_by_signature: dict[tuple[str, str], int] = {}
@@ -70,7 +71,6 @@ class LongevityNewsAggregator:
             entries: Iterable[feedparser.FeedParserDict] = parsed.entries[:limit]
             for entry in entries:
                 aggregated = AggregatedContent.from_feed_entry(entry, source=feed)
-
                 normalized_url = _normalise_url(aggregated.url)
                 signature = _signature_key(aggregated)
                 guid = _guid_key(aggregated)
@@ -151,9 +151,14 @@ class LongevityNewsAggregator:
         response.raise_for_status()
         return response.text
 
+def _normalise_url(url: str | None) -> str:
+    """Normalise feed URLs to improve duplicate detection.
 
-def _normalise_url(url: str) -> str:
-    """Return a canonical representation of a feed URL for deduplication."""
+    The normalisation is intentionally conservative: it lowercases the scheme
+    and host, removes default ports, strips fragments, collapses empty paths to
+    ``/`` and orders query parameters. Empty or malformed URLs are returned
+    unchanged so that they can be handled by the textual fallback logic.
+    """
 
     if not url:
         return ""
