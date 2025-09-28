@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import logging
 from typing import Iterable
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import feedparser
 import httpx
@@ -16,6 +17,9 @@ LOGGER = logging.getLogger(__name__)
 
 
 Fetcher = Callable[[str], str]
+
+_TRACKING_PARAM_PREFIXES = ("utm_", "mc_", "icid", "oly_", "vero_id")
+_TRACKING_PARAM_NAMES = {"fbclid", "gclid", "gs_l", "msclkid", "yclid"}
 
 
 @dataclass(slots=True)
@@ -67,9 +71,14 @@ class LongevityNewsAggregator:
             entries: Iterable[feedparser.FeedParserDict] = parsed.entries[:limit]
             for entry in entries:
                 aggregated = AggregatedContent.from_feed_entry(entry, source=feed)
-                if aggregated.url and aggregated.url in seen_urls:
+                normalized_url = _normalize_url(aggregated.url)
+                if normalized_url:
+                    aggregated.url = normalized_url
+                dedupe_key = normalized_url or aggregated.url
+                if dedupe_key and dedupe_key in seen_urls:
                     continue
-                seen_urls.add(aggregated.url)
+                if dedupe_key:
+                    seen_urls.add(dedupe_key)
                 collected.append(aggregated)
 
         collected.sort(key=lambda item: item.published_at, reverse=True)
@@ -82,3 +91,35 @@ class LongevityNewsAggregator:
         response = httpx.get(url, timeout=10.0)
         response.raise_for_status()
         return response.text
+
+
+def _normalize_url(url: str) -> str:
+    """Return a canonical form of ``url`` by removing tracking noise."""
+
+    if not url:
+        return url
+
+    parsed = urlparse(url)
+    filtered_query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not _is_tracking_parameter(key)
+    ]
+    normalized_query = urlencode(filtered_query, doseq=True)
+    normalized_path = parsed.path.rstrip("/") or "/"
+
+    normalized = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=parsed.netloc.lower(),
+        path=normalized_path,
+        query=normalized_query,
+        fragment="",
+    )
+    return urlunparse(normalized)
+
+
+def _is_tracking_parameter(name: str) -> bool:
+    lowered = name.lower()
+    if lowered in _TRACKING_PARAM_NAMES:
+        return True
+    return any(lowered.startswith(prefix) for prefix in _TRACKING_PARAM_PREFIXES)
