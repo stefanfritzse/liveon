@@ -68,9 +68,22 @@ resource "google_service_account" "gke_nodes" {
 }
 
 resource "google_service_account" "liveon_app" {
+  count = var.create_liveon_app_service_account ? 1 : 0
+
   project      = google_project.project.project_id
-  account_id   = "sa-liveon-app"
-  display_name = "LiveOn App (Workload Identity)"
+  account_id   = var.liveon_app_service_account_id
+  display_name = var.liveon_app_service_account_display_name
+}
+
+data "google_service_account" "liveon_app" {
+  count = var.create_liveon_app_service_account ? 0 : 1
+
+  project    = google_project.project.project_id
+  account_id = var.liveon_app_service_account_id
+}
+
+locals {
+  liveon_app_service_account_email = var.create_liveon_app_service_account ? google_service_account.liveon_app[0].email : data.google_service_account.liveon_app[0].email
 }
 
 resource "google_project_iam_member" "gke_node_sa_roles" {
@@ -86,7 +99,7 @@ resource "google_project_iam_member" "liveon_app_sa_roles" {
 
   project = google_project.project.project_id
   role    = each.value
-  member  = "serviceAccount:${google_service_account.liveon_app.email}"
+  member  = "serviceAccount:${local.liveon_app_service_account_email}"
 }
 
 resource "google_iam_workload_identity_pool" "github" {
