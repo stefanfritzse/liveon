@@ -42,6 +42,7 @@ class LongevityNewsAggregator:
         collected: list[AggregatedContent] = []
         errors: list[str] = []
         index_by_url: dict[str, int] = {}
+        index_by_guid: dict[str, int] = {}
         index_by_signature: dict[tuple[str, str], int] = {}
         limit = max(0, limit_per_feed)
 
@@ -72,33 +73,72 @@ class LongevityNewsAggregator:
 
                 normalized_url = _normalise_url(aggregated.url)
                 signature = _signature_key(aggregated)
+                guid = _guid_key(aggregated)
+
                 if normalized_url:
                     existing_index = index_by_url.get(normalized_url)
                     if existing_index is not None:
                         existing = collected[existing_index]
-                        existing_signature = _signature_key(existing)
                         if _should_replace(existing, aggregated):
+                            _remove_indexes(index_by_url, index_by_guid, index_by_signature, existing)
                             collected[existing_index] = aggregated
-                            if existing_signature != signature:
-                                index_by_signature.pop(existing_signature, None)
-                                index_by_signature[signature] = existing_index
+                            _record_indexes(
+                                index_by_url,
+                                index_by_guid,
+                                index_by_signature,
+                                normalized_url,
+                                guid,
+                                signature,
+                                existing_index,
+                            )
+                        continue
+
+                if guid:
+                    existing_index = index_by_guid.get(guid)
+                    if existing_index is not None:
+                        existing = collected[existing_index]
+                        if _should_replace(existing, aggregated):
+                            _remove_indexes(index_by_url, index_by_guid, index_by_signature, existing)
+                            collected[existing_index] = aggregated
+                            _record_indexes(
+                                index_by_url,
+                                index_by_guid,
+                                index_by_signature,
+                                normalized_url,
+                                guid,
+                                signature,
+                                existing_index,
+                            )
                         continue
 
                 existing_index = index_by_signature.get(signature)
                 if existing_index is not None:
                     existing = collected[existing_index]
                     if _should_replace(existing, aggregated):
+                        _remove_indexes(index_by_url, index_by_guid, index_by_signature, existing)
                         collected[existing_index] = aggregated
-                        index_by_signature[signature] = existing_index
-                        if normalized_url:
-                            index_by_url[normalized_url] = existing_index
+                        _record_indexes(
+                            index_by_url,
+                            index_by_guid,
+                            index_by_signature,
+                            normalized_url,
+                            guid,
+                            signature,
+                            existing_index,
+                        )
                     continue
 
                 collected.append(aggregated)
                 index = len(collected) - 1
-                if normalized_url:
-                    index_by_url[normalized_url] = index
-                index_by_signature[signature] = index
+                _record_indexes(
+                    index_by_url,
+                    index_by_guid,
+                    index_by_signature,
+                    normalized_url,
+                    guid,
+                    signature,
+                    index,
+                )
 
         collected.sort(key=lambda item: item.published_at, reverse=True)
         return AggregationResult(items=collected, errors=errors)
@@ -141,6 +181,15 @@ def _signature_key(item: AggregatedContent) -> tuple[str, str]:
     return (title, timestamp.isoformat())
 
 
+def _guid_key(item: AggregatedContent) -> str:
+    """Return a normalised identifier derived from feed-specific GUID fields."""
+
+    raw_value = item.raw.get("id") or item.raw.get("guid") or ""
+    if not isinstance(raw_value, str):
+        raw_value = str(raw_value)
+    return raw_value.strip().lower()
+
+
 def _should_replace(existing: AggregatedContent, candidate: AggregatedContent) -> bool:
     """Determine whether the candidate item should replace the existing one."""
 
@@ -173,3 +222,42 @@ def _has_tracking(url: str) -> bool:
 
     parsed = urlparse(url)
     return any(key.lower().startswith("utm_") for key, _ in parse_qsl(parsed.query, keep_blank_values=True))
+
+
+def _remove_indexes(
+    index_by_url: dict[str, int],
+    index_by_guid: dict[str, int],
+    index_by_signature: dict[tuple[str, str], int],
+    item: AggregatedContent,
+) -> None:
+    """Remove stale index entries for a replaced aggregated item."""
+
+    normalized_url = _normalise_url(item.url)
+    if normalized_url:
+        index_by_url.pop(normalized_url, None)
+
+    guid = _guid_key(item)
+    if guid:
+        index_by_guid.pop(guid, None)
+
+    index_by_signature.pop(_signature_key(item), None)
+
+
+def _record_indexes(
+    index_by_url: dict[str, int],
+    index_by_guid: dict[str, int],
+    index_by_signature: dict[tuple[str, str], int],
+    normalized_url: str,
+    guid: str,
+    signature: tuple[str, str],
+    index: int,
+) -> None:
+    """Store index mappings for quick duplicate lookups."""
+
+    if normalized_url:
+        index_by_url[normalized_url] = index
+
+    if guid:
+        index_by_guid[guid] = index
+
+    index_by_signature[signature] = index

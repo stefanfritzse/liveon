@@ -118,3 +118,34 @@ def test_gather_deduplicates_when_links_are_missing() -> None:
 
     assert len(result.items) == 1
     assert result.items[0].url == "https://example.com/articles/intermittent-fasting"
+
+
+def test_gather_prefers_entries_with_urls_for_same_guid() -> None:
+    feeds = [FeedSource(name="Digest", url="https://example.com/feed")]
+    feed_with_guid = """<?xml version='1.0' encoding='UTF-8'?>
+    <rss version="2.0">
+      <channel>
+        <title>Longevity Research Updates</title>
+        <item>
+          <title>Cellular rejuvenation trial expands cohort</title>
+          <guid isPermaLink="false">article-123</guid>
+          <description>Initial report without the canonical link.</description>
+          <pubDate>Thu, 04 Jan 2024 10:00:00 GMT</pubDate>
+        </item>
+        <item>
+          <title>Cellular rejuvenation trial expands cohort</title>
+          <link>https://example.com/articles/rejuvenation-trial</link>
+          <guid>article-123</guid>
+          <description>Updated entry containing the canonical link.</description>
+          <pubDate>Thu, 04 Jan 2024 10:00:00 GMT</pubDate>
+        </item>
+      </channel>
+    </rss>
+    """
+
+    aggregator = LongevityNewsAggregator(feeds, fetcher=lambda url: feed_with_guid)
+
+    result = aggregator.gather(limit_per_feed=5)
+
+    assert len(result.items) == 1
+    assert result.items[0].url == "https://example.com/articles/rejuvenation-trial"
