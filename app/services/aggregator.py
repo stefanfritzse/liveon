@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import logging
 from typing import Iterable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import feedparser
 import httpx
@@ -40,7 +41,7 @@ class LongevityNewsAggregator:
 
         collected: list[AggregatedContent] = []
         errors: list[str] = []
-        seen_urls: set[str] = set()
+        seen_signatures: set[str] = set()
         limit = max(0, limit_per_feed)
 
         for feed in self._feeds:
@@ -67,9 +68,15 @@ class LongevityNewsAggregator:
             entries: Iterable[feedparser.FeedParserDict] = parsed.entries[:limit]
             for entry in entries:
                 aggregated = AggregatedContent.from_feed_entry(entry, source=feed)
-                if aggregated.url and aggregated.url in seen_urls:
+                normalized_url = _normalise_url(aggregated.url)
+                if normalized_url:
+                    aggregated.url = normalized_url
+                    signature = f"url::{normalized_url}"
+                else:
+                    signature = _text_signature(aggregated)
+                if signature in seen_signatures:
                     continue
-                seen_urls.add(aggregated.url)
+                seen_signatures.add(signature)
                 collected.append(aggregated)
 
         collected.sort(key=lambda item: item.published_at, reverse=True)
@@ -82,3 +89,49 @@ class LongevityNewsAggregator:
         response = httpx.get(url, timeout=10.0)
         response.raise_for_status()
         return response.text
+
+
+def _normalise_url(url: str | None) -> str:
+    """Normalise feed URLs to improve duplicate detection.
+
+    The normalisation is intentionally conservative: it lowercases the scheme
+    and host, removes default ports, strips fragments, collapses empty paths to
+    ``/`` and orders query parameters. Empty or malformed URLs are returned
+    unchanged so that they can be handled by the textual fallback logic.
+    """
+
+    if not url:
+        return ""
+
+    stripped = url.strip()
+    if not stripped:
+        return ""
+
+    parsed = urlsplit(stripped)
+    if not parsed.scheme or not parsed.netloc:
+        return stripped
+
+    scheme = parsed.scheme.lower()
+    netloc = parsed.netloc.lower()
+
+    if ":" in netloc:
+        host, _, port = netloc.rpartition(":")
+        if (scheme == "http" and port == "80") or (scheme == "https" and port == "443"):
+            netloc = host
+
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/")
+
+    query_items = parse_qsl(parsed.query, keep_blank_values=True)
+    query = urlencode(sorted(query_items))
+
+    return urlunsplit((scheme, netloc, path, query, ""))
+
+
+def _text_signature(content: AggregatedContent) -> str:
+    """Return a textual signature for feed entries lacking canonical URLs."""
+
+    title = (content.title or "").strip().lower()
+    summary = (content.summary or "").strip().lower()
+    return f"text::{title}::{summary}"
