@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import DefaultCredentialsError
 
 from app.services.monitoring import GCPMetricsService
@@ -53,8 +54,34 @@ def test_fetch_run_pipeline_health_handles_client_initialisation_error(
     service = GCPMetricsService(project_id=gcp_project_id)
     result = service.fetch_run_pipeline_health()
 
-    assert result["status"] == "error"
+    assert result["status"] == "warning"
+    assert result["using_sample_data"] is True
     assert any("Unable to initialise" in line for line in result["logs"])
+    assert any("Using sample telemetry" in line for line in result["logs"])
+
+
+def test_fetch_run_pipeline_health_falls_back_to_sample_on_api_error(
+    monkeypatch: pytest.MonkeyPatch, gcp_project_id: str
+) -> None:
+    """Permission errors should not surface as HTTP 503 responses."""
+
+    class _FlakyClient:
+        def list_time_series(self, *args: Any, **kwargs: Any) -> list[Any]:  # noqa: D401 - test helper
+            raise GoogleAPIError("403 Permission denied")
+
+    monkeypatch.setenv("GCP_PROJECT", gcp_project_id)
+    monkeypatch.setattr(
+        "app.services.monitoring.monitoring_v3.MetricServiceClient",
+        lambda: _FlakyClient(),
+    )
+
+    service = GCPMetricsService(project_id=gcp_project_id)
+    result = service.fetch_run_pipeline_health()
+
+    assert result["status"] == "warning"
+    assert result["using_sample_data"] is True
+    assert any("Permission denied" in line for line in result["logs"])
+    assert any("Using sample telemetry" in line for line in result["logs"])
 
 
 def test_fetch_run_pipeline_health_returns_warning_when_no_data(
