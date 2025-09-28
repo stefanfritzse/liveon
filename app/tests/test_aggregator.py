@@ -60,3 +60,61 @@ def test_gather_handles_fetch_errors_gracefully() -> None:
     assert not result.items
     assert result.errors
     assert "Network failure" in result.errors[0]
+
+
+def test_gather_deduplicates_tracking_parameters() -> None:
+    feeds = [FeedSource(name="Digest", url="https://example.com/feed")]
+    feed_with_tracking = """<?xml version='1.0' encoding='UTF-8'?>
+    <rss version="2.0">
+      <channel>
+        <title>Longevity Research Updates</title>
+        <item>
+          <title>Strength training linked to increased healthspan</title>
+          <link>https://example.com/articles/strength-training?utm_source=rss&amp;utm_medium=feed</link>
+          <description>Meta-analysis finds resistance training supports metabolic resilience.</description>
+          <pubDate>Wed, 03 Jan 2024 08:00:00 GMT</pubDate>
+        </item>
+        <item>
+          <title>Strength training linked to increased healthspan</title>
+          <link>https://example.com/articles/strength-training</link>
+          <description>Duplicate entry that should be ignored.</description>
+          <pubDate>Wed, 03 Jan 2024 08:00:00 GMT</pubDate>
+        </item>
+      </channel>
+    </rss>
+    """
+
+    aggregator = LongevityNewsAggregator(feeds, fetcher=lambda url: feed_with_tracking)
+
+    result = aggregator.gather(limit_per_feed=5)
+
+    assert [item.url for item in result.items] == ["https://example.com/articles/strength-training"]
+
+
+def test_gather_deduplicates_when_links_are_missing() -> None:
+    feeds = [FeedSource(name="Digest", url="https://example.com/feed")]
+    feed_without_links = """<?xml version='1.0' encoding='UTF-8'?>
+    <rss version="2.0">
+      <channel>
+        <title>Longevity Research Updates</title>
+        <item>
+          <title>Intermittent fasting study shows promising biomarkers</title>
+          <link>https://example.com/articles/intermittent-fasting</link>
+          <description>Longitudinal study tracks biomarker improvements in fasting cohorts.</description>
+          <pubDate>Tue, 02 Jan 2024 09:00:00 GMT</pubDate>
+        </item>
+        <item>
+          <title>Intermittent fasting study shows promising biomarkers</title>
+          <description>Duplicate entry lacking a canonical URL.</description>
+          <pubDate>Tue, 02 Jan 2024 09:00:00 GMT</pubDate>
+        </item>
+      </channel>
+    </rss>
+    """
+
+    aggregator = LongevityNewsAggregator(feeds, fetcher=lambda url: feed_without_links)
+
+    result = aggregator.gather(limit_per_feed=5)
+
+    assert len(result.items) == 1
+    assert result.items[0].url == "https://example.com/articles/intermittent-fasting"
