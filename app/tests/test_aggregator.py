@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import feedparser
+
 import httpx
 
-from app.models.aggregator import FeedSource
+from app.models.aggregator import AggregatedContent, FeedSource
 from app.services.aggregator import LongevityNewsAggregator
 
 
@@ -60,3 +62,19 @@ def test_gather_handles_fetch_errors_gracefully() -> None:
     assert not result.items
     assert result.errors
     assert "Network failure" in result.errors[0]
+
+
+def test_from_feed_entry_falls_back_to_content_summary() -> None:
+    source = FeedSource(name="Cellular Insights", url="https://example.com/feed")
+    entry = feedparser.FeedParserDict(
+        {
+            "title": "Cellular rejuvenation breakthrough",
+            "link": "https://example.com/articles/rejuvenation",
+            "content": [{"value": "Researchers report extended lifespan in model organisms."}],
+            "published_parsed": (2024, 1, 4, 12, 30, 0, 0, 4, 0),
+        }
+    )
+
+    aggregated = AggregatedContent.from_feed_entry(entry, source=source)
+
+    assert aggregated.summary == "Researchers report extended lifespan in model organisms."
