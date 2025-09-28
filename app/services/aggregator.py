@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import logging
 from typing import Iterable
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import feedparser
 import httpx
@@ -40,7 +41,9 @@ class LongevityNewsAggregator:
 
         collected: list[AggregatedContent] = []
         errors: list[str] = []
-        seen_urls: set[str] = set()
+        index_by_url: dict[str, int] = {}
+        index_by_guid: dict[str, int] = {}
+        index_by_signature: dict[tuple[str, str], int] = {}
         limit = max(0, limit_per_feed)
 
         for feed in self._feeds:
@@ -67,10 +70,75 @@ class LongevityNewsAggregator:
             entries: Iterable[feedparser.FeedParserDict] = parsed.entries[:limit]
             for entry in entries:
                 aggregated = AggregatedContent.from_feed_entry(entry, source=feed)
-                if aggregated.url and aggregated.url in seen_urls:
+
+                normalized_url = _normalise_url(aggregated.url)
+                signature = _signature_key(aggregated)
+                guid = _guid_key(aggregated)
+
+                if normalized_url:
+                    existing_index = index_by_url.get(normalized_url)
+                    if existing_index is not None:
+                        existing = collected[existing_index]
+                        if _should_replace(existing, aggregated):
+                            _remove_indexes(index_by_url, index_by_guid, index_by_signature, existing)
+                            collected[existing_index] = aggregated
+                            _record_indexes(
+                                index_by_url,
+                                index_by_guid,
+                                index_by_signature,
+                                normalized_url,
+                                guid,
+                                signature,
+                                existing_index,
+                            )
+                        continue
+
+                if guid:
+                    existing_index = index_by_guid.get(guid)
+                    if existing_index is not None:
+                        existing = collected[existing_index]
+                        if _should_replace(existing, aggregated):
+                            _remove_indexes(index_by_url, index_by_guid, index_by_signature, existing)
+                            collected[existing_index] = aggregated
+                            _record_indexes(
+                                index_by_url,
+                                index_by_guid,
+                                index_by_signature,
+                                normalized_url,
+                                guid,
+                                signature,
+                                existing_index,
+                            )
+                        continue
+
+                existing_index = index_by_signature.get(signature)
+                if existing_index is not None:
+                    existing = collected[existing_index]
+                    if _should_replace(existing, aggregated):
+                        _remove_indexes(index_by_url, index_by_guid, index_by_signature, existing)
+                        collected[existing_index] = aggregated
+                        _record_indexes(
+                            index_by_url,
+                            index_by_guid,
+                            index_by_signature,
+                            normalized_url,
+                            guid,
+                            signature,
+                            existing_index,
+                        )
                     continue
-                seen_urls.add(aggregated.url)
+
                 collected.append(aggregated)
+                index = len(collected) - 1
+                _record_indexes(
+                    index_by_url,
+                    index_by_guid,
+                    index_by_signature,
+                    normalized_url,
+                    guid,
+                    signature,
+                    index,
+                )
 
         collected.sort(key=lambda item: item.published_at, reverse=True)
         return AggregationResult(items=collected, errors=errors)
@@ -82,3 +150,114 @@ class LongevityNewsAggregator:
         response = httpx.get(url, timeout=10.0)
         response.raise_for_status()
         return response.text
+
+
+def _normalise_url(url: str) -> str:
+    """Return a canonical representation of a feed URL for deduplication."""
+
+    if not url:
+        return ""
+
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    netloc = parsed.netloc.lower()
+
+    query_pairs = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_")
+    ]
+    query_pairs.sort()
+    query = urlencode(query_pairs, doseq=True)
+
+    return urlunparse((scheme, netloc, parsed.path, parsed.params, query, ""))
+
+
+def _signature_key(item: AggregatedContent) -> tuple[str, str]:
+    """Fallback deduplication key derived from the article title and timestamp."""
+
+    title = item.title.strip().lower()
+    timestamp = item.published_at.replace(microsecond=0, tzinfo=item.published_at.tzinfo)
+    return (title, timestamp.isoformat())
+
+
+def _guid_key(item: AggregatedContent) -> str:
+    """Return a normalised identifier derived from feed-specific GUID fields."""
+
+    raw_value = item.raw.get("id") or item.raw.get("guid") or ""
+    if not isinstance(raw_value, str):
+        raw_value = str(raw_value)
+    return raw_value.strip().lower()
+
+
+def _should_replace(existing: AggregatedContent, candidate: AggregatedContent) -> bool:
+    """Determine whether the candidate item should replace the existing one."""
+
+    if not existing.url and candidate.url:
+        return True
+
+    if not candidate.url:
+        return False
+
+    existing_normalized = _normalise_url(existing.url)
+    candidate_normalized = _normalise_url(candidate.url)
+
+    if not existing_normalized:
+        return True
+
+    if existing_normalized != candidate_normalized:
+        return False
+
+    if _has_tracking(existing.url) and not _has_tracking(candidate.url):
+        return True
+
+    return len(candidate.url) < len(existing.url)
+
+
+def _has_tracking(url: str) -> bool:
+    """Return ``True`` when the URL contains common analytics query parameters."""
+
+    if not url:
+        return False
+
+    parsed = urlparse(url)
+    return any(key.lower().startswith("utm_") for key, _ in parse_qsl(parsed.query, keep_blank_values=True))
+
+
+def _remove_indexes(
+    index_by_url: dict[str, int],
+    index_by_guid: dict[str, int],
+    index_by_signature: dict[tuple[str, str], int],
+    item: AggregatedContent,
+) -> None:
+    """Remove stale index entries for a replaced aggregated item."""
+
+    normalized_url = _normalise_url(item.url)
+    if normalized_url:
+        index_by_url.pop(normalized_url, None)
+
+    guid = _guid_key(item)
+    if guid:
+        index_by_guid.pop(guid, None)
+
+    index_by_signature.pop(_signature_key(item), None)
+
+
+def _record_indexes(
+    index_by_url: dict[str, int],
+    index_by_guid: dict[str, int],
+    index_by_signature: dict[tuple[str, str], int],
+    normalized_url: str,
+    guid: str,
+    signature: tuple[str, str],
+    index: int,
+) -> None:
+    """Store index mappings for quick duplicate lookups."""
+
+    if normalized_url:
+        index_by_url[normalized_url] = index
+
+    if guid:
+        index_by_guid[guid] = index
+
+    index_by_signature[signature] = index
