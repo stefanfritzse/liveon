@@ -13,6 +13,9 @@ locals {
     "roles/container.developer",
     "roles/artifactregistry.reader",
   ]
+  liveon_app_sa_roles = [
+    "roles/monitoring.viewer",
+  ]
 }
 
 resource "google_project" "project" {
@@ -62,12 +65,26 @@ resource "google_service_account" "gke_nodes" {
   display_name = var.gke_nodes_service_account_display_name
 }
 
+resource "google_service_account" "liveon_app" {
+  project      = google_project.project.project_id
+  account_id   = "sa-liveon-app"
+  display_name = "LiveOn App (Workload Identity)"
+}
+
 resource "google_project_iam_member" "gke_node_sa_roles" {
   for_each = toset(local.gke_node_sa_roles)
 
   project = google_project.project.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.gke_nodes.email}"
+}
+
+resource "google_project_iam_member" "liveon_app_sa_roles" {
+  for_each = toset(local.liveon_app_sa_roles)
+
+  project = google_project.project.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.liveon_app.email}"
 }
 
 resource "google_iam_workload_identity_pool" "github" {
