@@ -168,6 +168,24 @@ variable "gke_nodes_service_account_display_name" {
   default     = "GKE Node Service Account"
 }
 
+variable "create_liveon_app_service_account" {
+  description = "Create the LiveOn application service account when true; set to false if it already exists."
+  type        = bool
+  default     = true
+}
+
+variable "liveon_app_service_account_id" {
+  description = "Account ID for the LiveOn application service account used with Workload Identity."
+  type        = string
+  default     = "sa-liveon-app"
+}
+
+variable "liveon_app_service_account_display_name" {
+  description = "Display name for the LiveOn application service account."
+  type        = string
+  default     = "LiveOn App (Workload Identity)"
+}
+
 variable "workload_identity_pool_id" {
   description = "Identifier to use for the GitHub Actions Workload Identity Pool."
   type        = string

@@ -33,6 +33,8 @@ artifact_registry_repository_description = "Container images for the Live On pla
 github_repository = "stefanfritzse/liveon"
 # github_default_branch = "main"
 
+create_liveon_app_service_account = false
+
 # GitHub Actions runner configuration. Disable or override defaults as needed.
 enable_runner           = true
 runner_zone             = "europe-north2-a"
