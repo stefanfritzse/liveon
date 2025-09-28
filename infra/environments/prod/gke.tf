@@ -1,3 +1,29 @@
+############################################
+# GKE cluster (Autopilot) – behåller /32-IP
+############################################
+
+locals {
+  # IP:en du vill behålla oavsett vad som ligger i var.gke_master_authorized_networks
+  pinned_authorized_networks = [
+    {
+      name       = "gha-runner"
+      cidr_block = "34.51.203.221/32"
+    }
+  ]
+
+  # Slå ihop användarens nät + pinned och dedupla på cidr_block
+  effective_authorized_networks_map = {
+    for n in concat(var.gke_master_authorized_networks, local.pinned_authorized_networks) :
+    n.cidr_block => n
+  }
+
+  # Stabil, sorterad lista (sorterar på CIDR-nyckeln)
+  effective_authorized_networks_sorted = [
+    for cidr in sort(keys(local.effective_authorized_networks_map)) :
+    local.effective_authorized_networks_map[cidr]
+  ]
+}
+
 resource "google_container_cluster" "primary" {
   provider            = google-beta
   name                = var.gke_cluster_name
@@ -24,8 +50,9 @@ resource "google_container_cluster" "primary" {
     services_secondary_range_name = var.service_ip_range_name
   }
 
+  # Rendera MAN-blocket endast om det finns minst ett nät
   dynamic "master_authorized_networks_config" {
-    for_each = length(var.gke_master_authorized_networks) > 0 ? [var.gke_master_authorized_networks] : []
+    for_each = length(local.effective_authorized_networks_sorted) > 0 ? [local.effective_authorized_networks_sorted] : []
     content {
       dynamic "cidr_blocks" {
         for_each = master_authorized_networks_config.value
