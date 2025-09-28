@@ -87,26 +87,23 @@ class GCPMetricsService:
             log_lines.append(
                 "Using sample telemetry so the dashboard remains interactive while local credentials are missing."
             )
-            log_lines.extend(self._local_debug_hints(job_id))
-            return {
-                "status": "warning",
-                "project_id": None,
-                "using_sample_data": True,
-                "logs": log_lines,
-                "retrieved_at": retrieved_at.isoformat(),
-            }
+            return self._sample_payload(
+                log_lines=log_lines,
+                retrieved_at=retrieved_at,
+                project_id=None,
+                job_id=job_id,
+            )
 
         try:
             client = monitoring_v3.MetricServiceClient()
         except (DefaultCredentialsError, GoogleAPIError) as exc:
             log_lines.append(f"Unable to initialise Cloud Monitoring client: {exc}")
-            log_lines.extend(self._local_debug_hints(job_id))
-            return {
-                "status": "error",
-                "project_id": self._project_id,
-                "logs": log_lines,
-                "retrieved_at": retrieved_at.isoformat(),
-            }
+            return self._sample_payload(
+                log_lines=log_lines,
+                retrieved_at=retrieved_at,
+                project_id=self._project_id,
+                job_id=job_id,
+            )
 
         start_time = retrieved_at - timedelta(hours=24)
         interval = TimeInterval(
@@ -134,13 +131,12 @@ class GCPMetricsService:
                 log_lines.append(
                     f"Failed to query metric '{query.metric_type}' from project {self._project_id}: {exc}"
                 )
-                log_lines.extend(self._local_debug_hints(job_id))
-                return {
-                    "status": "error",
-                    "project_id": self._project_id,
-                    "logs": log_lines,
-                    "retrieved_at": retrieved_at.isoformat(),
-                }
+                return self._sample_payload(
+                    log_lines=log_lines,
+                    retrieved_at=retrieved_at,
+                    project_id=self._project_id,
+                    job_id=job_id,
+                )
 
             if not time_series:
                 log_lines.append(f"{query.title}: No datapoints found in the past 24 hours.")
@@ -159,6 +155,27 @@ class GCPMetricsService:
         return {
             "status": "success" if dataset_found else "warning",
             "project_id": self._project_id,
+            "logs": log_lines,
+            "retrieved_at": retrieved_at.isoformat(),
+        }
+
+    def _sample_payload(
+        self,
+        *,
+        log_lines: list[str],
+        retrieved_at: datetime,
+        project_id: str | None,
+        job_id: str,
+    ) -> dict[str, Any]:
+        if not any("Using sample telemetry" in line for line in log_lines):
+            log_lines.append(
+                "Using sample telemetry so the dashboard remains interactive while live metrics are unavailable."
+            )
+        log_lines.extend(self._local_debug_hints(job_id))
+        return {
+            "status": "warning",
+            "project_id": project_id,
+            "using_sample_data": True,
             "logs": log_lines,
             "retrieved_at": retrieved_at.isoformat(),
         }

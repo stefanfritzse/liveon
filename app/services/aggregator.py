@@ -8,7 +8,6 @@ import logging
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-
 import feedparser
 import httpx
 
