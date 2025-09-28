@@ -1,0 +1,1 @@
+Always read the ./infra/environments/prod/terraform_creation_log for context about the live app in GCP
