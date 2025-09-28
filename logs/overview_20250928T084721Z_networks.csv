@@ -1,0 +1,3 @@
+name,subnet_mode,auto_create_subnetworks,routing_mode
+default,,True,REGIONAL
+vpc-longevity,,False,REGIONAL

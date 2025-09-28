@@ -1,0 +1,12 @@
+name,network,direction,priority,disabled,source_ranges,allowed,target_tags
+default-allow-icmp,default,INGRESS,65534,False,0.0.0.0/0,{'IPProtocol': 'icmp'},
+default-allow-internal,default,INGRESS,65534,False,10.128.0.0/9,"{'IPProtocol': 'tcp', 'ports': ['0-65535']}";"{'IPProtocol': 'udp', 'ports': ['0-65535']}";{'IPProtocol': 'icmp'},
+default-allow-rdp,default,INGRESS,65534,False,0.0.0.0/0,"{'IPProtocol': 'tcp', 'ports': ['3389']}",
+default-allow-ssh,default,INGRESS,65534,False,0.0.0.0/0,"{'IPProtocol': 'tcp', 'ports': ['22']}",
+gke-gke-longevity-primary-8dfce3d7-all,vpc-longevity,INGRESS,1000,False,10.20.0.0/16,{'IPProtocol': 'tcp'};{'IPProtocol': 'udp'};{'IPProtocol': 'icmp'};{'IPProtocol': 'esp'};{'IPProtocol': 'ah'};{'IPProtocol': 'sctp'},gke-gke-longevity-primary-8dfce3d7-node
+gke-gke-longevity-primary-8dfce3d7-exkubelet,vpc-longevity,INGRESS,1000,False,0.0.0.0/0,,gke-gke-longevity-primary-8dfce3d7-node
+gke-gke-longevity-primary-8dfce3d7-inkubelet,vpc-longevity,INGRESS,999,False,10.20.0.0/16,"{'IPProtocol': 'tcp', 'ports': ['10255']}",gke-gke-longevity-primary-8dfce3d7-node
+gke-gke-longevity-primary-8dfce3d7-vms,vpc-longevity,INGRESS,1000,False,10.10.0.0/20,"{'IPProtocol': 'udp', 'ports': ['1-65535']}";{'IPProtocol': 'icmp'};"{'IPProtocol': 'tcp', 'ports': ['1-65535']}",gke-gke-longevity-primary-8dfce3d7-node
+k8s-fw-l7--39e84f67ff6b84a1,vpc-longevity,INGRESS,1000,False,130.211.0.0/22;35.191.0.0/16,"{'IPProtocol': 'tcp', 'ports': ['8080']}",gke-gke-longevity-primary-8dfce3d7-node
+tcp-ingress,default,INGRESS,1000,False,35.235.240.0/20,"{'IPProtocol': 'tcp', 'ports': ['22']}",
+tcp-ingress-vpc-longevity,vpc-longevity,INGRESS,1000,False,35.235.240.0/20,"{'IPProtocol': 'tcp', 'ports': ['22']}",

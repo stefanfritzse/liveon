@@ -1,0 +1,2 @@
+name,location,master_ip,current_master_version,node_version,channel,enabled,workload_pool
+gke-longevity-primary,europe-north2,34.51.219.53,1.33.4-gke.1172000,1.33.4-gke.1172000,REGULAR,True,live-on-473112.svc.id.goog
