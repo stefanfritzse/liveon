@@ -14,6 +14,8 @@ locals {
     "roles/artifactregistry.reader",
   ]
   liveon_app_sa_roles = [
+    "roles/datastore.user",
+    "roles/secretmanager.secretAccessor",
     "roles/monitoring.viewer",
   ]
 }
