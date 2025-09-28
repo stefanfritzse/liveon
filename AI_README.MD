@@ -1,4 +1,4 @@
-Always read the ./infra/environments/prod/terraform_creation_log for context about:
+Always read the ./infra/environments/prod/terraform_creation_log (which is created after Terraform Apply command) for context about:
 Project metadata: project ID/number.
 API enablement: list of Google APIs turned on.
 Resource identifiers/URIs: self-links and full resource paths (GCE instance, subnet, Artifact Registry).
@@ -9,7 +9,7 @@ Network topology: VPC network name.
 CI/CD infra details: GitHub Actions runner VM (internal IP, self-link).
 Artifact storage: Artifact Registry repository path.
 """
-In ./logs you can find the following information:
+In ./logs you can find the following information that is fetched from the running app in GCP:
 resources.csv — project-wide inventory (asset type, name, location, labels) [optional if SKIP_CAI=1]
 compute_instances.csv — VMs: zone, machine type, internal/external IPs, status, attached service account, tags
 networks.csv — VPC networks: subnet mode, auto-subnets flag, routing mode

@@ -1,5 +1,3 @@
-Outputs:
-
 artifact_registry_repository = "projects/live-on-473112/locations/europe-north2/repositories/longevity-app"
 enabled_services = [
   "artifactregistry.googleapis.com",
