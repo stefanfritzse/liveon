@@ -18,6 +18,9 @@ LOGGER = logging.getLogger(__name__)
 
 Fetcher = Callable[[str], str]
 
+_TRACKING_PARAM_PREFIXES = ("utm_", "mc_", "icid", "oly_", "vero_id")
+_TRACKING_PARAM_NAMES = {"fbclid", "gclid", "gs_l", "msclkid", "yclid"}
+
 
 @dataclass(slots=True)
 class AggregationResult:
