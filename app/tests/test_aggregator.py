@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import feedparser
+
 import httpx
 
-from app.models.aggregator import FeedSource
+from app.models.aggregator import AggregatedContent, FeedSource
 from app.services.aggregator import LongevityNewsAggregator
 
 
@@ -149,3 +151,4 @@ def test_gather_prefers_entries_with_urls_for_same_guid() -> None:
 
     assert len(result.items) == 1
     assert result.items[0].url == "https://example.com/articles/rejuvenation-trial"
+
