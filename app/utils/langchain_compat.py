@@ -15,7 +15,12 @@ __all__ = [
 def _module_available(module: str) -> bool:
     """Return ``True`` when the given module can be imported."""
 
-    return importlib.util.find_spec(module) is not None
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        # ``find_spec`` may raise ``ModuleNotFoundError`` for namespaced modules
+        # that are not installed.  Treat those cases the same as a missing spec.
+        return False
 
 
 if _module_available("langchain_core.messages"):
