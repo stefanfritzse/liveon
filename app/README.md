@@ -84,6 +84,40 @@ When deployed to GKE, the `k8s/cronjob-pipeline.yaml` manifest schedules the
 runner to execute daily so the site stays populated with fresh longevity
 content.
 
+#### Overriding feed sources
+
+The default pipeline configuration now targets curated Google News RSS
+queries focused on longevity research, healthy aging policy, and lifestyle
+guidance. To point the aggregator at different sources without editing the
+codebase, set the `LIVEON_FEED_SOURCES` environment variable to a JSON array of
+objects containing `name`, `url`, and optional `topic` keys. The runner checks
+this environment variable before falling back to the baked-in defaults.
+
+Example payload:
+
+```json
+[
+  {
+    "name": "Your Feed Label",
+    "url": "https://news.google.com/rss/search?q=precision+longevity&hl=en-US&gl=US&ceid=US:en",
+    "topic": "research"
+  },
+  {
+    "name": "Clinic Updates",
+    "url": "https://news.google.com/rss/search?q=geroscience+clinical+trial&hl=en-US&gl=US&ceid=US:en",
+    "topic": "clinical"
+  }
+]
+```
+
+For ad-hoc runs you can export the variable and invoke the runner in a single
+command:
+
+```bash
+LIVEON_FEED_SOURCES='[{"name": "Local Feed", "url": "https://example.com/rss"}]' \
+python -m app.scripts.run_pipeline
+```
+
 ### Requirements
 
 Install the application dependencies in a virtual environment:
