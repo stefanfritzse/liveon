@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import Mock, patch
 
 import feedparser
 
@@ -217,5 +218,28 @@ def test_gather_prefers_entries_with_urls_for_same_guid() -> None:
 
     assert len(result.items) == 1
     assert result.items[0].url == "https://example.com/articles/rejuvenation-trial"
+
+
+def test_default_fetcher_passes_custom_headers() -> None:
+    feed = FeedSource(name="Longevity Digest", url="https://example.com/feed")
+    aggregator = LongevityNewsAggregator(
+        [feed],
+        headers={"X-Api-Key": "secret"},
+    )
+
+    mock_response = Mock()
+    mock_response.raise_for_status.return_value = None
+    mock_response.text = "<rss></rss>"
+
+    with patch.object(aggregator._client, "get", return_value=mock_response) as mock_get:
+        body = aggregator._default_fetcher(feed.url)
+
+    assert body == "<rss></rss>"
+
+    mock_get.assert_called_once()
+    args, kwargs = mock_get.call_args
+    assert args == (feed.url,)
+    assert kwargs["headers"] == aggregator._headers
+    assert kwargs["timeout"] == aggregator._timeout
 
 
