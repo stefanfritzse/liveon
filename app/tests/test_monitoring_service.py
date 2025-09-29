@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -165,3 +166,103 @@ def test_missing_tfvars_includes_contextual_diagnostics(
     assert any("Current working directory:" in line for line in logs)
     assert any("Monitoring service module path:" in line for line in logs)
     assert any("Using built-in development project ID" in line for line in logs)
+
+
+def test_k8s_backend_requires_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Kubernetes backend returns sample data when required env vars are missing."""
+
+    monkeypatch.setenv("PIPELINE_TRIGGER_BACKEND", "k8s_cronjob")
+    monkeypatch.delenv("K8S_NAMESPACE", raising=False)
+    monkeypatch.delenv("K8S_CRONJOB_NAME", raising=False)
+
+    service = GCPMetricsService(project_id="any")
+    result = service.fetch_run_pipeline_health()
+
+    assert result["backend"] == "k8s_cronjob"
+    assert result["status"] == "warning"
+    assert result["using_sample_data"] is True
+    assert any("Missing required Kubernetes configuration" in line for line in result["logs"])
+
+
+def test_k8s_backend_collects_cronjob_details(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CronJob health is summarised when the Kubernetes API responds successfully."""
+
+    monkeypatch.setenv("PIPELINE_TRIGGER_BACKEND", "k8s_cronjob")
+    monkeypatch.setenv("K8S_NAMESPACE", "default")
+    monkeypatch.setenv("K8S_CRONJOB_NAME", "longevity")
+
+    class _ApiException(Exception):
+        pass
+
+    class _ConfigException(Exception):
+        pass
+
+    class _ConfigModule:
+        def load_incluster_config(self) -> None:
+            raise _ConfigException("not in cluster")
+
+        def load_kube_config(self) -> None:
+            return None
+
+    class _Metadata:
+        def __init__(self, name: str) -> None:
+            owner_ref = type("Owner", (), {"kind": "CronJob", "name": "longevity"})
+            self.name = name
+            self.owner_references = [owner_ref]
+            self.creation_timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    class _JobStatus:
+        def __init__(self) -> None:
+            self.start_time = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+            self.completion_time = datetime(2024, 1, 1, 0, 30, tzinfo=timezone.utc)
+            self.succeeded = 1
+            self.failed = 0
+            self.active = 0
+
+    class _CronJobStatus:
+        def __init__(self) -> None:
+            self.last_schedule_time = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+            self.last_successful_time = datetime(2024, 1, 1, 0, 30, tzinfo=timezone.utc)
+            self.active = [object()]
+
+    class _CronJob:
+        def __init__(self) -> None:
+            self.status = _CronJobStatus()
+            self.metadata = _Metadata("longevity")
+
+    class _JobsResponse:
+        def __init__(self) -> None:
+            job = type("Job", (), {"metadata": _Metadata("longevity-123"), "status": _JobStatus()})
+            self.items = [job]
+
+    class _BatchClient:
+        def read_namespaced_cron_job(self, name: str, namespace: str) -> _CronJob:
+            assert name == "longevity"
+            assert namespace == "default"
+            return _CronJob()
+
+        def list_namespaced_job(self, namespace: str) -> _JobsResponse:
+            assert namespace == "default"
+            return _JobsResponse()
+
+    class _ClientModule:
+        BatchV1Api = _BatchClient
+
+    def _load_stub_client():  # noqa: D401 - test helper
+        return _ClientModule, _ConfigModule(), _ApiException, _ConfigException
+
+    monkeypatch.setattr(
+        GCPMetricsService,
+        "_load_kubernetes_client",
+        staticmethod(lambda: _load_stub_client()),
+    )
+
+    service = GCPMetricsService(project_id="any")
+    result = service.fetch_run_pipeline_health()
+
+    assert result["backend"] == "k8s_cronjob"
+    assert result["status"] == "success"
+    assert result["using_sample_data"] is False
+    assert result["active_runs"] == 1
+    assert result["recent_jobs"]
+    assert any("CronJob 'longevity'" in line for line in result["logs"])
