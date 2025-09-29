@@ -1,6 +1,6 @@
 # Application
 
-Application source code for the Live On platform will live here..
+Application source code for the Live On platform will live here.
 
 ## Phase status
 
