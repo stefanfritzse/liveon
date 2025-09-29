@@ -6,27 +6,31 @@ metadata:
     app: longevity-app
 spec:
   schedule: "0 5 * * *"
+  # Optional hardening:
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      # <-- belongs here (Job-level), not under template.spec
+      backoffLimit: 0
+      # Optional: kill long-runners after 30 minutes
+      activeDeadlineSeconds: 1800
       template:
         metadata:
           labels:
             app: longevity-app
         spec:
-          restartPolicy: Never
-          backoffLimit: 0
           serviceAccountName: longevity-app
+          # Do not restart the container if it fails
+          restartPolicy: Never
           containers:
             - name: pipeline-runner
               image: IMAGE_PLACEHOLDER
               imagePullPolicy: Always
-              command:
-                - python
-              args:
-                - -m
-                - app.scripts.run_pipeline
+              command: ["python"]
+              args: ["-m", "app.scripts.run_pipeline"]
               env:
                 - name: LIVEON_LOG_LEVEL
                   value: INFO
