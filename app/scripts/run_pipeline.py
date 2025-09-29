@@ -234,9 +234,12 @@ def run() -> int:
         if result.errors:
             for error in result.errors:
                 LOGGER.error(error)
-        else:
-            LOGGER.error("Pipeline finished without producing content.")
-        return 1
+            return 1
+
+        LOGGER.warning(
+            "Pipeline finished without producing content. No articles were published this run."
+        )
+        return 0
 
     publication = result.publication
     assert publication is not None  # for mypy
