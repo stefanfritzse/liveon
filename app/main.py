@@ -124,7 +124,7 @@ async def home(
 
 @app.get("/api/metrics/run-pipeline", response_class=JSONResponse)
 async def fetch_run_pipeline_metrics() -> JSONResponse:
-    """Return health metrics for the ``run_pipeline`` Cloud Scheduler job."""
+    """Return health metrics for the ``run_pipeline`` pipeline trigger."""
 
     payload = metrics_service.fetch_run_pipeline_health()
     status_code = 200

@@ -74,26 +74,27 @@
     {% endif %}
   </section>
 
-  <section id="gcp-health">
-    <h2>run_pipeline Health Monitor</h2>
+  <section id="pipeline-health">
+    <h2>run_pipeline Schedule Monitor</h2>
     <p>
-      Capture fresh Cloud Scheduler metrics from Google Cloud when investigating the
-      <code>run_pipeline</code> cron job. Copy the output below into the
+      Capture fresh pipeline schedule metrics when investigating the
+      <code>run_pipeline</code> automation. Copy the output below into the
       <code>logs/gcp_metrics</code> folder for deeper analysis later.
     </p>
     <div class="grid">
-      <button type="button" id="fetch-gcp-metrics">Fetch GCP health metrics</button>
+      <button type="button" id="fetch-pipeline-metrics">Fetch pipeline health metrics</button>
       <small>
-        The request queries Cloud Monitoring for the last 24 hours of
+        The request queries the configured pipeline backend for the last 24 hours of
         <code>run_pipeline</code> executions. Authentication relies on the server's
-        Application Default Credentials.
+        runtime credentials.
       </small>
     </div>
+    <p id="pipeline-backend-label">Source: awaiting first request…</p>
     <article>
       <header>
         <h3>Log output</h3>
       </header>
-      <pre id="gcp-metrics-log" class="log-window" data-status="idle">
+      <pre id="pipeline-metrics-log" class="log-window" data-status="idle">
 Press the button above to load the latest metrics…
       </pre>
     </article>
@@ -101,8 +102,9 @@ Press the button above to load the latest metrics…
 
   <script>
     (() => {
-      const button = document.querySelector('#fetch-gcp-metrics');
-      const logWindow = document.querySelector('#gcp-metrics-log');
+      const button = document.querySelector('#fetch-pipeline-metrics');
+      const logWindow = document.querySelector('#pipeline-metrics-log');
+      const backendLabel = document.querySelector('#pipeline-backend-label');
       if (!button || !logWindow) {
         return;
       }
@@ -117,11 +119,27 @@ Press the button above to load the latest metrics…
         return 'No log entries were returned by the monitoring endpoint.';
       };
 
+      const describeBackend = (payload) => {
+        const backend = payload?.backend;
+        if (backend === 'k8s_cronjob') {
+          const cronjob = payload?.cronjob ?? 'unknown CronJob';
+          const namespace = payload?.namespace ? ` in namespace ${payload.namespace}` : '';
+          return `Source: Kubernetes CronJob (${cronjob}${namespace})`;
+        }
+        if (backend === 'cloud_scheduler') {
+          return 'Source: Cloud Scheduler';
+        }
+        return 'Source: Unknown pipeline backend';
+      };
+
       button.addEventListener('click', async () => {
         button.disabled = true;
         button.setAttribute('aria-busy', 'true');
         logWindow.dataset.status = 'loading';
-        logWindow.textContent = 'Fetching metrics from Google Cloud Monitoring…';
+        logWindow.textContent = 'Fetching metrics from the pipeline backend…';
+        if (backendLabel) {
+          backendLabel.textContent = 'Source: Detecting…';
+        }
 
         try {
           const response = await fetch('/api/metrics/run-pipeline');
@@ -129,6 +147,9 @@ Press the button above to load the latest metrics…
           const status = payload?.status ?? (response.ok ? 'success' : 'error');
           logWindow.dataset.status = response.ok ? status : 'error';
           logWindow.textContent = renderLogs(payload?.logs) ?? '';
+          if (backendLabel) {
+            backendLabel.textContent = describeBackend(payload);
+          }
 
           if (!response.ok) {
             const detail = payload?.detail ?? payload?.message ?? 'Request failed.';
@@ -137,6 +158,9 @@ Press the button above to load the latest metrics…
         } catch (error) {
           logWindow.dataset.status = 'error';
           logWindow.textContent = `Failed to fetch metrics: ${error}`;
+          if (backendLabel) {
+            backendLabel.textContent = 'Source: Unable to determine backend.';
+          }
         } finally {
           button.removeAttribute('aria-busy');
           button.disabled = false;
