@@ -40,7 +40,7 @@ spec:
                 - name: GOOGLE_CLOUD_PROJECT
                   value: live-on-473112
                 - name: GOOGLE_CLOUD_REGION
-                  value: us-central1
+                  value: europe-north2
               resources:              # <-- Autopilot-friendly defaults; tune as needed
                 requests:
                   cpu: "250m"
