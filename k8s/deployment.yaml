@@ -14,6 +14,7 @@ spec:
       labels:
         app: longevity-app
     spec:
+      serviceAccountName: longevity-app
       containers:
         - name: longevity-app
           image: IMAGE_PLACEHOLDER
