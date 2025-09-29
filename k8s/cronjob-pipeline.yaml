@@ -15,7 +15,8 @@ spec:
           labels:
             app: longevity-app
         spec:
-          restartPolicy: OnFailure
+          restartPolicy: Never
+          backoffLimit: 0
           serviceAccountName: longevity-app
           containers:
             - name: pipeline-runner
