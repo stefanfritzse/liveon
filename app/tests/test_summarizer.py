@@ -75,6 +75,55 @@ def test_summarize_returns_structured_draft() -> None:
     assert draft.tags == ["nutrition", "exercise"]
 
 
+def test_summarize_handles_code_fenced_json() -> None:
+    payload = """
+    {
+      "title": "Two Lifestyle Interventions Support Healthy Aging",
+      "summary": "A fasting protocol and strength training routine demonstrate biomarker and metabolic gains.",
+      "body": "## Longevity Highlights - Intermittent fasting and strength training support healthy aging.",
+      "takeaways": [
+        "Intermittent fasting improved cellular biomarkers",
+        "Consistent strength training bolsters metabolic resilience"
+      ],
+      "sources": ["https://journal.example.com/study"],
+      "tags": ["nutrition", "exercise"]
+    }
+    """.strip()
+    agent = SummarizerAgent(llm=DummyLLM(f"```json\n{payload}\n```"))
+
+    draft = agent.summarize(sample_aggregated())
+
+    assert draft.title == "Two Lifestyle Interventions Support Healthy Aging"
+    assert draft.sources[0] == "https://example.com/articles/intermittent-fasting"
+    assert "https://journal.example.com/study" in draft.sources
+
+
+def test_summarize_handles_embedded_json_payload() -> None:
+    payload = """
+    {
+      "title": "Two Lifestyle Interventions Support Healthy Aging",
+      "summary": "A fasting protocol and strength training routine demonstrate biomarker and metabolic gains.",
+      "body": "## Longevity Highlights - Intermittent fasting and strength training support healthy aging.",
+      "takeaways": [
+        "Intermittent fasting improved cellular biomarkers",
+        "Consistent strength training bolsters metabolic resilience"
+      ],
+      "sources": ["https://journal.example.com/study"],
+      "tags": ["nutrition", "exercise"]
+    }
+    """.strip()
+    commentary = "Here is the polished article draft you requested:\n\n"
+    agent = SummarizerAgent(llm=DummyLLM(f"{commentary}{payload}\n\nHope this helps!"))
+
+    draft = agent.summarize(sample_aggregated())
+
+    assert draft.summary.startswith("A fasting protocol")
+    assert draft.takeaways == [
+        "Intermittent fasting improved cellular biomarkers",
+        "Consistent strength training bolsters metabolic resilience",
+    ]
+
+
 def test_summarize_raises_when_llm_returns_invalid_json() -> None:
     agent = SummarizerAgent(llm=DummyLLM("not-json"))
 
