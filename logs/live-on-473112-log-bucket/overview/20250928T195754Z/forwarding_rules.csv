@@ -1,2 +1,0 @@
-name,ip_address,ip_protocol,load_balancing_scheme,port_range,target,network_tier
-k8s2-fr-0j1kbaxu-default-longevity-app-mc9esuif,34.117.53.229,TCP,EXTERNAL,,https://www.googleapis.com/compute/v1/projects/live-on-473112/global/targetHttpProxies/k8s2-tp-0j1kbaxu-default-longevity-app-mc9esuif,PREMIUM

@@ -1,2 +1,0 @@
-name,zone,machine_type,network_ip,nat_ip,status,email,items
-gha-runner,europe-north2-a,e2-micro,10.10.0.3,34.51.203.221,RUNNING,sa-gh-runner@live-on-473112.iam.gserviceaccount.com,
