@@ -14,7 +14,7 @@ import logging, sys
 import os
 from typing import Protocol, Sequence
 
-from langchain_core.messages import AIMessage, BaseMessage
+from app.utils.langchain_compat import AIMessage, BaseMessage
 
 from app.models.aggregator import FeedSource
 from app.services.aggregator import LongevityNewsAggregator
