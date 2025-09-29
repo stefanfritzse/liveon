@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import logging
+import json
+import os
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -33,10 +35,29 @@ class AggregationResult:
 class LongevityNewsAggregator:
     """Fetch longevity-focused articles from configured RSS/Atom feeds."""
 
-    def __init__(self, feeds: Sequence[FeedSource], *, fetcher: Fetcher | None = None) -> None:
+    _DEFAULT_HEADERS: Mapping[str, str] = {
+        "User-Agent": "LiveOnLongevityAggregator/1.0 (+https://liveon.health)",
+        "Accept": "application/rss+xml, application/atom+xml;q=0.9, application/xml;q=0.8, */*;q=0.5",
+    }
+    _HEADERS_ENV_VAR = "LIVEON_FEED_HEADERS"
+    _TIMEOUT_ENV_VAR = "LIVEON_FEED_TIMEOUT"
+    _DEFAULT_TIMEOUT = 10.0
+
+    def __init__(
+        self,
+        feeds: Sequence[FeedSource],
+        *,
+        fetcher: Fetcher | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+        client: httpx.Client | None = None,
+    ) -> None:
         if not feeds:
             raise ValueError("At least one feed must be provided to the aggregator")
         self._feeds = list(feeds)
+        self._headers = self._build_headers(headers)
+        self._timeout = self._resolve_timeout(timeout)
+        self._client = client or httpx.Client(headers=self._headers, timeout=self._timeout)
         self._fetcher = fetcher or self._default_fetcher
 
     def gather(self, *, limit_per_feed: int = 5) -> AggregationResult:
@@ -146,13 +167,74 @@ class LongevityNewsAggregator:
         collected.sort(key=lambda item: item.published_at, reverse=True)
         return AggregationResult(items=collected, errors=errors)
 
-    @staticmethod
-    def _default_fetcher(url: str) -> str:
+    def _default_fetcher(self, url: str) -> str:
         """Fetch raw feed content using ``httpx``."""
 
-        response = httpx.get(url, timeout=10.0)
+        response = self._client.get(url, headers=self._headers, timeout=self._timeout)
         response.raise_for_status()
         return response.text
+
+    def _build_headers(self, headers: Mapping[str, str] | None) -> dict[str, str]:
+        """Combine default, environment, and user-specified headers."""
+
+        combined: dict[str, str] = dict(self._DEFAULT_HEADERS)
+        combined.update(_load_headers_from_env(self._HEADERS_ENV_VAR))
+        if headers:
+            combined.update({str(key): str(value) for key, value in headers.items()})
+        return combined
+
+    def _resolve_timeout(self, timeout: float | None) -> float:
+        """Determine the timeout used for outbound HTTP requests."""
+
+        if timeout is not None:
+            return float(timeout)
+        return _load_timeout_from_env(self._TIMEOUT_ENV_VAR, self._DEFAULT_TIMEOUT)
+
+
+def _load_headers_from_env(variable_name: str) -> dict[str, str]:
+    """Parse optional headers from a JSON-encoded environment variable."""
+
+    raw_value = os.getenv(variable_name)
+    if not raw_value:
+        return {}
+
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        LOGGER.warning("Ignoring invalid JSON in %s", variable_name)
+        return {}
+
+    if not isinstance(parsed, dict):
+        LOGGER.warning("Ignoring non-object value in %s", variable_name)
+        return {}
+
+    headers: dict[str, str] = {}
+    for key, value in parsed.items():
+        if value is None:
+            continue
+        headers[str(key)] = str(value)
+    return headers
+
+
+def _load_timeout_from_env(variable_name: str, default: float) -> float:
+    """Return the timeout specified by the environment, falling back to ``default``."""
+
+    raw_value = os.getenv(variable_name)
+    if not raw_value:
+        return default
+
+    try:
+        timeout = float(raw_value)
+    except ValueError:
+        LOGGER.warning("Ignoring invalid timeout value in %s", variable_name)
+        return default
+
+    if timeout <= 0:
+        LOGGER.warning("Ignoring non-positive timeout value in %s", variable_name)
+        return default
+
+    return timeout
+
 
 def _normalise_url(url: str | None) -> str:
     """Normalise feed URLs to improve duplicate detection.

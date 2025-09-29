@@ -147,8 +147,8 @@ def test_pipeline_handles_missing_content(tmp_path: Path) -> None:
     result = pipeline.run()
 
     assert not result.succeeded
-    assert result.errors == ["No aggregated content available to summarise."]
-    assert result.warnings == ["Feed unavailable"]
+    assert result.errors == []
+    assert result.warnings == ["Feed unavailable", "No aggregated content available to summarise."]
     assert result.draft is None
     assert result.edited is None
     assert result.publication is None

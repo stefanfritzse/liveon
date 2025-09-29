@@ -38,18 +38,18 @@ LOGGER.info("PIPELINE_START")
 
 DEFAULT_FEEDS: Sequence[FeedSource] = (
     FeedSource(
-        name="ScienceDaily Longevity",
-        url="https://www.sciencedaily.com/rss/health_medicine/longevity.xml",
+        name="Google News: Longevity Research",
+        url="https://news.google.com/rss/search?q=longevity+research&hl=en-US&gl=US&ceid=US:en",
         topic="research",
     ),
     FeedSource(
-        name="National Institute on Aging",
-        url="https://www.nia.nih.gov/news-events/newsroom/news/rss.xml",
+        name="Google News: Healthy Aging",
+        url="https://news.google.com/rss/search?q=%22healthy+aging%22&hl=en-US&gl=US&ceid=US:en",
         topic="aging",
     ),
     FeedSource(
-        name="Medical News Today - Healthy Aging",
-        url="https://www.medicalnewstoday.com/rss/healthy-aging",
+        name="Google News: Longevity Nutrition",
+        url="https://news.google.com/rss/search?q=longevity+nutrition&hl=en-US&gl=US&ceid=US:en",
         topic="lifestyle",
     ),
 )
@@ -234,9 +234,12 @@ def run() -> int:
         if result.errors:
             for error in result.errors:
                 LOGGER.error(error)
-        else:
-            LOGGER.error("Pipeline finished without producing content.")
-        return 1
+            return 1
+
+        LOGGER.warning(
+            "Pipeline finished without producing content. No articles were published this run."
+        )
+        return 0
 
     publication = result.publication
     assert publication is not None  # for mypy
