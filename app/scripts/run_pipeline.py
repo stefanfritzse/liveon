@@ -245,7 +245,13 @@ def _build_pipeline() -> ContentPipeline:
     editor = EditorAgent(llm=_create_llm("editor"))
     repository = FirestoreContentRepository()
     publisher = FirestorePublisher(repository=repository)
-    return ContentPipeline(aggregator=aggregator, summarizer=summarizer, editor=editor, publisher=publisher)
+    return ContentPipeline(
+        aggregator=aggregator,
+        summarizer=summarizer,
+        editor=editor,
+        publisher=publisher,
+        repository=repository,
+    )
 
 
 def run() -> int:

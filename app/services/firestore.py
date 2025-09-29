@@ -68,6 +68,17 @@ class FirestoreContentRepository:
         stored = document.get()
         return Article.from_document(stored)
 
+    def find_article_by_source_url(self, url: str) -> Article | None:
+        """Return the first article that references the given source URL, if any."""
+
+        if not url:
+            return None
+
+        query = self.article_collection.where("source_urls", "array_contains", url).limit(1)
+        for snapshot in query.stream():
+            return Article.from_document(snapshot)
+        return None
+
     # ------------------------------------------------------------------
     # Tip helpers
     # ------------------------------------------------------------------
