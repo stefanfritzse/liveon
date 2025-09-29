@@ -6,10 +6,12 @@ from datetime import datetime
 from typing import Protocol, Sequence
 
 from app.models.aggregator import AggregatedContent
+from app.models.content import Article
 from app.models.editor import EditedArticle
 from app.models.publisher import PublicationResult
 from app.models.summarizer import ArticleDraft
 from app.services.aggregator import AggregationResult
+from app.services.publisher import _slugify
 
 
 class SupportsAggregation(Protocol):
@@ -47,6 +49,13 @@ class SupportsPublishing(Protocol):
         """Publish the edited article and return metadata for the operation."""
 
 
+class SupportsSourceLookup(Protocol):
+    """Repository helper able to look up stored articles by source URL."""
+
+    def find_article_by_source_url(self, url: str) -> Article | None:
+        """Return an existing article that references ``url`` if one exists."""
+
+
 @dataclass(slots=True)
 class PipelineResult:
     """Structured summary of a pipeline execution."""
@@ -73,6 +82,7 @@ class ContentPipeline:
     summarizer: SupportsSummarisation
     editor: SupportsEditing
     publisher: SupportsPublishing
+    repository: SupportsSourceLookup | None = None
 
     def run(
         self,
@@ -88,9 +98,28 @@ class ContentPipeline:
         warnings = list(aggregation.errors)
         errors: list[str] = []
 
-        if not aggregation.items:
-            warning_message = "No aggregated content available to summarise."
-            warnings.append(warning_message)
+        repository = self.repository or getattr(self.publisher, "repository", None)
+
+        selected_item: AggregatedContent | None = None
+        if aggregation.items and repository is not None:
+            for item in aggregation.items:
+                url = (item.url or "").strip()
+                if not url:
+                    continue
+                if repository.find_article_by_source_url(url) is None:
+                    selected_item = item
+                    break
+        elif aggregation.items:
+            for item in aggregation.items:
+                if (item.url or "").strip():
+                    selected_item = item
+                    break
+
+        if selected_item is None:
+            if aggregation.items:
+                warnings.append("No new aggregated content available to publish.")
+            else:
+                warnings.append("No aggregated content available to summarise.")
             return PipelineResult(
                 aggregation=aggregation,
                 draft=None,
@@ -100,8 +129,10 @@ class ContentPipeline:
                 warnings=warnings,
             )
 
+        try_items: list[AggregatedContent] = [selected_item]
+
         try:
-            draft = self.summarizer.summarize(aggregation.items)
+            draft = self.summarizer.summarize(try_items)
         except Exception as exc:  # pragma: no cover - defensive fallback
             errors.append(f"Summarizer failed: {exc}")
             return PipelineResult(
@@ -126,10 +157,12 @@ class ContentPipeline:
                 warnings=warnings,
             )
 
+        slug_to_use = slug or _slugify(selected_item.title or selected_item.url or "")
+
         try:
             publication = self.publisher.publish(
                 edited,
-                slug=slug,
+                slug=slug_to_use,
                 commit_message=commit_message,
                 published_at=published_at,
             )
@@ -152,3 +185,4 @@ class ContentPipeline:
             errors=errors,
             warnings=warnings,
         )
+
