@@ -89,7 +89,8 @@ class ContentPipeline:
         errors: list[str] = []
 
         if not aggregation.items:
-            errors.append("No aggregated content available to summarise.")
+            warning_message = "No aggregated content available to summarise."
+            warnings.append(warning_message)
             return PipelineResult(
                 aggregation=aggregation,
                 draft=None,
