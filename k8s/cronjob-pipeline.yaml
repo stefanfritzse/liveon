@@ -33,6 +33,14 @@ spec:
                   value: INFO
                 - name: LIVEON_FEED_LIMIT
                   value: "5"
+                - name: LIVEON_SUMMARIZER_MODEL
+                  value: vertex
+                - name: VERTEX_MODEL
+                  value: chat-bison@002
+                - name: GOOGLE_CLOUD_PROJECT
+                  value: live-on-473112
+                - name: GOOGLE_CLOUD_REGION
+                  value: us-central1
               resources:              # <-- Autopilot-friendly defaults; tune as needed
                 requests:
                   cpu: "250m"
