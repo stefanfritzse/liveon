@@ -1,4 +1,4 @@
-"""FastAPI web application for the Live On Longevity Coach platform."""
+"""FastAPI web application for the Live On Longevity Coach platform"""
 
 from __future__ import annotations
 
