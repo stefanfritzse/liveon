@@ -96,10 +96,65 @@ class SummarizerAgent:
 
     @staticmethod
     def _parse_payload(content: str) -> dict[str, Any]:
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-            raise ValueError("Summarizer response was not valid JSON") from exc
+        text = content.strip()
+        if not text:
+            raise ValueError("Summarizer response was not valid JSON")
+
+        candidates: list[str] = []
+        fenced = SummarizerAgent._strip_code_fence(text)
+        if fenced:
+            candidates.append(fenced)
+        candidates.append(text)
+
+        for candidate in candidates:
+            try:
+                return SummarizerAgent._ensure_mapping(json.loads(candidate))
+            except json.JSONDecodeError:
+                continue
+
+        scanned = SummarizerAgent._scan_for_object(text)
+        if scanned is not None:
+            return SummarizerAgent._ensure_mapping(scanned)
+
+        raise ValueError("Summarizer response was not valid JSON")
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str | None:
+        if not text.startswith("```"):
+            return None
+
+        closing_index = text.rfind("```")
+        if closing_index <= 0:
+            return None
+
+        first_linebreak = text.find("\n")
+        if first_linebreak == -1:
+            content = text[3:closing_index]
+        else:
+            content = text[first_linebreak + 1 : closing_index]
+
+        cleaned = content.strip()
+        return cleaned or None
+
+    @staticmethod
+    def _scan_for_object(text: str) -> dict[str, Any] | None:
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                payload, _ = decoder.raw_decode(text, index)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                return payload
+        return None
+
+    @staticmethod
+    def _ensure_mapping(payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("Summarizer response JSON must be an object")
+        return payload
 
     @staticmethod
     def _merge_sources(primary: Sequence[str], secondary: Sequence[str]) -> list[str]:
