@@ -179,9 +179,39 @@ class LocalJSONResponder:
         }
 
     def _editor_payload(self, prompt: str) -> dict[str, object]:
-        json_start = prompt.find("{")
-        json_end = prompt.rfind("}")
-        if json_start == -1 or json_end == -1:
+        def _scan_for_object(text: str, *, prefer_last: bool) -> dict[str, object] | None:
+            decoder = json.JSONDecoder()
+            index = 0
+            found: dict[str, object] | None = None
+
+            while True:
+                brace = text.find("{", index)
+                if brace == -1:
+                    break
+                try:
+                    payload, end = decoder.raw_decode(text, brace)
+                except json.JSONDecodeError:
+                    index = brace + 1
+                    continue
+                if isinstance(payload, dict):
+                    found = payload
+                    if not prefer_last:
+                        return found
+                index = end
+
+            return found
+
+        marker = "Draft article JSON:"
+        base: dict[str, object] | None = None
+
+        if marker in prompt:
+            after_marker = prompt.split(marker, 1)[1]
+            base = _scan_for_object(after_marker, prefer_last=False)
+
+        if base is None:
+            base = _scan_for_object(prompt, prefer_last=True)
+
+        if base is None:
             base = {
                 "title": "Longevity Insights",
                 "summary": "Latest updates from the world of healthy aging.",
@@ -190,8 +220,6 @@ class LocalJSONResponder:
                 "sources": [],
                 "tags": ["longevity"],
             }
-        else:
-            base = json.loads(prompt[json_start : json_end + 1])
 
         disclaimer = (
             "This article shares educational longevity insights. Consult a healthcare professional before making changes."

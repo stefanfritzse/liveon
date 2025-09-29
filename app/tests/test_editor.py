@@ -4,6 +4,7 @@ from typing import Any, Sequence
 from langchain_core.messages import AIMessage
 
 from app.models.summarizer import ArticleDraft
+from app.scripts.run_pipeline import LocalJSONResponder
 from app.services.editor import EditorAgent
 
 
@@ -110,3 +111,34 @@ def test_revise_requires_valid_json() -> None:
         assert "valid JSON" in str(exc)
     else:  # pragma: no cover - ensure failure visible
         raise AssertionError("Expected ValueError for invalid JSON response")
+
+
+def test_local_json_responder_parses_editor_prompt() -> None:
+    draft = sample_draft()
+    agent = EditorAgent(llm=DummyLLM(""))
+    messages = agent.prompt.format_messages(
+        draft=json.dumps(
+            {
+                "title": draft.title,
+                "summary": draft.summary,
+                "body": draft.body,
+                "takeaways": draft.takeaways,
+                "sources": draft.sources,
+                "tags": draft.tags,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        current_date="2024-01-01",
+    )
+
+    prompt_text = messages[-1].content
+    responder = LocalJSONResponder("editor")
+
+    payload = responder._editor_payload(prompt_text)
+
+    assert payload["title"] == draft.title
+    assert payload["summary"] == draft.summary
+    assert payload["body"].startswith("## Longevity Highlights")
+    assert "disclaimer" in payload
+    assert "healthy-aging" in payload["tags"]
