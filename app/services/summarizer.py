@@ -7,8 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol, Sequence
 
-from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.prompts import ChatPromptTemplate
+from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
 
 from app.models.aggregator import AggregatedContent
 from app.models.summarizer import ArticleDraft, SummarizerContext
