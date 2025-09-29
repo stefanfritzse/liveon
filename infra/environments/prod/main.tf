@@ -17,6 +17,7 @@ locals {
     "roles/datastore.user",
     "roles/secretmanager.secretAccessor",
     "roles/monitoring.viewer",
+    "roles/aiplatform.user",
   ]
 }
 
