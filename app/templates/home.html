@@ -39,11 +39,9 @@
               <h3>{{ article.title }}</h3>
               <p class="article-meta">Published {{ article.published_date.strftime("%B %d, %Y") }}</p>
             </header>
-            {% if article.summary %}
-              <p>{{ article.summary }}</p>
-            {% else %}
-              <p>{{ article.content_body[:200] }}{% if article.content_body|length > 200 %}…{% endif %}</p>
-            {% endif %}
+            {% set summary_source = article.summary if article.summary else article.content_body %}
+            {% set summary_text = summary_source | markdown_to_text %}
+            <p>{{ summary_text[:200] }}{% if summary_text|length > 200 %}…{% endif %}</p>
             {% if article.id %}
               <footer><a href="/articles/{{ article.id }}">Read full article</a></footer>
             {% endif %}

@@ -17,12 +17,14 @@ from google.auth.exceptions import DefaultCredentialsError
 from app.models.content import Article, Tip
 from app.services.firestore import FirestoreContentRepository
 from app.services.monitoring import GCPMetricsService
+from app.utils.text import markdown_to_plain_text
 
 app = FastAPI(title="Live On Longevity Coach")
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 templates.env.globals.update(now=lambda: datetime.now(timezone.utc))
+templates.env.filters["markdown_to_text"] = markdown_to_plain_text
 
 metrics_service = GCPMetricsService()
 
