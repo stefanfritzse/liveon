@@ -6,9 +6,28 @@
 {% endblock %}
 
 {% block content %}
-  {% if tips %}
+  {% if featured_tip %}
+    <section class="tip-feature">
+      <article>
+        <header>
+          <p class="eyebrow">Featured today</p>
+          <h2>{{ featured_tip.title }}</h2>
+          <p class="article-meta">Published {{ featured_tip.published_date.strftime("%B %d, %Y") }}</p>
+        </header>
+        <p>{{ featured_tip.content_body }}</p>
+        {% if featured_tip.tags %}
+          <footer><strong>Tags:</strong> {{ featured_tip.tags | join(', ') }}</footer>
+        {% endif %}
+      </article>
+    </section>
+  {% else %}
+    <p class="empty-state">No tips have been published yet. Check back soon or return to the <a href="/">homepage</a> for platform updates.</p>
+  {% endif %}
+
+  {% if recent_tips %}
+    <h2>Earlier tips</h2>
     <div class="card-grid">
-      {% for tip in tips %}
+      {% for tip in recent_tips %}
         <article>
           <header>
             <h3>{{ tip.title }}</h3>
@@ -21,7 +40,9 @@
         </article>
       {% endfor %}
     </div>
-  {% else %}
-    <p>No tips yet. Seed Firestore or run the upcoming AI pipeline to populate this section.</p>
+  {% elif featured_tip %}
+    <p class="empty-state">You're all caught up—more coaching tips will appear here as they are published.</p>
   {% endif %}
+
+  <p><a href="/">Back to homepage</a></p>
 {% endblock %}

@@ -90,6 +90,17 @@ class FirestoreContentRepository:
         )
         return [Tip.from_document(snapshot) for snapshot in query.stream()]
 
+    def get_latest_tip(self) -> Tip | None:
+        """Return the single most recently published tip, if available."""
+
+        query = (
+            self.tip_collection.order_by("published_date", direction=firestore.Query.DESCENDING)
+            .limit(1)
+        )
+        for snapshot in query.stream():
+            return Tip.from_document(snapshot)
+        return None
+
     def save_tip(self, tip: Tip) -> Tip:
         collection = self.tip_collection
         document: DocumentReference
