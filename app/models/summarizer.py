@@ -61,3 +61,30 @@ class SummarizerContext:
                 source_urls.append(item.url)
 
         return cls(bullet_points=bullet_points, source_urls=source_urls)
+
+    def to_tip_notes(
+        self,
+        *,
+        max_notes: int = 4,
+        max_characters: int = 220,
+    ) -> list[str]:
+        """Return concise notes tailored for prompting the tip generator."""
+
+        notes: list[str] = []
+        limit = max(1, max_notes)
+        truncate_at = max(32, max_characters)
+
+        for bullet in self.bullet_points:
+            cleaned = " ".join(bullet.strip().split())
+            if not cleaned:
+                continue
+
+            if len(cleaned) > truncate_at:
+                cleaned = cleaned[: truncate_at - 1].rstrip()
+                cleaned = f"{cleaned}…"
+
+            notes.append(cleaned)
+            if len(notes) >= limit:
+                break
+
+        return notes
