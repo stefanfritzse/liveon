@@ -1,25 +1,431 @@
 {% extends "base.html" %}
 
 {% block hero %}
-  <h1>Ask the Longevity Coach</h1>
-  <p>A conversational coach experience is coming soon.</p>
+  <div class="grid">
+    <div>
+      <h1>Ask the Longevity Coach</h1>
+      <p>
+        Start a guided conversation with our experimental AI coach to explore habits that
+        support healthy aging. Ask about nutrition, movement, recovery, or mindset and the
+        coach will respond with science-informed suggestions and references.
+      </p>
+    </div>
+    <div>
+      <aside class="coach-hero-note" role="note" aria-labelledby="coach-safety-heading">
+        <p class="eyebrow" id="coach-safety-heading">Safety reminders</p>
+        <ul id="coach-disclaimer" class="coach-disclaimer-list">
+          <li>
+            Live On content is for educational purposes only and never replaces personalised
+            medical advice.
+          </li>
+          <li>
+            Always consult qualified healthcare professionals before changing medication,
+            nutrition, or exercise routines.
+          </li>
+          <li>
+            The AI coach may make mistakes. Double-check recommendations against trusted
+            sources and your own health context.
+          </li>
+        </ul>
+      </aside>
+    </div>
+  </div>
 {% endblock %}
 
 {% block content %}
-  <article>
-    <p>
-      Phase 3 will introduce an interactive AI coach that can answer questions about
-      nutrition, exercise, and healthy aging. For now this page acts as a placeholder so
-      the navigation and user journey are fully mapped in Phase 2.
-    </p>
-    <p>
-      Behind the scenes we are implementing a multi-agent pipeline with LangChain and
-      Vertex AI. Once complete, the coach will ground answers in our Firestore content and
-      external trusted sources while keeping a friendly, motivational tone.
-    </p>
-    <p>
-      Stay tuned! In the meantime explore our articles and tips for curated longevity
-      insights.
-    </p>
-  </article>
+  <section id="coach-app" class="coach-container" aria-labelledby="coach-form-heading">
+    <div class="coach-widget">
+      <header class="coach-header">
+        <h2 id="coach-form-heading">Start a conversation</h2>
+        <p>
+          Share one question at a time. The coach will respond with guidance, a reminder of
+          the safety policy, and links to the supporting material it relied on.
+        </p>
+      </header>
+
+      <form id="coach-form" class="coach-form" aria-describedby="coach-disclaimer">
+        <label for="coach-question" class="coach-label">Your question</label>
+        <textarea
+          id="coach-question"
+          name="question"
+          rows="4"
+          placeholder="E.g. How can I improve my sleep quality as I age?"
+          required
+        ></textarea>
+        <div class="coach-form-actions">
+          <button type="submit" class="primary" data-default-label="Send question">
+            Send question
+          </button>
+        </div>
+        <p id="coach-error" class="coach-error" role="alert" tabindex="-1" hidden></p>
+      </form>
+
+      <section
+        id="coach-transcript"
+        class="coach-transcript"
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        tabindex="0"
+        aria-label="Conversation transcript"
+      >
+        <article class="coach-message coach-message--assistant" tabindex="-1">
+          <header class="coach-message-meta">Coach</header>
+          <p>
+            Hi there! I’m your longevity coach. Ask me something about healthy aging and
+            I’ll share what I know, along with sources you can review.
+          </p>
+        </article>
+      </section>
+
+      <section id="coach-citations" class="coach-citations" hidden>
+        <h3>Sources cited in the last answer</h3>
+        <ul id="coach-citation-list"></ul>
+      </section>
+    </div>
+  </section>
+
+  <style>
+    .coach-container {
+      display: grid;
+      gap: 2.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .coach-widget {
+      background: white;
+      border-radius: 1rem;
+      padding: 2rem;
+      box-shadow: 0 20px 45px -20px rgba(15, 23, 42, 0.25);
+      display: grid;
+      gap: 2rem;
+    }
+
+    .coach-header p {
+      color: #475569;
+      max-width: 60ch;
+    }
+
+    .coach-form {
+      display: grid;
+      gap: 1rem;
+    }
+
+    .coach-label {
+      font-weight: 600;
+    }
+
+    .coach-form textarea {
+      resize: vertical;
+      border-radius: 0.75rem;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      padding: 1rem;
+      font-size: 1rem;
+    }
+
+    .coach-form textarea:focus {
+      border-color: #1c64f2;
+      box-shadow: 0 0 0 3px rgba(28, 100, 242, 0.15);
+      outline: none;
+    }
+
+    .coach-form-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .coach-error {
+      color: #b91c1c;
+      font-weight: 600;
+      margin: 0;
+    }
+
+    .coach-transcript {
+      background: #f1f5f9;
+      border-radius: 1rem;
+      padding: 1.5rem;
+      display: grid;
+      gap: 1.5rem;
+      max-height: 24rem;
+      overflow-y: auto;
+    }
+
+    .coach-message {
+      background: white;
+      border-radius: 0.85rem;
+      padding: 1.25rem;
+      box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .coach-message--user {
+      background: #1c64f2;
+      color: white;
+      margin-left: auto;
+      box-shadow: none;
+    }
+
+    .coach-message--assistant {
+      margin-right: auto;
+    }
+
+    .coach-message-meta {
+      font-size: 0.85rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(71, 85, 105, 0.9);
+    }
+
+    .coach-message--user .coach-message-meta {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .coach-message p {
+      margin: 0;
+      line-height: 1.6;
+    }
+
+    .coach-message-disclaimer {
+      font-size: 0.85rem;
+      color: #1c1917;
+      background: rgba(252, 211, 77, 0.25);
+      border-radius: 0.65rem;
+      padding: 0.75rem;
+    }
+
+    .coach-citations {
+      border-top: 1px solid rgba(148, 163, 184, 0.3);
+      padding-top: 1rem;
+    }
+
+    .coach-citations h3 {
+      margin-bottom: 0.75rem;
+    }
+
+    .coach-citations ul {
+      list-style: disc;
+      padding-left: 1.5rem;
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .coach-citation-snippet {
+      margin: 0.35rem 0 0;
+      font-size: 0.9rem;
+      color: #475569;
+    }
+
+    .coach-hero-note {
+      background: rgba(15, 23, 42, 0.85);
+      color: white;
+      border-radius: 1rem;
+      padding: 1.5rem;
+      box-shadow: 0 20px 45px -25px rgba(15, 23, 42, 0.45);
+    }
+
+    .coach-disclaimer-list {
+      margin: 0;
+      padding-left: 1.25rem;
+      display: grid;
+      gap: 0.75rem;
+    }
+
+    @media (max-width: 768px) {
+      .coach-hero-note {
+        margin-top: 1.5rem;
+      }
+
+      .coach-transcript {
+        max-height: none;
+      }
+    }
+  </style>
+
+  <script type="module">
+    (() => {
+      const app = document.querySelector('#coach-app');
+      if (!app) {
+        return;
+      }
+
+      const form = app.querySelector('#coach-form');
+      const textarea = app.querySelector('#coach-question');
+      const transcript = app.querySelector('#coach-transcript');
+      const errorBanner = app.querySelector('#coach-error');
+      const submitButton = form?.querySelector('button[type="submit"]');
+      const citationsPanel = app.querySelector('#coach-citations');
+      const citationList = app.querySelector('#coach-citation-list');
+      const defaultButtonLabel = submitButton?.dataset.defaultLabel ?? 'Send question';
+
+      const escapeHtml = (value) =>
+        value
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+
+      const renderText = (value = '') =>
+        escapeHtml(value)
+          .split(/\n+/)
+          .map((line) => `<span>${line}</span>`)
+          .join('<br />');
+
+      const toggleLoading = (isLoading) => {
+        if (!submitButton) {
+          return;
+        }
+        submitButton.disabled = isLoading;
+        submitButton.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+        submitButton.textContent = isLoading ? 'Sending…' : defaultButtonLabel;
+        form?.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+      };
+
+      const clearError = () => {
+        if (!errorBanner) {
+          return;
+        }
+        errorBanner.hidden = true;
+        errorBanner.textContent = '';
+      };
+
+      const showError = (message) => {
+        if (!errorBanner) {
+          return;
+        }
+        errorBanner.textContent = message;
+        errorBanner.hidden = false;
+        errorBanner.focus?.();
+      };
+
+      const appendMessage = (role, content, { disclaimer, citations } = {}) => {
+        if (!transcript) {
+          return;
+        }
+
+        const message = document.createElement('article');
+        message.className = `coach-message coach-message--${role}`;
+        message.setAttribute('tabindex', '-1');
+
+        const header = document.createElement('header');
+        header.className = 'coach-message-meta';
+        header.textContent = role === 'user' ? 'You' : 'Coach';
+        message.appendChild(header);
+
+        const body = document.createElement('p');
+        body.innerHTML = renderText(content);
+        message.appendChild(body);
+
+        if (role === 'assistant' && disclaimer) {
+          const disclaimerBlock = document.createElement('p');
+          disclaimerBlock.className = 'coach-message-disclaimer';
+          disclaimerBlock.innerHTML = renderText(disclaimer);
+          message.appendChild(disclaimerBlock);
+        }
+
+        transcript.appendChild(message);
+        message.focus();
+        transcript.scrollTop = transcript.scrollHeight;
+
+        if (role === 'assistant') {
+          updateCitations(Array.isArray(citations) ? citations : []);
+        }
+      };
+
+      const updateCitations = (citations) => {
+        if (!citationsPanel || !citationList) {
+          return;
+        }
+        citationList.innerHTML = '';
+
+        if (!citations.length) {
+          citationsPanel.hidden = true;
+          return;
+        }
+
+        citations.forEach((source, index) => {
+          const item = document.createElement('li');
+          const title = source?.title?.trim() || `Source ${index + 1}`;
+          const snippet = source?.snippet?.trim();
+          const link = source?.url?.trim();
+
+          if (link) {
+            const anchor = document.createElement('a');
+            anchor.href = link;
+            anchor.target = '_blank';
+            anchor.rel = 'noopener noreferrer';
+            anchor.textContent = title;
+            item.appendChild(anchor);
+          } else {
+            item.textContent = title;
+          }
+
+          if (snippet) {
+            const snippetBlock = document.createElement('p');
+            snippetBlock.textContent = snippet;
+            snippetBlock.className = 'coach-citation-snippet';
+            item.appendChild(snippetBlock);
+          }
+
+          citationList.appendChild(item);
+        });
+
+        citationsPanel.hidden = false;
+      };
+
+      const handleSubmit = async (event) => {
+        event.preventDefault();
+        clearError();
+        const question = textarea?.value?.trim();
+
+        if (!question) {
+          showError('Please enter a question for the coach.');
+          textarea?.focus();
+          return;
+        }
+
+        appendMessage('user', question);
+        toggleLoading(true);
+
+        try {
+          const response = await fetch('/api/ask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question }),
+          });
+
+          const payload = await response.json();
+
+          if (!response.ok) {
+            const detail = payload?.detail ?? 'The coach is unavailable right now.';
+            showError(detail);
+            appendMessage('assistant', 'I was unable to retrieve guidance just now. Please try again in a moment.');
+            textarea?.focus();
+            return;
+          }
+
+          appendMessage('assistant', payload?.answer ?? '', {
+            disclaimer: payload?.disclaimer,
+            citations: payload?.citations ?? [],
+          });
+          textarea.value = '';
+          textarea.focus();
+        } catch (error) {
+          showError('Something went wrong while contacting the coach. Please try again.');
+          appendMessage('assistant', 'I encountered an unexpected error and could not respond.');
+          textarea?.focus();
+        } finally {
+          toggleLoading(false);
+        }
+      };
+
+      form?.addEventListener('submit', handleSubmit);
+      form?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          form.requestSubmit();
+        }
+      });
+    })();
+  </script>
 {% endblock %}
