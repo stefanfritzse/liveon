@@ -36,7 +36,7 @@ spec:
                 - name: LIVEON_SUMMARIZER_MODEL
                   value: vertex
                 - name: VERTEX_MODEL
-                  value: chat-bison@002
+                  value: gemini-2.0-flash-lite-001
                 - name: GOOGLE_CLOUD_PROJECT
                   value: live-on-473112
                 - name: GOOGLE_CLOUD_REGION
