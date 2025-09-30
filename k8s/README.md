@@ -45,3 +45,21 @@ The tip CronJob relies on the following environment variables and CLI flags:
 The CronJob manifest sets `--limit-per-feed 4`, `--model-provider vertex`, and
 `--model gemini-2.0-flash-lite-001` so the task runs after the article pipeline
 with a lightweight Vertex AI model.
+
+## Coach API configuration
+
+The FastAPI deployment exposes `/api/ask`, which depends on an LLM backend for
+answers. Configure the following environment variables (defaults shown below)
+to point the service at Vertex AI or OpenAI models:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `LIVEON_COACH_MODEL` | `vertex` | Selects the LLM provider (`vertex`, `openai`, or `local`). |
+| `LIVEON_COACH_VERTEX_MODEL` | `gemini-1.5-pro` | Vertex AI chat model to invoke when the provider is `vertex`. |
+| `LIVEON_VERTEX_LOCATION` | `us-central1` | Optional region for Vertex AI API calls. |
+| `LIVEON_COACH_OPENAI_MODEL` | `gpt-4o-mini` | OpenAI chat model to invoke when the provider is `openai`. |
+| `LIVEON_MODEL_TEMPERATURE` | `0.2` | Sampling temperature forwarded to the configured LLM. |
+| `LIVEON_MODEL_MAX_OUTPUT_TOKENS` | `1024` | Maximum tokens returned per response. |
+
+Override these values in production by patching the deployment or sourcing them
+from a ConfigMap/Secret to align with the preferred LLM provider.

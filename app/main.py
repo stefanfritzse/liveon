@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import lru_cache
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import DefaultCredentialsError
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.content import Article, Tip
+from app.services.coach import CoachAgent, create_coach_llm
 from app.services.firestore import FirestoreContentRepository
 from app.services.monitoring import GCPMetricsService
 from app.utils.text import markdown_to_plain_text
@@ -27,6 +31,91 @@ templates.env.globals.update(now=lambda: datetime.now(timezone.utc))
 templates.env.filters["markdown_to_text"] = markdown_to_plain_text
 
 metrics_service = GCPMetricsService()
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:  # pragma: no cover - for static type checking only
+    from app.models.coach import CoachAnswer
+
+
+@lru_cache()
+def _cached_coach_agent() -> CoachAgent:
+    """Create a singleton CoachAgent backed by the configured LLM and Firestore."""
+
+    llm = create_coach_llm()
+    repository = FirestoreContentRepository()
+    return CoachAgent(llm=llm, repository=repository)
+
+
+def get_coach_agent() -> CoachAgent:
+    """FastAPI dependency returning the shared CoachAgent instance."""
+
+    try:
+        return _cached_coach_agent()
+    except (DefaultCredentialsError, GoogleAPIError, RuntimeError) as exc:
+        logger.exception("Coach agent initialisation failed", extra={"event": "coach.agent_init"})
+        raise HTTPException(status_code=503, detail="Coach service temporarily unavailable") from exc
+
+
+class AskCoachRequest(BaseModel):
+    """API payload submitted by clients requesting coach guidance."""
+
+    question: str = Field(..., description="The longevity-related question to ask the coach.")
+
+    @field_validator("question")
+    @classmethod
+    def _ensure_question_not_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Question must not be empty.")
+        return cleaned
+
+    @property
+    def sanitized(self) -> str:
+        """Return the trimmed question text ready for downstream use."""
+
+        return self.question.strip()
+
+
+class AskCoachSource(BaseModel):
+    """Serialised representation of supporting source material."""
+
+    title: str | None = Field(default=None, description="Source title if available.")
+    url: str | None = Field(default=None, description="Canonical URL for the cited material.")
+    snippet: str | None = Field(default=None, description="Excerpt referenced in the response.")
+    article_id: str | None = Field(default=None, description="Firestore identifier when present.")
+    score: float | None = Field(default=None, description="Relative ranking score for the source.")
+    published_at: datetime | None = Field(
+        default=None, description="Publication timestamp associated with the source."
+    )
+
+
+class AskCoachResponse(BaseModel):
+    """Structured response returned by the coach endpoint."""
+
+    answer: str = Field(..., description="The coach's guidance for the submitted question.")
+    disclaimer: str = Field(..., description="Safety disclaimer appended to every response.")
+    citations: list[AskCoachSource] = Field(
+        default_factory=list,
+        description="Supporting materials the coach relied upon when forming the answer.",
+    )
+
+    @classmethod
+    def from_coach_answer(cls, answer: "CoachAnswer") -> "AskCoachResponse":
+        return cls(
+            answer=answer.message,
+            disclaimer=answer.disclaimer,
+            citations=[
+                AskCoachSource(
+                    title=source.title,
+                    url=source.url,
+                    snippet=source.snippet,
+                    article_id=source.article_id,
+                    score=source.score,
+                    published_at=source.published_at,
+                )
+                for source in answer.sources
+            ],
+        )
 
 
 class ContentRepository(Protocol):
@@ -174,6 +263,43 @@ async def fetch_latest_tip(
             "tags": tip.tags,
         }
     )
+
+
+@app.post("/api/ask", response_model=AskCoachResponse)
+async def ask_coach_endpoint(
+    payload: AskCoachRequest,
+    agent: CoachAgent = Depends(get_coach_agent),
+) -> AskCoachResponse:
+    """Handle Ask the Coach API queries and return structured guidance."""
+
+    question = payload.sanitized
+    if not question:
+        raise HTTPException(status_code=400, detail="Question must not be empty.")
+
+    logger.info(
+        "Coach request received",
+        extra={
+            "event": "coach.request",
+            "question_length": len(question),
+        },
+    )
+
+    try:
+        answer = agent.ask(question)
+    except (DefaultCredentialsError, GoogleAPIError) as exc:
+        logger.exception(
+            "Coach data dependencies unavailable",
+            extra={"event": "coach.error", "reason": "firestore"},
+        )
+        raise HTTPException(status_code=503, detail="Coach data service unavailable") from exc
+    except RuntimeError as exc:
+        logger.exception(
+            "Coach language model unavailable",
+            extra={"event": "coach.error", "reason": "llm"},
+        )
+        raise HTTPException(status_code=503, detail="Coach language model unavailable") from exc
+
+    return AskCoachResponse.from_coach_answer(answer)
 
 
 @app.get("/articles", response_class=HTMLResponse)
