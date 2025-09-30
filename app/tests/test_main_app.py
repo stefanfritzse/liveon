@@ -8,7 +8,10 @@ from typing import Callable, Iterable
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import ContentRepository, app, get_repository
+from google.auth.exceptions import DefaultCredentialsError
+
+from app.main import ContentRepository, app, get_coach_agent, get_repository
+from app.models.coach import CoachAnswer, CoachSource
 from app.models.content import Article, Tip
 
 
@@ -39,13 +42,16 @@ class StubContentRepository(ContentRepository):
 
 
 @pytest.fixture()
-def client() -> Callable[[ContentRepository], TestClient]:
+def client() -> Callable[[ContentRepository, object | None], TestClient]:
     """Provide a helper that returns a configured ``TestClient`` for a repository."""
 
     clients: list[TestClient] = []
 
-    def _factory(repository: ContentRepository) -> TestClient:
+    def _factory(repository: ContentRepository, *, agent: object | None = None) -> TestClient:
         app.dependency_overrides[get_repository] = lambda: repository
+        app.dependency_overrides.pop(get_coach_agent, None)
+        if agent is not None:
+            app.dependency_overrides[get_coach_agent] = lambda: agent
         test_client = TestClient(app)
         clients.append(test_client)
         return test_client
@@ -55,6 +61,7 @@ def client() -> Callable[[ContentRepository], TestClient]:
     for created_client in clients:
         created_client.close()
     app.dependency_overrides.pop(get_repository, None)
+    app.dependency_overrides.pop(get_coach_agent, None)
 
 
 def _build_tip(identifier: str, published_offset_hours: int) -> Tip:
@@ -68,7 +75,25 @@ def _build_tip(identifier: str, published_offset_hours: int) -> Tip:
     )
 
 
-def test_homepage_context_includes_featured_tip(client: Callable[[ContentRepository], TestClient]) -> None:
+class _RecordingCoachAgent:
+    def __init__(self, answer: CoachAnswer) -> None:
+        self.answer = answer
+        self.questions: list[str] = []
+
+    def ask(self, question: str) -> CoachAnswer:
+        self.questions.append(question)
+        return self.answer
+
+
+class _FailingCoachAgent:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def ask(self, question: str) -> CoachAnswer:  # type: ignore[override]
+        raise self.error
+
+
+def test_homepage_context_includes_featured_tip(client: Callable[..., TestClient]) -> None:
     tips = [_build_tip("a", 1), _build_tip("b", 2)]
     repository = StubContentRepository(tips=tips)
     test_client = client(repository)
@@ -81,7 +106,7 @@ def test_homepage_context_includes_featured_tip(client: Callable[[ContentReposit
     assert [tip.id for tip in response.context["recent_tips"]] == ["b"]
 
 
-def test_homepage_handles_missing_tip(client: Callable[[ContentRepository], TestClient]) -> None:
+def test_homepage_handles_missing_tip(client: Callable[..., TestClient]) -> None:
     repository = StubContentRepository(tips=[])
     test_client = client(repository)
 
@@ -93,7 +118,7 @@ def test_homepage_handles_missing_tip(client: Callable[[ContentRepository], Test
 
 
 def test_latest_tip_endpoint_returns_tip_payload(
-    client: Callable[[ContentRepository], TestClient]
+    client: Callable[..., TestClient]
 ) -> None:
     repository = StubContentRepository(tips=[_build_tip("current", 0)])
     test_client = client(repository)
@@ -109,7 +134,7 @@ def test_latest_tip_endpoint_returns_tip_payload(
 
 
 def test_latest_tip_endpoint_handles_empty_repository(
-    client: Callable[[ContentRepository], TestClient]
+    client: Callable[..., TestClient]
 ) -> None:
     repository = StubContentRepository(tips=[])
     test_client = client(repository)
@@ -120,7 +145,7 @@ def test_latest_tip_endpoint_handles_empty_repository(
     assert response.json() == {"detail": "No tips available"}
 
 
-def test_tips_page_splits_featured_and_recent(client: Callable[[ContentRepository], TestClient]) -> None:
+def test_tips_page_splits_featured_and_recent(client: Callable[..., TestClient]) -> None:
     tips = [_build_tip("latest", 0), _build_tip("older", 4)]
     repository = StubContentRepository(tips=tips)
     test_client = client(repository)
@@ -133,7 +158,7 @@ def test_tips_page_splits_featured_and_recent(client: Callable[[ContentRepositor
     assert [tip.id for tip in response.context["recent_tips"]] == ["older"]
 
 
-def test_tips_page_empty_state(client: Callable[[ContentRepository], TestClient]) -> None:
+def test_tips_page_empty_state(client: Callable[..., TestClient]) -> None:
     repository = StubContentRepository(tips=[])
     test_client = client(repository)
 
@@ -142,3 +167,70 @@ def test_tips_page_empty_state(client: Callable[[ContentRepository], TestClient]
     assert response.status_code == 200
     assert response.context["featured_tip"] is None
     assert response.context["recent_tips"] == []
+
+
+def test_ask_coach_endpoint_returns_structured_response(client: Callable[..., TestClient]) -> None:
+    repository = StubContentRepository(tips=[])
+    sources = [
+        CoachSource(
+            title="Study A",
+            url="https://example.com/a",
+            snippet="Prioritise consistent sleep routines.",
+        )
+    ]
+    answer = CoachAnswer(message="Here is guidance.", disclaimer="Stay safe.", sources=sources)
+    agent = _RecordingCoachAgent(answer)
+    test_client = client(repository, agent=agent)
+
+    response = test_client.post("/api/ask", json={"question": "  How do I sleep better?  "})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"] == "Here is guidance."
+    assert payload["disclaimer"] == "Stay safe."
+    assert payload["citations"] == [
+        {
+            "title": "Study A",
+            "url": "https://example.com/a",
+            "snippet": "Prioritise consistent sleep routines.",
+            "article_id": None,
+            "score": None,
+            "published_at": None,
+        }
+    ]
+    assert agent.questions == ["How do I sleep better?"]
+
+
+def test_ask_coach_endpoint_rejects_blank_questions(client: Callable[..., TestClient]) -> None:
+    repository = StubContentRepository(tips=[])
+    answer = CoachAnswer(message="", disclaimer="", sources=[])
+    agent = _RecordingCoachAgent(answer)
+    test_client = client(repository, agent=agent)
+
+    response = test_client.post("/api/ask", json={"question": "   "})
+
+    assert response.status_code == 422
+    detail = response.json()
+    assert any("Question must not be empty" in item["msg"] for item in detail["detail"])
+
+
+def test_ask_coach_endpoint_handles_firestore_failures(client: Callable[..., TestClient]) -> None:
+    repository = StubContentRepository(tips=[])
+    agent = _FailingCoachAgent(DefaultCredentialsError("ADC missing"))
+    test_client = client(repository, agent=agent)
+
+    response = test_client.post("/api/ask", json={"question": "What about nutrition?"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Coach data service unavailable"}
+
+
+def test_ask_coach_endpoint_handles_llm_failures(client: Callable[..., TestClient]) -> None:
+    repository = StubContentRepository(tips=[])
+    agent = _FailingCoachAgent(RuntimeError("LLM offline"))
+    test_client = client(repository, agent=agent)
+
+    response = test_client.post("/api/ask", json={"question": "Share exercise tips"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Coach language model unavailable"}
