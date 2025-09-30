@@ -4,13 +4,14 @@ Application source code for the Live On platform will live here.
 
 ## Phase status
 
-Phases 1–3 from the implementation plan are complete and validated:
+Phases 1–4 from the implementation plan are complete and validated:
 
 - **Phase 1 – Foundation:** The repository, container build, GKE manifests, and CI/CD plumbing are in place so code changes build and deploy automatically.
 - **Phase 2 – Web experience:** The FastAPI frontend renders Firestore-backed content with graceful fallbacks for local development and includes navigation for the planned longevity resources.
 - **Phase 3 – AI content agents:** Aggregator, summariser, and editor agents collaborate through the content pipeline to generate, refine, and publish longevity articles via the Firestore publisher. The pipeline can be executed locally or on the scheduled Kubernetes CronJob using deterministic local responders or live LLMs.
+- **Phase 4 – Web integration & automation:** The FastAPI experience now consumes the pipeline output directly from Firestore, and the `run_pipeline` CronJob keeps articles fresh by running on an automated schedule with idempotent updates.
 
-With the agent workflow operating end-to-end, the project is ready to proceed to Phase 4 tasks that integrate the generated content more deeply into the user-facing experience.
+With the automated pipeline populating the site, the project is ready to proceed to Phase 5 tasks that deliver the interactive Longevity Coach experience.
 
 ## FastAPI web application
 
@@ -59,6 +60,16 @@ Firestore path ensures articles are stored with deterministic slugs and
 timestamps. This lays the groundwork for integrating the multi-agent
 workflow with GitOps tooling and the live Firestore content store in
 later milestones.
+
+### Automated content refresh
+
+The `app/scripts/run_pipeline.py` entry point orchestrates the aggregator,
+summariser, editor, and Firestore publisher so that fresh articles land in the
+database without manual intervention. When deployed, the
+`k8s/cronjob-pipeline.yaml` manifest schedules this script to execute
+periodically, and the pipeline skips previously processed items to avoid
+duplicates. Because the FastAPI views read directly from Firestore, any new
+articles are automatically surfaced on the homepage and `/articles` listing.
 
 ### Running the AI content pipeline
 
