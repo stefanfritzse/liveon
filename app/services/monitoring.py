@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import os
@@ -52,6 +53,10 @@ class GCPMetricsService:
     _PIPELINE_BACKEND_ENV = "PIPELINE_TRIGGER_BACKEND"
     _K8S_NAMESPACE_ENV = "K8S_NAMESPACE"
     _K8S_CRONJOB_NAME_ENV = "K8S_CRONJOB_NAME"
+    _K8S_TIP_CRONJOB_NAME_ENV = "K8S_TIP_CRONJOB_NAME"
+    DEFAULT_ARTICLE_JOB_ID = "run_pipeline"
+    DEFAULT_TIP_JOB_ID = "run_tip_pipeline"
+    _STATUS_SEVERITY = {"success": 0, "warning": 1, "error": 2}
 
     _METRIC_QUERIES: Sequence[_MetricQuery] = (
         _MetricQuery(
@@ -84,19 +89,111 @@ class GCPMetricsService:
         self._pipeline_backend = backend_resolution.value
         self._backend_resolution_logs = backend_resolution.diagnostics
 
-    def fetch_run_pipeline_health(self, *, job_id: str = "run_pipeline") -> dict[str, Any]:
+    def fetch_run_pipeline_health(
+        self,
+        *,
+        job_id: str = DEFAULT_ARTICLE_JOB_ID,
+        tips_job_id: str | None = DEFAULT_TIP_JOB_ID,
+    ) -> dict[str, Any]:
         """Return health telemetry for the configured pipeline trigger backend."""
 
-        if self._pipeline_backend == "k8s_cronjob":
-            return self._fetch_k8s_cronjob_health(job_id=job_id)
-        return self._fetch_cloud_scheduler_health(job_id=job_id)
+        primary_payload = self._fetch_backend_health(
+            job_id=job_id,
+            job_label=job_id,
+            cronjob_env_var=self._K8S_CRONJOB_NAME_ENV,
+        )
 
-    def _fetch_cloud_scheduler_health(self, *, job_id: str) -> dict[str, Any]:
+        if not tips_job_id:
+            return primary_payload
+
+        tip_payload = self._fetch_backend_health(
+            job_id=tips_job_id,
+            job_label=tips_job_id,
+            cronjob_env_var=self._K8S_TIP_CRONJOB_NAME_ENV,
+        )
+
+        return self._combine_pipeline_payloads(primary_payload, tip_payload)
+
+    def _fetch_backend_health(
+        self,
+        *,
+        job_id: str,
+        job_label: str,
+        cronjob_env_var: str,
+    ) -> dict[str, Any]:
+        if self._pipeline_backend == "k8s_cronjob":
+            return self._fetch_k8s_cronjob_health(
+                job_id=job_id,
+                job_label=job_label,
+                cronjob_env_var=cronjob_env_var,
+            )
+        return self._fetch_cloud_scheduler_health(job_id=job_id, job_label=job_label)
+
+    def _combine_pipeline_payloads(
+        self,
+        articles_payload: dict[str, Any],
+        tips_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        combined = copy.deepcopy(articles_payload)
+        combined_status = self._worst_status(
+            (articles_payload.get("status"), tips_payload.get("status"))
+        )
+        combined["status"] = combined_status
+        combined["using_sample_data"] = bool(articles_payload.get("using_sample_data")) or bool(
+            tips_payload.get("using_sample_data")
+        )
+        combined["logs"] = self._merge_logs(articles_payload, tips_payload)
+        combined.setdefault("project_id", tips_payload.get("project_id"))
+        combined.setdefault("backend", tips_payload.get("backend"))
+        combined.setdefault("retrieved_at", articles_payload.get("retrieved_at"))
+        combined["pipelines"] = {
+            "articles": self._sanitise_pipeline_payload(articles_payload),
+            "tips": self._sanitise_pipeline_payload(tips_payload),
+        }
+        return combined
+
+    @classmethod
+    def _worst_status(cls, statuses: Iterable[str | None]) -> str:
+        worst_status = "success"
+        worst_score = cls._STATUS_SEVERITY[worst_status]
+        for status in statuses:
+            candidate = status or "warning"
+            score = cls._STATUS_SEVERITY.get(candidate, cls._STATUS_SEVERITY["warning"])
+            if score > worst_score:
+                worst_status = candidate
+                worst_score = score
+        return worst_status
+
+    @staticmethod
+    def _sanitise_pipeline_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        cleaned = copy.deepcopy(payload)
+        cleaned.pop("pipelines", None)
+        return cleaned
+
+    @staticmethod
+    def _merge_logs(
+        articles_payload: dict[str, Any], tips_payload: dict[str, Any]
+    ) -> list[str]:
+        content_header = (
+            f"=== Content pipeline ({articles_payload.get('job_id') or 'run_pipeline'}) ==="
+        )
+        tips_header = f"=== Tip pipeline ({tips_payload.get('job_id') or 'run_tip_pipeline'}) ==="
+        logs: list[str] = [content_header]
+        logs.extend(articles_payload.get("logs", []))
+        logs.append("")
+        logs.append(tips_header)
+        logs.extend(tips_payload.get("logs", []))
+        return [line for line in logs if line is not None]
+
+    def _fetch_cloud_scheduler_health(self, *, job_id: str, job_label: str) -> dict[str, Any]:
         """Collect health signals from Cloud Scheduler metrics."""
 
         retrieved_at = datetime.now(timezone.utc)
         log_lines: list[str] = [
-            f"[{retrieved_at.isoformat()}] Pipeline schedule health probe (backend: Cloud Scheduler)",
+            (
+                f"[{retrieved_at.isoformat()}] Pipeline schedule health probe "
+                f"(backend: Cloud Scheduler, job: {job_label})"
+            ),
         ]
 
         if self._backend_resolution_logs:
@@ -188,6 +285,7 @@ class GCPMetricsService:
             "using_sample_data": False,
             "logs": log_lines,
             "retrieved_at": retrieved_at.isoformat(),
+            "job_id": job_id,
         }
 
     def _sample_payload(
@@ -212,6 +310,7 @@ class GCPMetricsService:
             "using_sample_data": True,
             "logs": log_lines,
             "retrieved_at": retrieved_at.isoformat(),
+            "job_id": job_id,
         }
         if extra:
             payload.update(extra)
@@ -336,25 +435,35 @@ class GCPMetricsService:
         )
         return _BackendResolution(cls._DEFAULT_PIPELINE_BACKEND, diagnostics)
 
-    def _fetch_k8s_cronjob_health(self, *, job_id: str) -> dict[str, Any]:
+    def _fetch_k8s_cronjob_health(
+        self,
+        *,
+        job_id: str,
+        job_label: str,
+        cronjob_env_var: str,
+    ) -> dict[str, Any]:
         """Collect health signals from a Kubernetes CronJob."""
 
         retrieved_at = datetime.now(timezone.utc)
         log_lines: list[str] = [
-            f"[{retrieved_at.isoformat()}] Pipeline schedule health probe (backend: Kubernetes CronJob)",
+            (
+                f"[{retrieved_at.isoformat()}] Pipeline schedule health probe "
+                f"(backend: Kubernetes CronJob, job: {job_label})"
+            ),
         ]
 
         if self._backend_resolution_logs:
             log_lines.extend(self._backend_resolution_logs)
 
         namespace = os.getenv(self._K8S_NAMESPACE_ENV)
-        cronjob_name = os.getenv(self._K8S_CRONJOB_NAME_ENV) or job_id
+        cronjob_env = cronjob_env_var or self._K8S_CRONJOB_NAME_ENV
+        cronjob_name = os.getenv(cronjob_env) or job_id
 
         missing_env: list[str] = []
         if not namespace:
             missing_env.append(self._K8S_NAMESPACE_ENV)
-        if not os.getenv(self._K8S_CRONJOB_NAME_ENV):
-            missing_env.append(self._K8S_CRONJOB_NAME_ENV)
+        if not os.getenv(cronjob_env):
+            missing_env.append(cronjob_env)
 
         if missing_env:
             log_lines.append(
@@ -375,6 +484,7 @@ class GCPMetricsService:
                     "last_successful_time": None,
                     "active_runs": 0,
                     "recent_jobs": [],
+                    "job_id": job_id,
                 },
             )
 
@@ -395,6 +505,7 @@ class GCPMetricsService:
                     "last_successful_time": None,
                     "active_runs": 0,
                     "recent_jobs": [],
+                    "job_id": job_id,
                 },
             )
 
@@ -420,6 +531,7 @@ class GCPMetricsService:
                     "last_successful_time": None,
                     "active_runs": 0,
                     "recent_jobs": [],
+                    "job_id": job_id,
                 },
             )
 
@@ -442,6 +554,7 @@ class GCPMetricsService:
                     "last_successful_time": None,
                     "active_runs": 0,
                     "recent_jobs": [],
+                    "job_id": job_id,
                 },
             )
 
@@ -527,6 +640,7 @@ class GCPMetricsService:
             "recent_jobs": recent_jobs,
             "logs": log_lines,
             "retrieved_at": retrieved_at.isoformat(),
+            "job_id": job_id,
         }
         return payload
 

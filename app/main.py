@@ -146,7 +146,9 @@ async def home(
 async def fetch_run_pipeline_metrics() -> JSONResponse:
     """Return health metrics for the ``run_pipeline`` pipeline trigger."""
 
-    payload = metrics_service.fetch_run_pipeline_health()
+    payload = metrics_service.fetch_run_pipeline_health(
+        tips_job_id=GCPMetricsService.DEFAULT_TIP_JOB_ID
+    )
     status_code = 200
     if payload.get("status") == "error":
         status_code = 503

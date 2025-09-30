@@ -71,6 +71,41 @@ periodically, and the pipeline skips previously processed items to avoid
 duplicates. Because the FastAPI views read directly from Firestore, any new
 articles are automatically surfaced on the homepage and `/articles` listing.
 
+### Operations runbooks
+
+#### Validate scheduled executions
+
+- **Kubernetes CronJobs:**
+  1. Determine the namespace from the Helm release or Terraform outputs (`K8S_NAMESPACE`).
+  2. Inspect both CronJobs with `kubectl get cronjobs -n <namespace> run-pipeline run-tip-pipeline`.
+  3. Review recent executions with `kubectl get jobs -n <namespace> --sort-by=.metadata.creationTimestamp` and
+     `kubectl describe cronjob <name>` to confirm next run times and last successful completions.
+  4. When work queues stall, tail the most recent Job logs with `kubectl logs job/<job-name> -n <namespace>` to surface agent
+     stack traces.
+- **Cloud Scheduler:** If the deployment relies on Scheduler instead of CronJobs, validate both `run_pipeline` and
+  `run_tip_pipeline` with `gcloud scheduler jobs describe <job-id> --location=<region>` and
+  `gcloud scheduler jobs executions list <job-id>`. These commands confirm HTTP responses and retry counts for each job.
+
+#### Troubleshoot metric dashboards
+
+- The FastAPI endpoint `/api/metrics/run-pipeline` now aggregates telemetry for both the article and tip automations. The
+  response includes a `pipelines.articles` block (for `run_pipeline`) and a `pipelines.tips` block (for `run_tip_pipeline`).
+  When either pipeline falls back to sample data, the corresponding payload sets `using_sample_data` to `true` and the merged
+  `logs` array prefixes each section with `=== Content pipeline` or `=== Tip pipeline` so you can copy diagnostics directly
+  into incident tickets.
+- During local development without GCP credentials the service provides synthetic metrics for both jobs, ensuring dashboards
+  stay interactive. Production issues generally indicate one of three root causes:
+  1. **Missing Cloud Monitoring permissions:** both payloads contain errors resembling `Permission denied`. Grant
+     `roles/monitoring.viewer` to the runtime service account.
+  2. **Incorrect project or job IDs:** the `job_id` field in each payload highlights the queried resource; verify it matches
+     the Scheduler job or CronJob name and that Terraform state exports the correct project ID.
+  3. **Stalled tip pipeline CronJob:** the `pipelines.tips.active_runs` counter and `recent_jobs` history should increment at
+     least daily. If they remain empty, re-run `kubectl describe cronjob run-tip-pipeline` (or review the Scheduler execution
+     logs) and redeploy the CronJob manifest with updated secrets or resource limits.
+- For Kubernetes deployments, set both `K8S_CRONJOB_NAME` and `K8S_TIP_CRONJOB_NAME` so the monitoring endpoint can resolve
+  the appropriate CronJob metadata. Missing variables trigger `Missing required Kubernetes configuration` warnings in the
+  API response.
+
 ### Running the AI content pipeline
 
 The pipeline can now be executed end-to-end using
