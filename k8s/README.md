@@ -54,12 +54,15 @@ to point the service at Vertex AI or OpenAI models:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `LIVEON_COACH_MODEL` | `vertex` | Selects the LLM provider (`vertex`, `openai`, or `local`). |
-| `LIVEON_COACH_VERTEX_MODEL` | `gemini-1.5-pro` | Vertex AI chat model to invoke when the provider is `vertex`. |
-| `LIVEON_VERTEX_LOCATION` | `us-central1` | Optional region for Vertex AI API calls. |
+| `LIVEON_COACH_MODEL` | `local` | Selects the LLM provider (`vertex`, `openai`, or `local`). |
+| `LIVEON_COACH_VERTEX_MODEL` | `chat-bison` | Vertex AI chat model to invoke when the provider is `vertex`. |
+| `LIVEON_VERTEX_LOCATION` | _unset_ | Optional region for Vertex AI API calls. |
 | `LIVEON_COACH_OPENAI_MODEL` | `gpt-4o-mini` | OpenAI chat model to invoke when the provider is `openai`. |
 | `LIVEON_MODEL_TEMPERATURE` | `0.2` | Sampling temperature forwarded to the configured LLM. |
 | `LIVEON_MODEL_MAX_OUTPUT_TOKENS` | `1024` | Maximum tokens returned per response. |
 
 Override these values in production by patching the deployment or sourcing them
 from a ConfigMap/Secret to align with the preferred LLM provider.
+
+The `/api/ask` response always includes the safety disclaimer so downstream
+clients must surface the message verbatim.
