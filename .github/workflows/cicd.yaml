@@ -79,7 +79,8 @@ jobs:
         run: |
           sed -i "s|IMAGE_PLACEHOLDER|${IMAGE_URI}|g" \
             k8s/deployment.yaml \
-            k8s/cronjob-pipeline.yaml
+            k8s/cronjob-pipeline.yaml \
+            k8s/cronjob-tips.yaml
           # Om du tidigare fick OpenAPI timeouts från API-servern, kan du tillfälligt lägga till --validate=false:
           # kubectl apply --validate=false -f k8s/
           kubectl apply -f k8s/
