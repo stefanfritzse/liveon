@@ -21,6 +21,19 @@ spec:
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
+          env:
+            - name: LIVEON_COACH_MODEL
+              value: "vertex"
+            - name: LIVEON_COACH_VERTEX_MODEL
+              value: "gemini-1.5-pro"
+            - name: LIVEON_VERTEX_LOCATION
+              value: "us-central1"
+            - name: LIVEON_COACH_OPENAI_MODEL
+              value: "gpt-4o-mini"
+            - name: LIVEON_MODEL_TEMPERATURE
+              value: "0.2"
+            - name: LIVEON_MODEL_MAX_OUTPUT_TOKENS
+              value: "1024"
           resources:
             requests:
               cpu: 100m
