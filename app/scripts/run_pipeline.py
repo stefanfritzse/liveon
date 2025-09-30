@@ -88,10 +88,24 @@ def _load_feeds() -> list[FeedSource]:
     return feeds
 
 
+def _running_in_managed_environment() -> bool:
+    """Return True when the script appears to be running in production infrastructure."""
+
+    env = os.getenv("LIVEON_ENV", "").lower()
+    return bool(
+        os.getenv("GOOGLE_CLOUD_PROJECT")
+        or os.getenv("GCP_PROJECT")
+        or env in {"prod", "production"}
+        or os.getenv("KUBERNETES_SERVICE_HOST")
+    )
+
+
 def _create_llm(agent_label: str) -> "SupportsInvoke":
     """Instantiate a LangChain compatible chat model for the given agent."""
 
-    provider = os.getenv(f"LIVEON_{agent_label.upper()}_MODEL", "local").lower()
+    provider_env_key = f"LIVEON_{agent_label.upper()}_MODEL"
+    provider_env_value = os.getenv(provider_env_key)
+    provider = (provider_env_value or "local").lower()
 
     if provider == "vertex":  # pragma: no cover - optional dependency
         try:
@@ -120,6 +134,24 @@ def _create_llm(agent_label: str) -> "SupportsInvoke":
     # Default: fall back to a deterministic responder that emits JSON payloads so
     # the pipeline can be executed in development environments without external
     # LLM access.
+    allow_local_stub = str(os.getenv("LIVEON_ALLOW_LOCAL_LLM", "")).lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if (
+        agent_label.lower() == "summarizer"
+        and provider == "local"
+        and _running_in_managed_environment()
+        and not allow_local_stub
+        and provider_env_value is None
+    ):
+        raise RuntimeError(
+            "Local summarizer stubs are disabled when running in managed environments. "
+            "Set LIVEON_SUMMARIZER_MODEL to a production model or explicitly opt in by "
+            "setting LIVEON_SUMMARIZER_MODEL=local or LIVEON_ALLOW_LOCAL_LLM=true."
+        )
     return LocalJSONResponder(agent_label)
 
 
