@@ -1,0 +1,11 @@
+[2025-09-30T12:12:41.223754+00:00] Pipeline schedule health probe (backend: Cloud Scheduler)
+PIPELINE_TRIGGER_BACKEND not set; defaulting to 'cloud_scheduler'.
+Project ID resolved from Terraform variables file.
+Terraform source: /app/infra/environments/prod/terraform.tfvars
+Failed to query metric 'cloudscheduler.googleapis.com/job/execution_count' from project live-on-473112: 404 Cannot find metric(s) that match type = "cloudscheduler.googleapis.com/job/execution_count". If a metric was created recently, it could take up to 10 minutes to become available. Please try again soon.
+Using sample telemetry so the dashboard remains interactive while live metrics are unavailable.
+Local hint: ensure Application Default Credentials are available via 'gcloud auth application-default login'.
+Local hint: verify that the Cloud Scheduler job 'run_pipeline' exists in the target project.
+Sample log placeholder:
+  - 2025-09-30T12:12:41.542770+00:00: run_pipeline executed (sample)
+  - No live data retrieved; using sample output for UI purposes.
