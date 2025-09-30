@@ -41,6 +41,9 @@ class ContentRepository(Protocol):
     def get_latest_tips(self, *, limit: int = 5) -> list[Tip]:
         """Return the newest longevity tips."""
 
+    def get_latest_tip(self) -> Tip | None:
+        """Return the most recent tip when available."""
+
 
 @dataclass(slots=True)
 class _InMemoryContentRepository:
@@ -85,6 +88,9 @@ class _InMemoryContentRepository:
     def get_latest_tips(self, *, limit: int = 5) -> list[Tip]:
         return sorted(self._tips, key=lambda tip: tip.published_date, reverse=True)[:limit]
 
+    def get_latest_tip(self) -> Tip | None:
+        return next(iter(self.get_latest_tips(limit=1)), None)
+
 
 def get_repository() -> ContentRepository:
     """Resolve the content repository with graceful fallback when Firestore is unavailable."""
@@ -104,6 +110,15 @@ def _safe_fetch(callback: Callable[[], list[Article] | list[Tip]]) -> list[Artic
         return []
 
 
+def _safe_fetch_tip(callback: Callable[[], Tip | None]) -> Tip | None:
+    """Execute a repository call returning a single tip with graceful error handling."""
+
+    try:
+        return callback()
+    except (DefaultCredentialsError, GoogleAPIError):
+        return None
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(
     request: Request,
@@ -112,14 +127,17 @@ async def home(
     """Render the homepage with highlights from articles and tips."""
 
     articles = _safe_fetch(lambda: repository.get_latest_articles(limit=3))
-    tips = _safe_fetch(lambda: repository.get_latest_tips(limit=3))
+    featured_tip = _safe_fetch_tip(repository.get_latest_tip)
+    tips = _safe_fetch(lambda: repository.get_latest_tips(limit=4))
+    recent_tips = [tip for tip in tips if not featured_tip or tip != featured_tip]
     return templates.TemplateResponse(
         "home.html",
         {
             "request": request,
             "title": "Live On Longevity Coach",
             "articles": articles,
-            "tips": tips,
+            "featured_tip": featured_tip,
+            "recent_tips": recent_tips,
         },
     )
 
@@ -133,6 +151,27 @@ async def fetch_run_pipeline_metrics() -> JSONResponse:
     if payload.get("status") == "error":
         status_code = 503
     return JSONResponse(content=payload, status_code=status_code)
+
+
+@app.get("/api/tips/latest", response_class=JSONResponse)
+async def fetch_latest_tip(
+    repository: ContentRepository = Depends(get_repository),
+) -> JSONResponse:
+    """Return the most recent coaching tip for client-side integrations."""
+
+    tip = _safe_fetch_tip(repository.get_latest_tip)
+    if tip is None:
+        return JSONResponse({"detail": "No tips available"}, status_code=404)
+
+    return JSONResponse(
+        {
+            "id": tip.id,
+            "title": tip.title,
+            "content_body": tip.content_body,
+            "published_date": tip.published_date.isoformat(),
+            "tags": tip.tags,
+        }
+    )
 
 
 @app.get("/articles", response_class=HTMLResponse)
@@ -187,12 +226,15 @@ async def list_tips(
     """Render a page containing the latest coaching tips."""
 
     tips = _safe_fetch(lambda: repository.get_latest_tips(limit=20))
+    featured_tip = tips[0] if tips else None
+    recent_tips = tips[1:] if len(tips) > 1 else []
     return templates.TemplateResponse(
         "tips/list.html",
         {
             "request": request,
             "title": "Longevity Tips",
-            "tips": tips,
+            "featured_tip": featured_tip,
+            "recent_tips": recent_tips,
         },
     )
 

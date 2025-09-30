@@ -10,22 +10,29 @@
       </p>
       <div class="grid">
         <a role="button" href="/articles">Browse Articles</a>
-        <a role="button" class="secondary" href="/tips">See Daily Tips</a>
+        <a role="button" class="secondary" href="/tips">See Past Tips</a>
       </div>
     </div>
     <div>
-      <article>
+      <article class="tip-of-day">
         <header>
-          <h3>What is coming next?</h3>
+          <p class="eyebrow">Tip of the Day</p>
+          <h3>{{ featured_tip.title if featured_tip else "Fresh coaching tips are on the way" }}</h3>
+          {% if featured_tip %}
+            <p class="article-meta">Published {{ featured_tip.published_date.strftime("%B %d, %Y") }}</p>
+          {% endif %}
         </header>
         <p>
-          With the article pipeline now running on a schedule, the next milestone
-          is Phase 5: launching the interactive Longevity Coach. We are building a
-          question-and-answer experience that can reference the freshly published
-          articles, surface supporting sources, and respond with safe, actionable
-          guidance. The UI scaffold is in place—next up is wiring the coach agent
-          to the knowledge base and exposing a chat-style interface on the site.
+          {% if featured_tip %}
+            {{ featured_tip.content_body }}
+          {% else %}
+            We're preparing the first batch of AI-authored coaching tips. Once Firestore is
+            seeded you'll see a highlighted recommendation here each day.
+          {% endif %}
         </p>
+        <footer>
+          <a href="/tips">Browse the tips archive</a>
+        </footer>
       </article>
     </div>
   </div>
@@ -57,10 +64,10 @@
   </section>
 
   <section>
-    <h2>Coaching Tips</h2>
-    {% if tips %}
+    <h2>Recent Coaching Tips</h2>
+    {% if recent_tips %}
       <div class="card-grid">
-        {% for tip in tips %}
+        {% for tip in recent_tips %}
           <article>
             <header>
               <h3>{{ tip.title }}</h3>
@@ -71,7 +78,7 @@
         {% endfor %}
       </div>
     {% else %}
-      <p>No tips yet. Seed Firestore to preview coaching snippets.</p>
+      <p>No additional tips yet. Visit the tips page to explore the archive once it's populated.</p>
     {% endif %}
   </section>
 
