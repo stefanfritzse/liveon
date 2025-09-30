@@ -1,7 +1,7 @@
 """Firestore data access helpers for the Longevity Coach application."""
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any, Final
 from google.cloud import firestore
 from google.cloud.firestore import Client, CollectionReference, DocumentReference
@@ -100,6 +100,42 @@ class FirestoreContentRepository:
         document.set(tip.to_document())
         stored = document.get()
         return Tip.from_document(stored)
+
+    def find_tip_by_title(self, title: str) -> Tip | None:
+        """Return the first tip matching ``title`` if one exists."""
+
+        if not title:
+            return None
+
+        query = self.tip_collection.where("title", "==", title.strip()).limit(1)
+        for snapshot in query.stream():
+            return Tip.from_document(snapshot)
+        return None
+
+    def find_tip_by_tags(self, tags: Sequence[str] | Iterable[str]) -> Tip | None:
+        """Return a tip whose tags match the provided collection exactly."""
+
+        if isinstance(tags, str):
+            tag_list = [tags.strip()] if tags.strip() else []
+        else:
+            iterable: Iterable[str]
+            if isinstance(tags, Sequence):
+                iterable = tags
+            else:
+                iterable = list(tags)
+            tag_list = [tag.strip() for tag in iterable if isinstance(tag, str) and tag.strip()]
+
+        if not tag_list:
+            return None
+
+        query = self.tip_collection.where("tags", "array_contains", tag_list[0]).limit(20)
+        sought = set(tag_list)
+
+        for snapshot in query.stream():
+            tip = Tip.from_document(snapshot)
+            if set(filter(None, (tag.strip() for tag in tip.tags))) == sought:
+                return tip
+        return None
 
     # ------------------------------------------------------------------
     # Utility helpers

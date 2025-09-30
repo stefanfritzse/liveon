@@ -6,12 +6,14 @@ from datetime import datetime
 from typing import Protocol, Sequence
 
 from app.models.aggregator import AggregatedContent
-from app.models.content import Article
+from app.models.content import Article, Tip
 from app.models.editor import EditedArticle
 from app.models.publisher import PublicationResult
 from app.models.summarizer import ArticleDraft
+from app.models.tip import TipDraft
 from app.services.aggregator import AggregationResult
 from app.services.publisher import _slugify
+from app.services.tip_publisher import TipPublicationResult
 
 
 class SupportsAggregation(Protocol):
@@ -181,6 +183,120 @@ class ContentPipeline:
             aggregation=aggregation,
             draft=draft,
             edited=edited,
+            publication=publication,
+            errors=errors,
+            warnings=warnings,
+        )
+
+
+class SupportsTipGeneration(Protocol):
+    """Protocol describing the tip generator agent interface."""
+
+    def generate(self, items: Sequence[AggregatedContent]) -> TipDraft:
+        """Return a tip draft derived from aggregated content."""
+
+
+class SupportsTipPublishing(Protocol):
+    """Protocol describing the tip publisher interface used by the pipeline."""
+
+    def publish(
+        self,
+        draft: TipDraft,
+        *,
+        published_at: datetime | None = None,
+    ) -> TipPublicationResult:
+        """Persist the draft and return metadata about the stored tip."""
+
+
+@dataclass(slots=True)
+class TipPipelineResult:
+    """Structured summary of a tip pipeline execution."""
+
+    aggregation: AggregationResult
+    draft: TipDraft | None = None
+    tip: Tip | None = None
+    publication: TipPublicationResult | None = None
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def succeeded(self) -> bool:
+        """Return ``True`` when the pipeline generated a tip without fatal errors."""
+
+        return self.tip is not None and not self.errors
+
+    @property
+    def created(self) -> bool:
+        """Return ``True`` when the pipeline resulted in a newly stored tip."""
+
+        return bool(self.publication and self.publication.created)
+
+
+@dataclass(slots=True)
+class TipPipeline:
+    """Coordinate the workflow from aggregation through tip publication."""
+
+    aggregator: SupportsAggregation
+    generator: SupportsTipGeneration
+    publisher: SupportsTipPublishing
+
+    def run(
+        self,
+        *,
+        limit_per_feed: int = 5,
+        published_at: datetime | None = None,
+    ) -> TipPipelineResult:
+        """Execute the tip pipeline, returning a structured result."""
+
+        aggregation = self.aggregator.gather(limit_per_feed=limit_per_feed)
+        warnings = list(aggregation.errors)
+        errors: list[str] = []
+
+        if not aggregation.items:
+            warnings.append("No aggregated content available to generate tips.")
+            return TipPipelineResult(
+                aggregation=aggregation,
+                draft=None,
+                tip=None,
+                publication=None,
+                errors=errors,
+                warnings=warnings,
+            )
+
+        try:
+            draft = self.generator.generate(aggregation.items)
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            errors.append(f"Tip generator failed: {exc}")
+            return TipPipelineResult(
+                aggregation=aggregation,
+                draft=None,
+                tip=None,
+                publication=None,
+                errors=errors,
+                warnings=warnings,
+            )
+
+        try:
+            publication = self.publisher.publish(draft, published_at=published_at)
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            errors.append(f"Tip publisher failed: {exc}")
+            return TipPipelineResult(
+                aggregation=aggregation,
+                draft=draft,
+                tip=None,
+                publication=None,
+                errors=errors,
+                warnings=warnings,
+            )
+
+        tip = publication.tip
+        if not publication.created:
+            warnings.append("Tip already exists; skipped creating a duplicate.")
+
+        return TipPipelineResult(
+            aggregation=aggregation,
+            draft=draft,
+            tip=tip,
             publication=publication,
             errors=errors,
             warnings=warnings,
