@@ -18,7 +18,7 @@ from google.auth.exceptions import DefaultCredentialsError
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.content import Article, Tip
-from app.services.coach import CoachAgent, CoachDataUnavailableError, create_coach_llm
+from app.services.coach import CoachAgent, create_coach_llm
 from app.services.firestore import FirestoreContentRepository
 from app.services.monitoring import GCPMetricsService
 from app.utils.text import markdown_to_plain_text
@@ -39,11 +39,10 @@ if TYPE_CHECKING:  # pragma: no cover - for static type checking only
 
 @lru_cache()
 def _cached_coach_agent() -> CoachAgent:
-    """Create a singleton CoachAgent backed by the configured LLM and Firestore."""
+    """Create a singleton CoachAgent backed by the configured language model."""
 
     llm = create_coach_llm()
-    repository = FirestoreContentRepository()
-    return CoachAgent(llm=llm, repository=repository)
+    return CoachAgent(llm=llm)
 
 
 def get_coach_agent() -> CoachAgent:
@@ -51,7 +50,7 @@ def get_coach_agent() -> CoachAgent:
 
     try:
         return _cached_coach_agent()
-    except (DefaultCredentialsError, GoogleAPIError, RuntimeError) as exc:
+    except (DefaultCredentialsError, RuntimeError) as exc:
         logger.exception("Coach agent initialisation failed", extra={"event": "coach.agent_init"})
         raise HTTPException(status_code=503, detail="Coach service temporarily unavailable") from exc
 
@@ -76,45 +75,17 @@ class AskCoachRequest(BaseModel):
         return self.question.strip()
 
 
-class AskCoachSource(BaseModel):
-    """Serialised representation of supporting source material."""
-
-    title: str | None = Field(default=None, description="Source title if available.")
-    url: str | None = Field(default=None, description="Canonical URL for the cited material.")
-    snippet: str | None = Field(default=None, description="Excerpt referenced in the response.")
-    article_id: str | None = Field(default=None, description="Firestore identifier when present.")
-    score: float | None = Field(default=None, description="Relative ranking score for the source.")
-    published_at: datetime | None = Field(
-        default=None, description="Publication timestamp associated with the source."
-    )
-
-
 class AskCoachResponse(BaseModel):
     """Structured response returned by the coach endpoint."""
 
     answer: str = Field(..., description="The coach's guidance for the submitted question.")
     disclaimer: str = Field(..., description="Safety disclaimer appended to every response.")
-    citations: list[AskCoachSource] = Field(
-        default_factory=list,
-        description="Supporting materials the coach relied upon when forming the answer.",
-    )
 
     @classmethod
     def from_coach_answer(cls, answer: "CoachAnswer") -> "AskCoachResponse":
         return cls(
             answer=answer.message,
             disclaimer=answer.disclaimer,
-            citations=[
-                AskCoachSource(
-                    title=source.title,
-                    url=source.url,
-                    snippet=source.snippet,
-                    article_id=source.article_id,
-                    score=source.score,
-                    published_at=source.published_at,
-                )
-                for source in answer.sources
-            ],
         )
 
 
@@ -286,13 +257,7 @@ async def ask_coach_endpoint(
 
     try:
         answer = agent.ask(question)
-    except CoachDataUnavailableError as exc:
-        logger.exception(
-            "Coach data dependencies unavailable",
-            extra={"event": "coach.error", "reason": "firestore"},
-        )
-        raise HTTPException(status_code=503, detail="Coach data service unavailable") from exc
-    except (GoogleAPIError, RuntimeError) as exc:
+    except (DefaultCredentialsError, GoogleAPIError, RuntimeError) as exc:
         logger.exception(
             "Coach language model unavailable",
             extra={"event": "coach.error", "reason": "llm"},

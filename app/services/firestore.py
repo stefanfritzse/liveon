@@ -2,14 +2,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from datetime import datetime, timezone
-import re
 from typing import Any, Final
 
 from google.cloud import firestore
 from google.cloud.firestore import Client, CollectionReference, DocumentReference
 
-from app.models.coach import CoachSource
 from app.models.content import Article, Tip
 
 DEFAULT_ARTICLES_COLLECTION: Final[str] = "articles"
@@ -105,50 +102,6 @@ class FirestoreContentRepository:
             return Tip.from_document(snapshot)
         return None
 
-    # ------------------------------------------------------------------
-    # Coach helpers
-    # ------------------------------------------------------------------
-    def search_articles_for_question(self, question: str, *, limit: int = 5) -> list[CoachSource]:
-        """Return high-signal article snippets that are relevant to ``question``."""
-
-        cleaned_question = (question or "").strip()
-        if not cleaned_question:
-            return []
-
-        keywords = _extract_keywords(cleaned_question)
-        candidate_limit = max(limit * 3, 15)
-        query = (
-            self.article_collection.order_by("published_date", direction=firestore.Query.DESCENDING)
-            .limit(candidate_limit)
-        )
-        articles = [Article.from_document(snapshot) for snapshot in query.stream()]
-
-        scored_sources: list[CoachSource] = []
-        for article in articles:
-            score = _score_article(article, keywords)
-            snippet = _build_snippet(article, keywords)
-            if not snippet:
-                continue
-            source_url = article.source_urls[0] if article.source_urls else ""
-            scored_sources.append(
-                CoachSource(
-                    title=article.title,
-                    url=source_url,
-                    snippet=snippet,
-                    article_id=article.id,
-                    score=score,
-                    published_at=_ensure_datetime(article.published_date),
-                )
-            )
-
-        scored_sources.sort(
-            key=lambda item: (
-                -(item.score if item.score is not None else 0.0),
-                -(item.published_at.timestamp() if item.published_at else 0.0),
-            )
-        )
-        return scored_sources[:limit]
-
     def save_tip(self, tip: Tip) -> Tip:
         collection = self.tip_collection
         document: DocumentReference
@@ -229,122 +182,3 @@ class FirestoreContentRepository:
 def create_repository(**kwargs: Any) -> FirestoreContentRepository:
     """Factory helper that mirrors the default project-aware client creation."""
     return FirestoreContentRepository(**kwargs)
-
-
-_STOPWORDS: Final[set[str]] = {
-    "a",
-    "an",
-    "and",
-    "are",
-    "as",
-    "at",
-    "be",
-    "but",
-    "by",
-    "for",
-    "from",
-    "how",
-    "in",
-    "into",
-    "is",
-    "it",
-    "no",
-    "not",
-    "of",
-    "on",
-    "or",
-    "such",
-    "that",
-    "the",
-    "their",
-    "then",
-    "there",
-    "these",
-    "they",
-    "this",
-    "to",
-    "was",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "why",
-    "will",
-    "with",
-}
-
-
-def _extract_keywords(text: str) -> set[str]:
-    tokens = re.findall(r"[a-zA-Z0-9']+", text.lower())
-    keywords = {token for token in tokens if token and token not in _STOPWORDS}
-    if keywords:
-        return keywords
-    return {token for token in tokens if token}
-
-
-def _ensure_datetime(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-    return None
-
-
-def _score_article(article: Article, keywords: set[str]) -> float:
-    if not keywords:
-        base_score = 0.0
-    else:
-        base_score = 0.0
-        title_tokens = _tokenise(article.title)
-        summary_tokens = _tokenise(article.summary or "")
-        body_tokens = _tokenise(article.content_body or "")
-        for token in title_tokens:
-            if token in keywords:
-                base_score += 3.0
-        for token in summary_tokens:
-            if token in keywords:
-                base_score += 2.0
-        for token in body_tokens:
-            if token in keywords:
-                base_score += 1.0
-
-    published_at = _ensure_datetime(article.published_date)
-    if published_at is None:
-        return base_score
-
-    age_seconds = max((datetime.now(timezone.utc) - published_at).total_seconds(), 0.0)
-    age_days = age_seconds / 86400
-    recency_bonus = max(0.0, 14.0 - age_days) * 0.1
-    return base_score + recency_bonus
-
-
-def _tokenise(text: str) -> list[str]:
-    return re.findall(r"[a-zA-Z0-9']+", text.lower())
-
-
-def _build_snippet(article: Article, keywords: set[str], *, max_length: int = 480) -> str:
-    raw_text = (article.summary or "").strip() or (article.content_body or "").strip()
-    if not raw_text:
-        return ""
-
-    sentences = re.split(r"(?<=[.!?])\s+", raw_text)
-    if not keywords:
-        snippet = sentences[0] if sentences else raw_text
-    else:
-        matches = [sentence for sentence in sentences if _contains_keyword(sentence, keywords)]
-        snippet = " ".join(matches) if matches else sentences[0] if sentences else raw_text
-
-    snippet = snippet.strip()
-    if len(snippet) <= max_length:
-        return snippet
-
-    truncated = snippet[:max_length].rstrip()
-    if len(truncated) < len(snippet):
-        truncated = truncated.rstrip(".,;:!?") + "..."
-    return truncated
-
-
-def _contains_keyword(sentence: str, keywords: set[str]) -> bool:
-    lowered = sentence.lower()
-    return any(keyword in lowered for keyword in keywords)
