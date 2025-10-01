@@ -147,6 +147,7 @@ variable "activate_apis" {
     "cloudbuild.googleapis.com",
     "firestore.googleapis.com",
     "monitoring.googleapis.com",
+    "aiplatform.googleapis.com",
   ]
 }
 

@@ -1,5 +1,6 @@
 artifact_registry_repository = "projects/live-on-473112/locations/europe-north2/repositories/longevity-app"
 enabled_services = [
+  "aiplatform.googleapis.com",
   "artifactregistry.googleapis.com",
   "cloudbuild.googleapis.com",
   "cloudresourcemanager.googleapis.com",
