@@ -11,9 +11,8 @@ from fastapi.testclient import TestClient
 from google.api_core.exceptions import GoogleAPIError
 
 from app.main import ContentRepository, app, get_coach_agent, get_repository
-from app.models.coach import CoachAnswer, CoachSource
+from app.models.coach import CoachAnswer
 from app.models.content import Article, Tip
-from app.services.coach import CoachDataUnavailableError
 
 
 class StubContentRepository(ContentRepository):
@@ -172,14 +171,7 @@ def test_tips_page_empty_state(client: Callable[..., TestClient]) -> None:
 
 def test_ask_coach_endpoint_returns_structured_response(client: Callable[..., TestClient]) -> None:
     repository = StubContentRepository(tips=[])
-    sources = [
-        CoachSource(
-            title="Study A",
-            url="https://example.com/a",
-            snippet="Prioritise consistent sleep routines.",
-        )
-    ]
-    answer = CoachAnswer(message="Here is guidance.", disclaimer="Stay safe.", sources=sources)
+    answer = CoachAnswer(message="Here is guidance.", disclaimer="Stay safe.")
     agent = _RecordingCoachAgent(answer)
     test_client = client(repository, agent=agent)
 
@@ -189,22 +181,12 @@ def test_ask_coach_endpoint_returns_structured_response(client: Callable[..., Te
     payload = response.json()
     assert payload["answer"] == "Here is guidance."
     assert payload["disclaimer"] == "Stay safe."
-    assert payload["citations"] == [
-        {
-            "title": "Study A",
-            "url": "https://example.com/a",
-            "snippet": "Prioritise consistent sleep routines.",
-            "article_id": None,
-            "score": None,
-            "published_at": None,
-        }
-    ]
     assert agent.questions == ["How do I sleep better?"]
 
 
 def test_ask_coach_endpoint_rejects_blank_questions(client: Callable[..., TestClient]) -> None:
     repository = StubContentRepository(tips=[])
-    answer = CoachAnswer(message="", disclaimer="", sources=[])
+    answer = CoachAnswer(message="", disclaimer="")
     agent = _RecordingCoachAgent(answer)
     test_client = client(repository, agent=agent)
 
@@ -213,17 +195,6 @@ def test_ask_coach_endpoint_rejects_blank_questions(client: Callable[..., TestCl
     assert response.status_code == 422
     detail = response.json()
     assert any("Question must not be empty" in item["msg"] for item in detail["detail"])
-
-
-def test_ask_coach_endpoint_handles_firestore_failures(client: Callable[..., TestClient]) -> None:
-    repository = StubContentRepository(tips=[])
-    agent = _FailingCoachAgent(CoachDataUnavailableError("Firestore offline"))
-    test_client = client(repository, agent=agent)
-
-    response = test_client.post("/api/ask", json={"question": "What about nutrition?"})
-
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Coach data service unavailable"}
 
 
 def test_ask_coach_endpoint_handles_llm_failures(client: Callable[..., TestClient]) -> None:

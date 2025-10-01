@@ -1,15 +1,14 @@
-"""Conversational coach agent that orchestrates retrieval augmented responses."""
+"""Conversational coach agent that generates responses using Vertex AI."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 import os
 
-from google.api_core.exceptions import GoogleAPIError
+import google.auth
 from google.auth.exceptions import DefaultCredentialsError
 
-from app.models.coach import CoachAnswer, CoachQuestion, CoachSource
-from app.services.firestore import FirestoreContentRepository
+from app.models.coach import CoachAnswer, CoachQuestion
 
 try:  # pragma: no cover - optional dependency guard
     from langchain_core.prompts import ChatPromptTemplate
@@ -18,14 +17,9 @@ except ImportError:  # pragma: no cover - handled gracefully in CoachAgent
 
 
 _DEFAULT_SAFETY_INSTRUCTIONS = (
-    "You are LiveOn's Longevity Coach. Offer supportive, educational guidance based only on the"
-    " research snippets you receive. Do not diagnose, prescribe, or promise outcomes, and always"
+    "You are LiveOn's Longevity Coach. Offer supportive, educational guidance grounded in"
+    " general best practices. Do not diagnose, prescribe, or promise outcomes, and always"
     " encourage the user to consult qualified healthcare professionals for personalised advice."
-)
-
-_DEFAULT_CITATION_INSTRUCTIONS = (
-    "Reference the supplied context by citing the numbered sources using Markdown footnotes such as"
-    " [^1]. If no supporting sources are available, say so explicitly."
 )
 
 _DEFAULT_DISCLAIMER = (
@@ -34,19 +28,13 @@ _DEFAULT_DISCLAIMER = (
 )
 
 
-class CoachDataUnavailableError(RuntimeError):
-    """Raised when the coach cannot access supporting Firestore content."""
-
-
 @dataclass(slots=True)
 class CoachAgent:
-    """High level orchestration for answering user questions with retrieved content."""
+    """High level orchestration for answering user questions with Vertex AI."""
 
     llm: Any
-    repository: FirestoreContentRepository
-    context_limit: int = 5
     safety_instructions: str = _DEFAULT_SAFETY_INSTRUCTIONS
-    citation_instructions: str = _DEFAULT_CITATION_INSTRUCTIONS
+    default_disclaimer: str = _DEFAULT_DISCLAIMER
     _prompt: ChatPromptTemplate = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -58,45 +46,38 @@ class CoachAgent:
             [
                 (
                     "system",
-                    "{safety_instructions}\n\n{citation_instructions}\n"
-                    "Respond in a warm, empathetic tone while staying factual and concise.",
+                    "{safety_instructions}\n"
+                    "Respond in a warm, empathetic tone while staying factual and concise."
+                    " Always finish with a separate line that begins with 'Disclaimer:'"
+                    " followed by the provided disclaimer text verbatim: {default_disclaimer}",
                 ),
                 (
                     "human",
-                    "User question:\n{question}\n\nAvailable research snippets:\n{context}\n\n"
-                    "Structure your reply with a short introduction, practical guidance, and a"
-                    " concluding encouragement. End with a separate line starting with"
-                    " 'Disclaimer:' summarising key safety points.",
+                    "User question:\n{question}\n\n"
+                    "Structure the response with a short introduction, practical guidance, and"
+                    " a concluding encouragement.",
                 ),
             ]
         )
 
     def ask(self, question: CoachQuestion | str) -> CoachAnswer:
-        """Answer ``question`` by consulting Firestore-backed context."""
+        """Answer ``question`` using the configured language model."""
 
         question_model = question if isinstance(question, CoachQuestion) else CoachQuestion(text=str(question))
         normalized_question = question_model.stripped()
-        try:
-            sources = self.repository.search_articles_for_question(
-                normalized_question, limit=max(1, self.context_limit)
-            )
-        except (DefaultCredentialsError, GoogleAPIError) as exc:
-            raise CoachDataUnavailableError("Failed to load supporting context for coach response") from exc
-        context_text = self._format_context(sources)
 
         prompt_value = self._prompt.invoke(
             {
                 "question": normalized_question,
-                "context": context_text,
                 "safety_instructions": self.safety_instructions,
-                "citation_instructions": self.citation_instructions,
+                "default_disclaimer": self.default_disclaimer,
             }
         )
 
         response = self._invoke_llm(prompt_value)
         response_text = self._extract_response_text(response)
-        message, disclaimer = _separate_disclaimer(response_text, default=_DEFAULT_DISCLAIMER)
-        return CoachAnswer(message=message, disclaimer=disclaimer, sources=list(sources))
+        message, disclaimer = _separate_disclaimer(response_text, default=self.default_disclaimer)
+        return CoachAnswer(message=message, disclaimer=disclaimer)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -117,23 +98,6 @@ class CoachAgent:
             return self.llm(messages)
 
         raise TypeError("LLM implementation must provide an 'invoke' method or be callable.")
-
-    def _format_context(self, sources: Sequence[CoachSource]) -> str:
-        if not sources:
-            return (
-                "No articles matched the request. Provide general educational guidance and emphasise"
-                " that specific medical questions require a clinician."
-            )
-
-        parts: list[str] = []
-        for index, source in enumerate(sources, start=1):
-            heading = source.title or "Untitled source"
-            url = source.url or "Unavailable"
-            snippet = source.snippet.strip()
-            parts.append(
-                f"[{index}] {heading}\nURL: {url}\nSnippet: {snippet}"
-            )
-        return "\n\n".join(parts)
 
     def _extract_response_text(self, response: Any) -> str:
         if response is None:
@@ -161,7 +125,7 @@ class LocalCoachResponder:
         response = (
             "Offline coach response:\n"
             "- A production language model is unavailable.\n"
-            "- Review the context snippets above to craft a manual answer.\n\n"
+            "- Provide general educational guidance based on healthy lifestyle principles.\n\n"
             f"Question received: {question if question else 'No question provided.'}"
         )
         return f"{response}\n\nDisclaimer: {self.disclaimer}"
@@ -171,39 +135,36 @@ class LocalCoachResponder:
 
 
 def create_coach_llm() -> Any:
-    """Factory that selects an appropriate LLM backend for the coach agent."""
+    """Construct a Vertex AI chat client for the coach agent."""
 
-    choice = os.getenv("LIVEON_COACH_MODEL", "").strip().lower()
+    try:  # pragma: no cover - optional dependency
+        from langchain_google_vertexai import ChatVertexAI
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError(
+            "The coach requires 'langchain-google-vertexai' to use Vertex AI chat models."
+        ) from exc
+
+    try:  # pragma: no cover - credential discovery depends on environment
+        google.auth.default()
+    except DefaultCredentialsError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError(
+            "Google Application Default Credentials are required to access Vertex AI for the coach."
+        ) from exc
+
     temperature = _coerce_float(os.getenv("LIVEON_MODEL_TEMPERATURE"), default=0.2)
     max_tokens = _coerce_int(os.getenv("LIVEON_MODEL_MAX_OUTPUT_TOKENS"), default=1024)
+    model_name = os.getenv("LIVEON_COACH_VERTEX_MODEL", os.getenv("LIVEON_VERTEX_MODEL", "chat-bison"))
+    location = os.getenv("LIVEON_VERTEX_LOCATION")
 
-    if choice.startswith("vertex"):
-        try:  # pragma: no cover - optional dependency
-            from langchain_google_vertexai import ChatVertexAI
-        except ImportError as exc:  # pragma: no cover - environment dependent
-            raise RuntimeError(
-                "langchain-google-vertexai must be installed to use Vertex AI models."
-            ) from exc
+    kwargs: dict[str, Any] = {
+        "model_name": model_name,
+        "temperature": temperature,
+        "max_output_tokens": max_tokens,
+    }
+    if location:
+        kwargs["location"] = location
 
-        model_name = os.getenv("LIVEON_COACH_VERTEX_MODEL", os.getenv("LIVEON_VERTEX_MODEL", "chat-bison"))
-        location = os.getenv("LIVEON_VERTEX_LOCATION")
-        return ChatVertexAI(
-            model_name=model_name,
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-            **({"location": location} if location else {}),
-        )
-
-    if choice.startswith("openai"):
-        try:  # pragma: no cover - optional dependency
-            from langchain_openai import ChatOpenAI
-        except ImportError as exc:  # pragma: no cover - environment dependent
-            raise RuntimeError("langchain-openai must be installed to use OpenAI models.") from exc
-
-        model_name = os.getenv("LIVEON_COACH_OPENAI_MODEL", os.getenv("LIVEON_OPENAI_MODEL", "gpt-4o-mini"))
-        return ChatOpenAI(model=model_name, temperature=temperature, max_tokens=max_tokens)
-
-    return LocalCoachResponder()
+    return ChatVertexAI(**kwargs)
 
 
 def _separate_disclaimer(text: str, *, default: str) -> tuple[str, str]:

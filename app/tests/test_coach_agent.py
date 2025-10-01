@@ -1,12 +1,9 @@
-"""Unit tests for the CoachAgent orchestration logic."""
-
 from __future__ import annotations
 
 from collections.abc import Sequence
 
 import pytest
 
-from app.models.coach import CoachSource
 from app.services import coach as coach_module
 from app.services.coach import CoachAgent, LocalCoachResponder
 
@@ -55,14 +52,9 @@ class _RecordingResponder(LocalCoachResponder):
         return super().invoke(messages)
 
 
-class _StubRepository:
-    def __init__(self, sources: Sequence[CoachSource]) -> None:
-        self._sources = list(sources)
-        self.calls: list[tuple[str, int]] = []
-
-    def search_articles_for_question(self, question: str, *, limit: int) -> list[CoachSource]:
-        self.calls.append((question, limit))
-        return list(self._sources)
+class _EchoResponder:
+    def invoke(self, messages):  # type: ignore[override]
+        return "Here is support.\n\nDisclaimer: Custom safety notice"
 
 
 @pytest.fixture(autouse=True)
@@ -72,46 +64,26 @@ def _stub_prompt_template(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(coach_module, "ChatPromptTemplate", _DummyChatPromptTemplate)
 
 
-def _build_source(title: str, snippet: str, *, url: str = "https://example.com") -> CoachSource:
-    return CoachSource(title=title, url=url, snippet=snippet)
-
-
-def test_ask_returns_answer_with_formatted_citations_and_disclaimer() -> None:
-    sources = [
-        _build_source("Longevity basics", "Focus on sleep quality."),
-        _build_source("Nutrition study", "Include leafy greens daily."),
-    ]
-    repository = _StubRepository(sources)
+def test_ask_returns_answer_with_default_disclaimer() -> None:
     responder = _RecordingResponder()
-    agent = CoachAgent(llm=responder, repository=repository, context_limit=5)
+    agent = CoachAgent(llm=responder)
 
     answer = agent.ask("   How can I improve my longevity?   ")
 
     assert answer.message.startswith("Offline coach response"), "Expected deterministic local response"
     assert answer.disclaimer == responder.disclaimer
-    assert answer.sources == sources
-    assert repository.calls == [("How can I improve my longevity?", 5)]
 
     assert responder.messages is not None
     human_message = next(item for item in responder.messages if item["role"] == "human")
-    content = human_message["content"]
-    assert "[1] Longevity basics" in content
-    assert "Snippet: Focus on sleep quality." in content
-    assert "[2] Nutrition study" in content
-    assert not answer.message.strip().endswith(responder.disclaimer)
+    assert "How can I improve my longevity?" in human_message["content"]
+    assert "Disclaimer" not in answer.message
 
 
-def test_ask_handles_empty_search_results() -> None:
-    repository = _StubRepository([])
-    responder = _RecordingResponder()
-    agent = CoachAgent(llm=responder, repository=repository, context_limit=2)
+def test_ask_uses_llm_disclaimer_when_provided() -> None:
+    responder = _EchoResponder()
+    agent = CoachAgent(llm=responder)
 
-    answer = agent.ask("What should I do when no studies are available?")
+    answer = agent.ask("What recovery strategies help?")
 
-    assert answer.sources == []
-    assert answer.disclaimer == responder.disclaimer
-    assert answer.message.startswith("Offline coach response")
-
-    assert responder.messages is not None
-    human_message = next(item for item in responder.messages if item["role"] == "human")
-    assert "No articles matched the request" in human_message["content"]
+    assert answer.message == "Here is support."
+    assert answer.disclaimer == "Custom safety notice"
