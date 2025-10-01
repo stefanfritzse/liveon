@@ -5,6 +5,9 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 import os
 
+from google.api_core.exceptions import GoogleAPIError
+from google.auth.exceptions import DefaultCredentialsError
+
 from app.models.coach import CoachAnswer, CoachQuestion, CoachSource
 from app.services.firestore import FirestoreContentRepository
 
@@ -29,6 +32,10 @@ _DEFAULT_DISCLAIMER = (
     "This conversation is for educational purposes only and is not a substitute for professional"
     " medical advice. Always consult a qualified healthcare provider about your personal health."
 )
+
+
+class CoachDataUnavailableError(RuntimeError):
+    """Raised when the coach cannot access supporting Firestore content."""
 
 
 @dataclass(slots=True)
@@ -69,9 +76,12 @@ class CoachAgent:
 
         question_model = question if isinstance(question, CoachQuestion) else CoachQuestion(text=str(question))
         normalized_question = question_model.stripped()
-        sources = self.repository.search_articles_for_question(
-            normalized_question, limit=max(1, self.context_limit)
-        )
+        try:
+            sources = self.repository.search_articles_for_question(
+                normalized_question, limit=max(1, self.context_limit)
+            )
+        except (DefaultCredentialsError, GoogleAPIError) as exc:
+            raise CoachDataUnavailableError("Failed to load supporting context for coach response") from exc
         context_text = self._format_context(sources)
 
         prompt_value = self._prompt.invoke(
