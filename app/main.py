@@ -18,7 +18,7 @@ from google.auth.exceptions import DefaultCredentialsError
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.content import Article, Tip
-from app.services.coach import CoachAgent, create_coach_llm
+from app.services.coach import CoachAgent, CoachDataUnavailableError, create_coach_llm
 from app.services.firestore import FirestoreContentRepository
 from app.services.monitoring import GCPMetricsService
 from app.utils.text import markdown_to_plain_text
@@ -286,13 +286,13 @@ async def ask_coach_endpoint(
 
     try:
         answer = agent.ask(question)
-    except (DefaultCredentialsError, GoogleAPIError) as exc:
+    except CoachDataUnavailableError as exc:
         logger.exception(
             "Coach data dependencies unavailable",
             extra={"event": "coach.error", "reason": "firestore"},
         )
         raise HTTPException(status_code=503, detail="Coach data service unavailable") from exc
-    except RuntimeError as exc:
+    except (GoogleAPIError, RuntimeError) as exc:
         logger.exception(
             "Coach language model unavailable",
             extra={"event": "coach.error", "reason": "llm"},

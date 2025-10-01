@@ -8,11 +8,12 @@ from typing import Callable, Iterable
 import pytest
 from fastapi.testclient import TestClient
 
-from google.auth.exceptions import DefaultCredentialsError
+from google.api_core.exceptions import GoogleAPIError
 
 from app.main import ContentRepository, app, get_coach_agent, get_repository
 from app.models.coach import CoachAnswer, CoachSource
 from app.models.content import Article, Tip
+from app.services.coach import CoachDataUnavailableError
 
 
 class StubContentRepository(ContentRepository):
@@ -216,7 +217,7 @@ def test_ask_coach_endpoint_rejects_blank_questions(client: Callable[..., TestCl
 
 def test_ask_coach_endpoint_handles_firestore_failures(client: Callable[..., TestClient]) -> None:
     repository = StubContentRepository(tips=[])
-    agent = _FailingCoachAgent(DefaultCredentialsError("ADC missing"))
+    agent = _FailingCoachAgent(CoachDataUnavailableError("Firestore offline"))
     test_client = client(repository, agent=agent)
 
     response = test_client.post("/api/ask", json={"question": "What about nutrition?"})
@@ -231,6 +232,19 @@ def test_ask_coach_endpoint_handles_llm_failures(client: Callable[..., TestClien
     test_client = client(repository, agent=agent)
 
     response = test_client.post("/api/ask", json={"question": "Share exercise tips"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Coach language model unavailable"}
+
+
+def test_ask_coach_endpoint_treats_google_api_errors_as_llm_failures(
+    client: Callable[..., TestClient]
+) -> None:
+    repository = StubContentRepository(tips=[])
+    agent = _FailingCoachAgent(GoogleAPIError("vertex rpc failure"))
+    test_client = client(repository, agent=agent)
+
+    response = test_client.post("/api/ask", json={"question": "Share supplement advice"})
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Coach language model unavailable"}
