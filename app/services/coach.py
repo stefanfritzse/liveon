@@ -155,6 +155,13 @@ def create_coach_llm() -> Any:
     max_tokens = _coerce_int(os.getenv("LIVEON_MODEL_MAX_OUTPUT_TOKENS"), default=1024)
     model_name = os.getenv("LIVEON_COACH_VERTEX_MODEL", os.getenv("LIVEON_VERTEX_MODEL", "chat-bison"))
     location = os.getenv("LIVEON_VERTEX_LOCATION")
+    project = (
+        os.getenv("LIVEON_VERTEX_PROJECT")
+        or os.getenv("GCP_PROJECT")
+        or os.getenv("GOOGLE_CLOUD_PROJECT")
+    )
+
+    is_gemini_model = model_name.lower().startswith("gemini-")
 
     kwargs: dict[str, Any] = {
         "model_name": model_name,
@@ -163,6 +170,16 @@ def create_coach_llm() -> Any:
     }
     if location:
         kwargs["location"] = location
+
+    if is_gemini_model and project:
+        kwargs["project"] = project
+
+    if is_gemini_model:
+        # Gemini chat models require the generative Vertex AI client which ships
+        # with the recent langchain-google-vertexai releases. Passing the
+        # project ensures the client targets the correct tenancy when
+        # constructing Gemini endpoints.
+        return ChatVertexAI(**kwargs)
 
     return ChatVertexAI(**kwargs)
 
