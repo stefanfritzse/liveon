@@ -27,7 +27,7 @@ spec:
             - name: LIVEON_COACH_VERTEX_MODEL
               value: "gemini-1.5-pro"
             - name: LIVEON_VERTEX_LOCATION
-              value: "us-central1"
+              value: "europe-north2"
             - name: LIVEON_COACH_OPENAI_MODEL
               value: "gpt-4o-mini"
             - name: LIVEON_MODEL_TEMPERATURE
