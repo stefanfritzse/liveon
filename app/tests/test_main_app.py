@@ -250,6 +250,37 @@ def test_ask_coach_endpoint_treats_google_api_errors_as_llm_failures(
     }
 
 
+def test_ask_coach_endpoint_exposes_agent_initialisation_debug(
+    monkeypatch: pytest.MonkeyPatch, client: Callable[..., TestClient]
+) -> None:
+    from app import main as main_module
+
+    repository = StubContentRepository(tips=[])
+
+    main_module._cached_coach_agent.cache_clear()
+
+    def _raise_runtime() -> None:
+        raise RuntimeError("LangChain dependency missing")
+
+    monkeypatch.setattr(main_module, "_cached_coach_agent", _raise_runtime)
+
+    test_client = client(repository)
+
+    response = test_client.post("/api/ask", json={"question": "Share sleep advice"})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "message": "Coach service temporarily unavailable",
+            "debug": {
+                "type": "RuntimeError",
+                "message": "LangChain dependency missing",
+            },
+        }
+    }
+
+
+
 def test_gemini_configuration_does_not_trigger_coach_503(
     monkeypatch: pytest.MonkeyPatch, client: Callable[..., TestClient]
 ) -> None:

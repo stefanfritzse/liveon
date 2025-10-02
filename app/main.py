@@ -37,6 +37,16 @@ if TYPE_CHECKING:  # pragma: no cover - for static type checking only
     from app.models.coach import CoachAnswer
 
 
+def _build_debug_detail(exc: Exception) -> dict[str, str]:
+    """Return a serialisable mapping describing ``exc`` for debugging."""
+
+    message = str(exc).strip()
+    return {
+        "type": type(exc).__name__,
+        "message": message or "No exception message provided.",
+    }
+
+
 @lru_cache()
 def _cached_coach_agent() -> CoachAgent:
     """Create a singleton CoachAgent backed by the configured language model."""
@@ -52,7 +62,14 @@ def get_coach_agent() -> CoachAgent:
         return _cached_coach_agent()
     except (DefaultCredentialsError, RuntimeError) as exc:
         logger.exception("Coach agent initialisation failed", extra={"event": "coach.agent_init"})
-        raise HTTPException(status_code=503, detail="Coach service temporarily unavailable") from exc
+        debug_detail = _build_debug_detail(exc)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Coach service temporarily unavailable",
+                "debug": debug_detail,
+            },
+        ) from exc
 
 
 class AskCoachRequest(BaseModel):
@@ -263,10 +280,8 @@ async def ask_coach_endpoint(
             extra={"event": "coach.error", "reason": "llm"},
         )
 
-        debug_detail = {
-            "type": type(exc).__name__,
-            "message": str(exc) or "No exception message provided.",
-        }
+        debug_detail = _build_debug_detail(exc)
+
 
         raise HTTPException(
             status_code=503,
