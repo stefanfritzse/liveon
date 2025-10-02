@@ -282,6 +282,7 @@ async def ask_coach_endpoint(
 
         debug_detail = _build_debug_detail(exc)
 
+
         raise HTTPException(
             status_code=503,
             detail={

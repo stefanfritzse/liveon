@@ -280,6 +280,7 @@ def test_ask_coach_endpoint_exposes_agent_initialisation_debug(
     }
 
 
+
 def test_gemini_configuration_does_not_trigger_coach_503(
     monkeypatch: pytest.MonkeyPatch, client: Callable[..., TestClient]
 ) -> None:
