@@ -208,9 +208,9 @@ async def home(
     tips = _safe_fetch(lambda: repository.get_latest_tips(limit=4))
     recent_tips = [tip for tip in tips if not featured_tip or tip != featured_tip]
     return templates.TemplateResponse(
+        request,
         "home.html",
         {
-            "request": request,
             "title": "Live On Longevity Coach",
             "articles": articles,
             "featured_tip": featured_tip,
@@ -303,9 +303,9 @@ async def list_articles(
 
     articles = _safe_fetch(lambda: repository.get_latest_articles(limit=20))
     return templates.TemplateResponse(
+        request,
         "articles/list.html",
         {
-            "request": request,
             "title": "Longevity Articles",
             "articles": articles,
         },
@@ -329,9 +329,9 @@ async def article_detail(
         raise HTTPException(status_code=404, detail="Article not found")
 
     return templates.TemplateResponse(
+        request,
         "articles/detail.html",
         {
-            "request": request,
             "title": article.title,
             "article": article,
         },
@@ -349,9 +349,9 @@ async def list_tips(
     featured_tip = tips[0] if tips else None
     recent_tips = tips[1:] if len(tips) > 1 else []
     return templates.TemplateResponse(
+        request,
         "tips/list.html",
         {
-            "request": request,
             "title": "Longevity Tips",
             "featured_tip": featured_tip,
             "recent_tips": recent_tips,
@@ -364,9 +364,9 @@ async def ask_the_coach(request: Request) -> HTMLResponse:
     """Render the placeholder page for the future interactive coach experience."""
 
     return templates.TemplateResponse(
+        request,
         "coach.html",
         {
-            "request": request,
             "title": "Ask the Coach",
         },
     )
