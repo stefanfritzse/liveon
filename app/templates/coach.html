@@ -270,6 +270,38 @@
         errorBanner.focus?.();
       };
 
+      const formatDebugInfo = (debugValue) => {
+        if (!debugValue) {
+          return '';
+        }
+
+        if (typeof debugValue === 'string') {
+          return debugValue;
+        }
+
+        if (typeof debugValue !== 'object') {
+          return String(debugValue);
+        }
+
+        const entries = Object.entries(debugValue);
+        if (!entries.length) {
+          return '';
+        }
+
+        return entries
+          .map(([key, value]) => {
+            if (typeof value === 'string') {
+              return `${key}: ${value}`;
+            }
+            try {
+              return `${key}: ${JSON.stringify(value)}`;
+            } catch (serializationError) {
+              return `${key}: ${String(value)}`;
+            }
+          })
+          .join('\n');
+      };
+
       const appendMessage = (role, content, { disclaimer } = {}) => {
         if (!transcript) {
           return;
@@ -326,8 +358,26 @@
 
           if (!response.ok) {
             const detail = payload?.detail ?? 'The coach is unavailable right now.';
-            showError(detail);
-            appendMessage('assistant', 'I was unable to retrieve guidance just now. Please try again in a moment.');
+            const errorMessage =
+              typeof detail === 'string'
+                ? detail
+                : detail?.message ?? 'The coach is unavailable right now.';
+            showError(errorMessage);
+
+            const debugInfo =
+              typeof detail === 'object' && detail
+                ? formatDebugInfo(detail.debug ?? detail)
+                : '';
+
+            const assistantLines = [
+              'I was unable to retrieve guidance just now. Please try again in a moment.',
+            ];
+
+            if (debugInfo) {
+              assistantLines.push('', 'Debug information:', debugInfo);
+            }
+
+            appendMessage('assistant', assistantLines.join('\n'));
             textarea?.focus();
             return;
           }
