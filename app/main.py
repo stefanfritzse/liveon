@@ -262,7 +262,19 @@ async def ask_coach_endpoint(
             "Coach language model unavailable",
             extra={"event": "coach.error", "reason": "llm"},
         )
-        raise HTTPException(status_code=503, detail="Coach language model unavailable") from exc
+
+        debug_detail = {
+            "type": type(exc).__name__,
+            "message": str(exc) or "No exception message provided.",
+        }
+
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Coach language model unavailable",
+                "debug": debug_detail,
+            },
+        ) from exc
 
     return AskCoachResponse.from_coach_answer(answer)
 

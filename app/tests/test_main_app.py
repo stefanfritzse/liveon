@@ -222,7 +222,13 @@ def test_ask_coach_endpoint_handles_llm_failures(client: Callable[..., TestClien
     response = test_client.post("/api/ask", json={"question": "Share exercise tips"})
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Coach language model unavailable"}
+    payload = response.json()
+    assert payload == {
+        "detail": {
+            "message": "Coach language model unavailable",
+            "debug": {"type": "RuntimeError", "message": "LLM offline"},
+        }
+    }
 
 
 def test_ask_coach_endpoint_treats_google_api_errors_as_llm_failures(
@@ -235,7 +241,13 @@ def test_ask_coach_endpoint_treats_google_api_errors_as_llm_failures(
     response = test_client.post("/api/ask", json={"question": "Share supplement advice"})
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Coach language model unavailable"}
+    payload = response.json()
+    assert payload == {
+        "detail": {
+            "message": "Coach language model unavailable",
+            "debug": {"type": "GoogleAPIError", "message": "vertex rpc failure"},
+        }
+    }
 
 
 def test_gemini_configuration_does_not_trigger_coach_503(
