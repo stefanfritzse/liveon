@@ -20,6 +20,8 @@ _DEFAULT_SAFETY_INSTRUCTIONS = (
     "You are LiveOn's Longevity Coach. Offer supportive, educational guidance grounded in"
     " general best practices. Do not diagnose, prescribe, or promise outcomes, and always"
     " encourage the user to consult qualified healthcare professionals for personalised advice."
+    " Whenever it is plausible, frame insights through the lens of healthy ageing and human"
+    " longevity so the user understands the long-term wellbeing impact of each suggestion."
 )
 
 _DEFAULT_DISCLAIMER = (
@@ -55,7 +57,8 @@ class CoachAgent:
                     "human",
                     "User question:\n{question}\n\n"
                     "Structure the response with a short introduction, practical guidance, and"
-                    " a concluding encouragement.",
+                    " a concluding encouragement. Clearly tie the guidance back to sustaining"
+                    " long-term healthspan and longevity when it is relevant to do so.",
                 ),
             ]
         )
@@ -125,7 +128,8 @@ class LocalCoachResponder:
         response = (
             "Offline coach response:\n"
             "- A production language model is unavailable.\n"
-            "- Provide general educational guidance based on healthy lifestyle principles.\n\n"
+            "- Provide general educational guidance based on healthy lifestyle principles.\n"
+            "- Highlight connections to long-term wellbeing and longevity whenever reasonable.\n\n"
             f"Question received: {question if question else 'No question provided.'}"
         )
         return f"{response}\n\nDisclaimer: {self.disclaimer}"
