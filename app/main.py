@@ -47,6 +47,10 @@ def _build_debug_detail(exc: Exception) -> dict[str, str]:
     }
 
 
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
 @lru_cache()
 def _cached_coach_agent() -> CoachAgent:
     """Create a singleton CoachAgent backed by the configured language model."""
