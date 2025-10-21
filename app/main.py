@@ -20,7 +20,6 @@ from pydantic import BaseModel, Field, field_validator
 from app.models.content import Article, Tip
 from app.services.coach import CoachAgent, create_coach_llm
 from app.services.firestore import FirestoreContentRepository
-from app.services.monitoring import GCPMetricsService
 from app.utils.text import markdown_to_plain_text
 
 app = FastAPI(title="Live On Longevity Coach")
@@ -30,7 +29,6 @@ templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 templates.env.globals.update(now=lambda: datetime.now(timezone.utc))
 templates.env.filters["markdown_to_text"] = markdown_to_plain_text
 
-metrics_service = GCPMetricsService()
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - for static type checking only
@@ -221,19 +219,6 @@ async def home(
             "recent_tips": recent_tips,
         },
     )
-
-
-@app.get("/api/metrics/run-pipeline", response_class=JSONResponse)
-async def fetch_run_pipeline_metrics() -> JSONResponse:
-    """Return health metrics for the ``run_pipeline`` pipeline trigger."""
-
-    payload = metrics_service.fetch_run_pipeline_health(
-        tips_job_id=GCPMetricsService.DEFAULT_TIP_JOB_ID
-    )
-    status_code = 200
-    if payload.get("status") == "error":
-        status_code = 503
-    return JSONResponse(content=payload, status_code=status_code)
 
 
 @app.get("/api/tips/latest", response_class=JSONResponse)
