@@ -43,6 +43,30 @@
         </p>
       </header>
 
+      {% if coach_prompts %}
+      <section class="coach-suggestions" aria-label="Suggested questions">
+        <h3 class="coach-suggestions-title">Need inspiration?</h3>
+        <p class="coach-suggestions-copy">
+          Pick a conversation starter and we’ll drop it into the form so you can send it with one click.
+        </p>
+        <div class="coach-suggestion-list" role="list">
+          {% for prompt in coach_prompts %}
+          <button
+            type="button"
+            class="coach-suggestion"
+            data-question="{{ prompt.question | e }}"
+            aria-label="{{ prompt.label }}"
+          >
+            <span class="coach-suggestion-label">{{ prompt.label }}</span>
+            {% if prompt.description %}
+            <span class="coach-suggestion-description">{{ prompt.description }}</span>
+            {% endif %}
+          </button>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+
       <form id="coach-form" class="coach-form" aria-describedby="coach-disclaimer">
         <label for="coach-question" class="coach-label">Your question</label>
         <textarea
@@ -101,9 +125,67 @@
       max-width: 60ch;
     }
 
-    .coach-form {
+    .coach-form { 
       display: grid;
       gap: 1rem;
+    }
+
+    .coach-suggestions {
+      display: grid;
+      gap: 0.75rem;
+      padding: 1.5rem;
+      background: #f8fafc;
+      border-radius: 1rem;
+    }
+
+    .coach-suggestions-title {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    .coach-suggestions-copy {
+      margin: 0;
+      color: #475569;
+    }
+
+    .coach-suggestion-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .coach-suggestion {
+      align-items: flex-start;
+      background: white;
+      border-radius: 0.85rem;
+      border: 1px solid rgba(148, 163, 184, 0.45);
+      cursor: pointer;
+      display: grid;
+      gap: 0.35rem;
+      padding: 0.85rem 1rem;
+      text-align: left;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+      width: min(100%, 18.5rem);
+    }
+
+    .coach-suggestion:focus,
+    .coach-suggestion:hover {
+      border-color: #2563eb;
+      box-shadow: 0 12px 25px -18px rgba(37, 99, 235, 0.45);
+      transform: translateY(-1px);
+      outline: none;
+    }
+
+    .coach-suggestion-label {
+      font-weight: 600;
+      color: #111827;
+    }
+
+    .coach-suggestion-description {
+      color: #475569;
+      font-size: 0.9rem;
+      line-height: 1.4;
+      display: block;
     }
 
     .coach-label {
@@ -225,6 +307,10 @@
       .coach-transcript {
         max-height: none;
       }
+
+      .coach-suggestion-list {
+        flex-direction: column;
+      }
     }
   </style>
 
@@ -241,6 +327,7 @@
       const errorBanner = app.querySelector('#coach-error');
       const submitButton = form?.querySelector('button[type="submit"]');
       const defaultButtonLabel = submitButton?.dataset.defaultLabel ?? 'Send question';
+      const suggestionButtons = app.querySelectorAll('.coach-suggestion');
 
       const escapeHtml = (value) =>
         value
@@ -418,6 +505,25 @@
         transcript.scrollTop = transcript.scrollHeight;
 
       };
+
+      const applySuggestion = (value) => {
+        if (!textarea || !value) {
+          return;
+        }
+        textarea.value = value;
+        textarea.focus();
+        textarea.setSelectionRange(value.length, value.length);
+        clearError();
+      };
+
+      suggestionButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          const { question } = button.dataset;
+          if (question) {
+            applySuggestion(question);
+          }
+        });
+      });
 
       const handleSubmit = async (event) => {
         event.preventDefault();
