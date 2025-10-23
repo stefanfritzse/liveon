@@ -6,7 +6,9 @@ from collections.abc import Callable
 from functools import lru_cache
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -34,6 +36,58 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:  # pragma: no cover - for static type checking only
     from app.models.coach import CoachAnswer
 
+
+_DEFAULT_COACH_PROMPTS: tuple[dict[str, str], ...] = (
+    {
+        "label": "Restore deeper sleep",
+        "question": "How can I improve my sleep quality and recovery this month?",
+        "description": "Wind-down habits and environment tweaks for restorative rest.",
+    },
+    {
+        "label": "Plan longevity workouts",
+        "question": "What mix of strength, cardio, and mobility should I follow each week?",
+        "description": "Balance resistance, aerobic, and mobility training across 7 days.",
+    },
+    {
+        "label": "Support brain health",
+        "question": "Which nutrition habits best protect long-term cognitive health?",
+        "description": "Everyday food choices that reinforce brain resilience.",
+    },
+)
+
+
+@lru_cache()
+def _coach_prompt_suggestions() -> tuple[dict[str, str], ...]:
+    """Return curated coach prompt presets, optionally overridden by environment."""
+
+    raw_value = os.getenv("LIVEON_COACH_PROMPTS")
+    if raw_value:
+        try:
+            payload = json.loads(raw_value)
+        except (TypeError, ValueError):  # pragma: no cover - defensive branch
+            logger.warning("Invalid LIVEON_COACH_PROMPTS payload; using defaults", extra={"event": "coach.prompts_invalid"})
+        else:
+            prompts: list[dict[str, str]] = []
+            for item in payload if isinstance(payload, list) else [payload]:
+                if isinstance(item, str):
+                    text = item.strip()
+                    if text:
+                        prompts.append({"label": text, "question": text})
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                question = str(item.get("question", "")).strip()
+                if not question:
+                    continue
+                label = str(item.get("label") or item.get("title") or question).strip() or question
+                description = str(item.get("description") or item.get("summary") or "").strip()
+                entry = {"label": label, "question": question}
+                if description:
+                    entry["description"] = description
+                prompts.append(entry)
+            if prompts:
+                return tuple(prompts)
+    return _DEFAULT_COACH_PROMPTS
 
 def _build_debug_detail(exc: Exception) -> dict[str, str]:
     """Return a serialisable mapping describing ``exc`` for debugging."""
@@ -357,5 +411,6 @@ async def ask_the_coach(request: Request) -> HTMLResponse:
         "coach.html",
         {
             "title": "Ask the Coach",
+            "coach_prompts": list(_coach_prompt_suggestions()),
         },
     )

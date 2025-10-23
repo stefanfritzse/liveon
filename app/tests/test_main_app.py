@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
 
+import json
 import sys
 from types import ModuleType
 
@@ -184,6 +185,60 @@ def test_tips_page_empty_state(client: Callable[..., TestClient]) -> None:
     assert response.status_code == 200
     assert response.context["featured_tip"] is None
     assert response.context["recent_tips"] == []
+
+
+def test_coach_page_includes_prompt_suggestions(client: Callable[..., TestClient]) -> None:
+    repository = StubContentRepository(tips=[])
+    test_client = client(repository)
+
+    from app import main as main_module
+
+    main_module._coach_prompt_suggestions.cache_clear()
+    try:
+        response = test_client.get("/coach")
+        assert response.status_code == 200
+        suggestions = list(main_module._coach_prompt_suggestions())
+        assert suggestions
+        assert "Need inspiration?" in response.text
+        assert suggestions[0]["label"] in response.text
+    finally:
+        main_module._coach_prompt_suggestions.cache_clear()
+
+
+def test_coach_prompt_suggestions_respect_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import main as main_module
+
+    payload = [
+        {
+            "label": "Hydration plan",
+            "question": "How much water should I aim for each day?",
+            "description": "Balance electrolytes with daily fluid intake.",
+        },
+        {"question": "Do short walks after meals help glucose stability?"},
+    ]
+    monkeypatch.setenv("LIVEON_COACH_PROMPTS", json.dumps(payload))
+    main_module._coach_prompt_suggestions.cache_clear()
+
+    try:
+        prompts = main_module._coach_prompt_suggestions()
+        assert prompts[0]["label"] == "Hydration plan"
+        assert prompts[0]["description"] == "Balance electrolytes with daily fluid intake."
+        assert prompts[1]["question"].startswith("Do short walks")
+    finally:
+        main_module._coach_prompt_suggestions.cache_clear()
+
+
+def test_coach_prompt_suggestions_invalid_env_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import main as main_module
+
+    monkeypatch.setenv("LIVEON_COACH_PROMPTS", "{invalid json")
+    main_module._coach_prompt_suggestions.cache_clear()
+
+    try:
+        prompts = main_module._coach_prompt_suggestions()
+        assert prompts == main_module._DEFAULT_COACH_PROMPTS
+    finally:
+        main_module._coach_prompt_suggestions.cache_clear()
 
 
 def test_ask_coach_endpoint_returns_structured_response(client: Callable[..., TestClient]) -> None:
