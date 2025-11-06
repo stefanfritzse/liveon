@@ -17,6 +17,9 @@ from app.services.pipeline import TipPipeline
 from app.services.tip_generator import TipGenerator
 from app.services.tip_publisher import TipPublisher
 from app.utils.langchain_compat import AIMessage, BaseMessage
+from dataclasses import is_dataclass, asdict
+from datetime import datetime, date, timezone
+from pathlib import Path
 
 LOGGER = logging.getLogger("liveon.tip_pipeline")
 if not LOGGER.handlers:  # avoid duplicates on re-import
@@ -52,6 +55,20 @@ class SupportsInvoke(Protocol):
     def invoke(self, input: Any, **kwargs: Any) -> BaseMessage | str:  # pragma: no cover - interface
         """Invoke the underlying model."""
 
+def _json_default(o):
+    if isinstance(o, (datetime, date)):
+        # ensure timezone-aware ISO format for consistency
+        if isinstance(o, datetime) and o.tzinfo is None:
+            o = o.replace(tzinfo=timezone.utc)
+        return o.isoformat()
+    if is_dataclass(o):
+        return asdict(o)
+    if isinstance(o, Path):
+        return str(o)
+    if isinstance(o, set):
+        return list(o)
+    # fallback
+    return str(o)
 
 def _configure_logging() -> None:
     """Configure root logging based on ``LIVEON_LOG_LEVEL``."""
@@ -214,7 +231,7 @@ class TipLocalJSONResponder:
             content = str(input)
 
         payload = self._build_payload(content)
-        return AIMessage(content=json.dumps(payload, ensure_ascii=False))
+        return AIMessage(content=json.dumps(payload, default=_json_default, ensure_ascii=False))
 
     @staticmethod
     def _build_payload(prompt: str) -> dict[str, Any]:
@@ -309,7 +326,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "succeeded": result.succeeded,
         "created": result.created,
     }
-    print(json.dumps(payload, default=str))
+    print(json.dumps(payload, default=_json_default, ensure_ascii=False))
 
     if not result.succeeded:
         LOGGER.error("Tip pipeline failed to produce a tip")

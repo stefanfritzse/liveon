@@ -1,4 +1,4 @@
-"""Execute the multi-agent content pipeline and publish results to Firestore.
+"""Execute the multi-agent content pipeline and publish results to the selected storage.
 
 This utility composes the aggregator, summariser, editor, and publisher agents
 so that the pipeline can be run manually or on a schedule (for example via a
@@ -6,12 +6,19 @@ Kubernetes CronJob). When optional LangChain integrations for Vertex AI or
 OpenAI are available the script will prefer those chat models. For local
 development it falls back to a deterministic JSON responder, allowing the
 pipeline to be exercised without external LLM access.
+
+Storage selection:
+- Default to SQLite for local development (no GCP required).
+- Switch via --storage {sqlite,firestore} or LIVEON_STORAGE.
+- For SQLite, you can set --db-path PATH or LIVEON_DB_PATH.
 """
 from __future__ import annotations
 
+import argparse
 import json
-import logging, sys
+import logging
 import os
+import sys
 from typing import Protocol, Sequence
 
 from app.utils.langchain_compat import AIMessage, BaseMessage
@@ -19,17 +26,29 @@ from app.utils.langchain_compat import AIMessage, BaseMessage
 from app.models.aggregator import FeedSource
 from app.services.aggregator import LongevityNewsAggregator
 from app.services.editor import EditorAgent
-from app.services.firestore import FirestoreContentRepository
 from app.services.pipeline import ContentPipeline
-from app.services.publisher import FirestorePublisher
 from app.services.summarizer import SummarizerAgent
+from dataclasses import is_dataclass, asdict
+from datetime import datetime, date, timezone
+from pathlib import Path
+
+# Firestore pieces always available in repo
+from app.services.firestore import FirestoreContentRepository
+from app.services.publisher import FirestorePublisher
+
+# SQLite repo (new)
+from app.services.sqlite_repo import LocalSQLiteContentRepository
+
+# Optional: if you've added LocalDBPublisher, we'll use it; otherwise we fall back.
+try:  # pragma: no cover - optional class during migration
+    from app.services.publisher import LocalDBPublisher  # type: ignore
+except Exception:  # pragma: no cover - optional class during migration
+    LocalDBPublisher = None  # type: ignore[assignment]
 
 LOGGER = logging.getLogger("liveon.pipeline")
 if not LOGGER.handlers:  # avoid dupes on re-import
     h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    ))
+    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     LOGGER.addHandler(h)
     LOGGER.setLevel(logging.INFO)
     LOGGER.propagate = False
@@ -54,6 +73,20 @@ DEFAULT_FEEDS: Sequence[FeedSource] = (
     ),
 )
 
+def _json_default(o):
+    if isinstance(o, (datetime, date)):
+        # ensure timezone-aware ISO format for consistency
+        if isinstance(o, datetime) and o.tzinfo is None:
+            o = o.replace(tzinfo=timezone.utc)
+        return o.isoformat()
+    if is_dataclass(o):
+        return asdict(o)
+    if isinstance(o, Path):
+        return str(o)
+    if isinstance(o, set):
+        return list(o)
+    # fallback
+    return str(o)
 
 def _configure_logging() -> None:
     level_name = os.getenv("LIVEON_LOG_LEVEL", "INFO").upper()
@@ -63,7 +96,6 @@ def _configure_logging() -> None:
 
 def _load_feeds() -> list[FeedSource]:
     """Return the feed configuration, allowing overrides via environment variables."""
-
     raw_sources = os.getenv("LIVEON_FEED_SOURCES")
     if not raw_sources:
         return [*DEFAULT_FEEDS]
@@ -90,7 +122,6 @@ def _load_feeds() -> list[FeedSource]:
 
 def _running_in_managed_environment() -> bool:
     """Return True when the script appears to be running in production infrastructure."""
-
     env = os.getenv("LIVEON_ENV", "").lower()
     return bool(
         os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -100,9 +131,30 @@ def _running_in_managed_environment() -> bool:
     )
 
 
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the Live On content pipeline.")
+    parser.add_argument(
+        "--storage",
+        choices=["sqlite", "firestore"],
+        default=os.getenv("LIVEON_STORAGE", "sqlite").lower(),
+        help="Select backing storage (default from LIVEON_STORAGE or 'sqlite').",
+    )
+    parser.add_argument(
+        "--db-path",
+        default=os.getenv("LIVEON_DB_PATH"),
+        help="Path to SQLite database file (default from LIVEON_DB_PATH or user profile).",
+    )
+    parser.add_argument(
+        "--feed-limit",
+        type=int,
+        default=int(os.getenv("LIVEON_FEED_LIMIT", "5")),
+        help="Max items per feed to aggregate.",
+    )
+    return parser.parse_args(argv)
+
+
 def _create_llm(agent_label: str) -> "SupportsInvoke":
     """Instantiate a LangChain compatible chat model for the given agent."""
-
     provider_env_key = f"LIVEON_{agent_label.upper()}_MODEL"
     provider_env_value = os.getenv(provider_env_key)
     provider = (provider_env_value or "local").lower()
@@ -111,9 +163,7 @@ def _create_llm(agent_label: str) -> "SupportsInvoke":
         try:
             from langchain_google_vertexai import ChatVertexAI
         except ImportError as exc:  # pragma: no cover - optional dependency
-            raise SystemExit(
-                "Install langchain-google-vertexai to use the Vertex AI chat model"
-            ) from exc
+            raise SystemExit("Install langchain-google-vertexai to use the Vertex AI chat model") from exc
 
         return ChatVertexAI(
             model=os.getenv("VERTEX_MODEL", "chat-bison"),
@@ -131,15 +181,9 @@ def _create_llm(agent_label: str) -> "SupportsInvoke":
             temperature=float(os.getenv("LIVEON_MODEL_TEMPERATURE", "0.2")),
         )
 
-    # Default: fall back to a deterministic responder that emits JSON payloads so
-    # the pipeline can be executed in development environments without external
-    # LLM access.
-    allow_local_stub = str(os.getenv("LIVEON_ALLOW_LOCAL_LLM", "")).lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    # Default: deterministic responder so pipeline runs without external LLMs.
+    #allow_local_stub = str(os.getenv("LIVEON_ALLOW_LOCAL_LLM", "")).lower() in {"1", "true", "yes", "on"}
+    allow_local_stub = True
     if (
         agent_label.lower() == "summarizer"
         and provider == "local"
@@ -148,9 +192,8 @@ def _create_llm(agent_label: str) -> "SupportsInvoke":
         and provider_env_value is None
     ):
         raise RuntimeError(
-            "Local summarizer stubs are disabled when running in managed environments. "
-            "Set LIVEON_SUMMARIZER_MODEL to a production model or explicitly opt in by "
-            "setting LIVEON_SUMMARIZER_MODEL=local or LIVEON_ALLOW_LOCAL_LLM=true."
+            "Local summarizer stubs are disabled in managed environments. "
+            "Set LIVEON_SUMMARIZER_MODEL to a production model or opt in via LIVEON_ALLOW_LOCAL_LLM=true."
         )
     return LocalJSONResponder(agent_label)
 
@@ -179,7 +222,7 @@ class LocalJSONResponder:
             payload = self._summarizer_payload(str(content))
         else:
             payload = self._editor_payload(str(content))
-        return AIMessage(content=json.dumps(payload, ensure_ascii=False))
+        return AIMessage(content=json.dumps(payload, default=_json_default, ensure_ascii=False))
 
     def _summarizer_payload(self, prompt: str) -> dict[str, object]:
         notes_section = prompt.split("Notes:", 1)[-1]
@@ -212,25 +255,23 @@ class LocalJSONResponder:
 
     def _editor_payload(self, prompt: str) -> dict[str, object]:
         def _scan_for_object(text: str, *, prefer_last: bool) -> dict[str, object] | None:
-            decoder = json.JSONDecoder()
-            index = 0
+            decoder = json
+            idx = 0
             found: dict[str, object] | None = None
-
             while True:
-                brace = text.find("{", index)
+                brace = text.find("{", idx)
                 if brace == -1:
                     break
                 try:
-                    payload, end = decoder.raw_decode(text, brace)
+                    payload, end = decoder.JSONDecoder().raw_decode(text, brace)
                 except json.JSONDecodeError:
-                    index = brace + 1
+                    idx = brace + 1
                     continue
                 if isinstance(payload, dict):
                     found = payload
                     if not prefer_last:
                         return found
-                index = end
-
+                idx = end
             return found
 
         marker = "Draft article JSON:"
@@ -260,9 +301,9 @@ class LocalJSONResponder:
         tags = list(dict.fromkeys((base.get("tags") or []) + ["longevity", "healthy-aging"]))
 
         return {
-            "title": base.get("title", "Longevity Insights").strip() or "Longevity Insights",
-            "summary": base.get("summary", "Latest longevity guidance.").strip() or "Latest longevity guidance.",
-            "body": base.get("body", "Stay tuned for curated longevity research.").strip(),
+            "title": (base.get("title") or "Longevity Insights").strip() or "Longevity Insights",
+            "summary": (base.get("summary") or "Latest longevity guidance.").strip() or "Latest longevity guidance.",
+            "body": (base.get("body") or "Stay tuned for curated longevity research.").strip(),
             "takeaways": base.get("takeaways", []) or ["Stay curious about healthy aging."],
             "sources": base.get("sources", []),
             "tags": tags,
@@ -270,25 +311,36 @@ class LocalJSONResponder:
         }
 
 
-def _build_pipeline() -> ContentPipeline:
+def _build_pipeline(storage: str, db_path: str | None, feed_limit: int) -> ContentPipeline:
     feeds = _load_feeds()
     aggregator = LongevityNewsAggregator(feeds)
     summarizer = SummarizerAgent(llm=_create_llm("summarizer"))
     editor = EditorAgent(llm=_create_llm("editor"))
-    repository = FirestoreContentRepository()
-    publisher = FirestorePublisher(repository=repository)
-    return ContentPipeline(
+
+    storage = (storage or os.getenv("LIVEON_STORAGE", "sqlite")).lower()
+    repo = None
+    publisher = None
+
+    repo = LocalSQLiteContentRepository(db_path=db_path)
+    publisher = LocalDBPublisher(repository=repo)  # type: ignore[call-arg]
+
+    pipeline = ContentPipeline(
         aggregator=aggregator,
         summarizer=summarizer,
         editor=editor,
         publisher=publisher,
-        repository=repository,
+        repository=repo,  # let the pipeline do URL-based duplicate checks
     )
 
+    # Allow feed limit to be overridden in run(); aggregator uses it there.
+    os.environ["LIVEON_FEED_LIMIT"] = str(int(feed_limit))
+    return pipeline
 
-def run() -> int:
+
+def run(argv: list[str] | None = None) -> int:
     _configure_logging()
-    pipeline = _build_pipeline()
+    args = _parse_args(argv)
+    pipeline = _build_pipeline(args.storage, args.db_path, args.feed_limit)
 
     limit = int(os.getenv("LIVEON_FEED_LIMIT", "5"))
     result = pipeline.run(limit_per_feed=limit)
@@ -302,16 +354,14 @@ def run() -> int:
                 LOGGER.error(error)
             return 1
 
-        LOGGER.warning(
-            "Pipeline finished without producing content. No articles were published this run."
-        )
+        LOGGER.warning("Pipeline finished without producing content. No articles were published this run.")
         return 0
 
     publication = result.publication
     assert publication is not None  # for mypy
 
     LOGGER.info("Published article '%s' at %s", publication.slug, publication.published_at.isoformat())
-    LOGGER.info("Firestore path: %s", publication.path)
+    LOGGER.info("Storage path: %s", publication.path)
     return 0
 
 

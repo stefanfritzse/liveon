@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: run-pipeline-once
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: pipeline
+        image: myapp:a20c43e
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: LIVEON_STORAGE
+          value: sqlite
+        - name: LIVEON_DB_PATH
+          value: /data/content.db
+        volumeMounts:
+        - name: sqlite-data
+          mountPath: /data
+        command: ["python","-m","app.scripts.run_pipeline"]
+      volumes:
+      - name: sqlite-data
+        persistentVolumeClaim:
+          claimName: sqlite-data

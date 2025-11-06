@@ -22,6 +22,13 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            - name: LIVEON_STORAGE
+              value: sqlite
+            - name: LIVEON_DB_PATH
+              value: /data/content.db
+              volumeMounts:
+            - name: sqlite-data
+              mountPath: /data              
             - name: LIVEON_COACH_MODEL
               value: "vertex"
             - name: LIVEON_COACH_VERTEX_MODEL
@@ -43,3 +50,7 @@ spec:
             limits:
               cpu: 200m
               memory: 256Mi
+      volumes:
+      - name: sqlite-data
+        persistentVolumeClaim:
+          claimName: sqlite-data              

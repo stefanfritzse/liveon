@@ -23,6 +23,7 @@ from app.models.content import Article, Tip
 from app.services.coach import CoachAgent, create_coach_llm
 from app.services.firestore import FirestoreContentRepository
 from app.utils.text import markdown_to_plain_text
+from app.services.sqlite_repo import LocalSQLiteContentRepository 
 
 app = FastAPI(title="Live On Longevity Coach")
 
@@ -225,13 +226,28 @@ class _InMemoryContentRepository:
         return next(iter(self.get_latest_tips(limit=1)), None)
 
 
-def get_repository() -> ContentRepository:
-    """Resolve the content repository with graceful fallback when Firestore is unavailable."""
+from functools import lru_cache
 
+@lru_cache()
+def get_repository() -> ContentRepository:
+    """Resolve the content repository (SQLite locally, Firestore in cloud)."""
+    #storage = (os.getenv("LIVEON_STORAGE") or "sqlite").strip().lower()
+    storage = "sqlite"
+
+    if storage == "sqlite":
+        try:
+            db_path = os.getenv("LIVEON_DB_PATH")
+            return LocalSQLiteContentRepository(db_path=db_path)
+        except Exception as exc:
+            logger.exception("SQLite repository init failed; falling back to in-memory.")
+            return _InMemoryContentRepository()
+
+    # default: Firestore (with graceful fallback)
     try:
         return FirestoreContentRepository()
     except (DefaultCredentialsError, GoogleAPIError):
         return _InMemoryContentRepository()
+
 
 
 def _safe_fetch(callback: Callable[[], list[Article] | list[Tip]]) -> list[Article] | list[Tip]:

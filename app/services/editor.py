@@ -11,6 +11,9 @@ from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplat
 from app.models.editor import EditedArticle
 from app.models.summarizer import ArticleDraft
 from app.services.summarizer import SupportsInvoke
+from dataclasses import is_dataclass, asdict
+from datetime import datetime, date, timezone
+from pathlib import Path
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are the editorial agent for Live On, an AI longevity coach. "
@@ -41,6 +44,20 @@ Draft article JSON:
 Current date: {current_date}
 """.strip()
 
+def _json_default(o):
+    if isinstance(o, (datetime, date)):
+        # ensure timezone-aware ISO format for consistency
+        if isinstance(o, datetime) and o.tzinfo is None:
+            o = o.replace(tzinfo=timezone.utc)
+        return o.isoformat()
+    if is_dataclass(o):
+        return asdict(o)
+    if isinstance(o, Path):
+        return str(o)
+    if isinstance(o, set):
+        return list(o)
+    # fallback
+    return str(o)
 
 def _default_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
@@ -70,7 +87,7 @@ class EditorAgent:
             "tags": draft.tags,
         }
         messages = self.prompt.format_messages(
-            draft=json.dumps(payload, ensure_ascii=False, indent=2),
+            draft=json.dumps(payload, default=_json_default, ensure_ascii=False),
             current_date=datetime.now(timezone.utc).date().isoformat(),
         )
         response = self.llm.invoke(messages)

@@ -14,10 +14,22 @@ import yaml
 from app.models.content import Article
 from app.models.editor import EditedArticle
 from app.models.publisher import PublicationResult
-
+from datetime import datetime, timezone
 
 _SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 
+def _as_datetime(value):
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        try:
+            # accept '...Z' or '+00:00'
+            txt = value.replace("Z", "+00:00")
+            return datetime.fromisoformat(txt).astimezone(timezone.utc)
+        except Exception:
+            pass
+    # last resort: now
+    return datetime.now(timezone.utc)
 
 def _slugify(value: str) -> str:
     """Return a filesystem and URL friendly slug for the given value."""
@@ -29,7 +41,7 @@ def _slugify(value: str) -> str:
 
 
 class SupportsArticleRepository(Protocol):
-    """Subset of the Firestore repository relied upon by publishers."""
+    """Subset of the repository relied upon by publishers (Firestore or SQLite)."""
 
     def get_article(self, article_id: str) -> Article | None:
         """Retrieve an article by identifier."""
@@ -42,6 +54,9 @@ class SupportsArticleRepository(Protocol):
         """Return the backing collection reference (duck-typed in tests)."""
 
 
+# ----------------------------------------------------------------------
+# Git publisher (unchanged)
+# ----------------------------------------------------------------------
 @dataclass(slots=True)
 class GitPublisher:
     """Publish edited articles as Markdown committed to the local Git repository."""
@@ -59,7 +74,7 @@ class GitPublisher:
         published_at: datetime | None = None,
     ) -> PublicationResult:
         """Write the article to disk and create a Git commit for the change."""
-
+        print("publish 1")
         repo_path = self.repo_path
         if not repo_path.exists():
             raise FileNotFoundError(f"Repository path '{repo_path}' does not exist")
@@ -68,6 +83,7 @@ class GitPublisher:
         published = (published_at or article_model.published_date or datetime.now(timezone.utc)).astimezone(
             timezone.utc
         )
+        print("publish 2")
 
         base_slug = _slugify(slug or article_model.title)
         final_slug, destination = self._resolve_destination(base_slug)
@@ -75,6 +91,7 @@ class GitPublisher:
         front_matter = self._build_front_matter(article, article_model, published)
         body = article_model.content_body.strip()
         payload = f"---\n{front_matter}\n---\n\n{body}\n"
+        print("publish 3")
 
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(payload, encoding="utf-8")
@@ -86,6 +103,7 @@ class GitPublisher:
         self._run_git("commit", "-m", message)
 
         commit_hash = self._run_git("rev-parse", "HEAD").stdout.strip()
+        print("publish 4")
 
         return PublicationResult(slug=final_slug, path=destination, commit_hash=commit_hash, published_at=published)
 
@@ -143,6 +161,9 @@ class GitPublisher:
         return result
 
 
+# ----------------------------------------------------------------------
+# Firestore publisher (unchanged)
+# ----------------------------------------------------------------------
 @dataclass(slots=True)
 class FirestorePublisher:
     """Publish edited articles directly into the Firestore content repository."""
@@ -158,12 +179,12 @@ class FirestorePublisher:
         published_at: datetime | None = None,
     ) -> PublicationResult:
         """Persist the article to Firestore and return metadata about the operation."""
-
+        print("firestore publish 1")
         _ = commit_message  # Git-specific metadata is ignored for Firestore publishes.
 
         published = (published_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
         base_slug = _slugify(slug or article.title)
-
+        print("firestore publish 2")
         resolved_slug, existing = self._resolve_target(base_slug, article)
         if existing is not None and self._is_duplicate(existing, article):
             return PublicationResult(
@@ -172,11 +193,11 @@ class FirestorePublisher:
                 commit_hash=None,
                 published_at=existing.published_date,
             )
-
+        print("firestore publish 3")
         article_model = article.to_article()
         article_model.id = resolved_slug
         article_model.published_date = published
-
+        print("firestore publish 4")
         stored = self.repository.save_article(article_model)
         return PublicationResult(
             slug=stored.id or resolved_slug,
@@ -227,3 +248,96 @@ class FirestorePublisher:
         collection = getattr(self.repository.article_collection, "id", "articles")
         return Path("firestore") / str(collection) / slug
 
+
+# ----------------------------------------------------------------------
+# New: Local DB publisher (SQLite or any repo with the same surface)
+# ----------------------------------------------------------------------
+@dataclass(slots=True)
+class LocalDBPublisher:
+    """Publish edited articles to a local database-backed repository (e.g., SQLite).
+
+    Mirrors FirestorePublisher's slug resolution and duplicate detection so the
+    pipeline behaves identically regardless of storage backend.
+    """
+
+    repository: SupportsArticleRepository
+
+    def publish(
+        self,
+        article: EditedArticle,
+        *,
+        slug: str | None = None,
+        commit_message: str | None = None,  # ignored – present for interface parity
+        published_at: datetime | None = None,
+    ) -> PublicationResult:
+        """Persist the article to the local DB and return publication metadata."""
+        print("db publisher 1")
+        _ = commit_message  # No VCS metadata for DB publishes.
+
+        published = (published_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        base_slug = _slugify(slug or article.title)
+        print("db publisher 2")
+        resolved_slug, existing = self._resolve_target(base_slug, article)
+        if existing is not None and self._is_duplicate(existing, article):
+            return PublicationResult(
+                slug=existing.id or resolved_slug,
+                path=self._build_storage_path(existing.id or resolved_slug),
+                commit_hash=None,
+                published_at=existing.published_date,
+            )
+        print("db publisher 3")
+        article_model = article.to_article()
+        article_model.id = resolved_slug
+        article_model.published_date = published
+        print("db publisher 4")
+        stored = self.repository.save_article(article_model)
+        print("db publisher 5")
+        return PublicationResult(
+            slug=stored.id or resolved_slug,
+            path=self._build_storage_path(stored.id or resolved_slug),
+            commit_hash=None,
+            published_at=_as_datetime(stored.published_date),  
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers (copied to keep class self-contained)
+    # ------------------------------------------------------------------
+    def _resolve_target(self, base_slug: str, article: EditedArticle) -> tuple[str, Article | None]:
+        slug = base_slug or "article"
+        existing = self.repository.get_article(slug)
+        if existing is not None and self._is_duplicate(existing, article):
+            return slug, existing
+
+        suffix = 2
+        while existing is not None:
+            slug = f"{base_slug}-{suffix}" if base_slug else f"article-{suffix}"
+            candidate = self.repository.get_article(slug)
+            if candidate is None or self._is_duplicate(candidate, article):
+                return slug, candidate
+            existing = candidate
+            suffix += 1
+
+        return slug, None
+
+    @staticmethod
+    def _is_duplicate(existing: Article, article: EditedArticle) -> bool:
+        """Return ``True`` when the edited article matches the stored entry."""
+
+        if existing.title.strip() != article.title.strip():
+            return False
+
+        rendered = article.to_article()
+        rendered.summary = rendered.summary.strip()
+        rendered.content_body = rendered.content_body.strip()
+
+        return (
+            existing.summary == rendered.summary
+            and existing.content_body == rendered.content_body
+            and set(existing.source_urls) == set(rendered.source_urls)
+            and set(existing.tags) == set(rendered.tags)
+        )
+
+    def _build_storage_path(self, slug: str) -> Path:
+        """Return a storage-agnostic, local path metadata value for logging/UX."""
+        collection = getattr(self.repository.article_collection, "id", "articles")
+        return Path("db") / str(collection) / slug
