@@ -10,7 +10,7 @@ import yaml
 
 from app.models.content import Article
 from app.models.editor import EditedArticle
-from app.services.publisher import FirestorePublisher, GitPublisher
+from app.services.publisher import SQLitePublisher, GitPublisher
 
 
 def sample_article() -> EditedArticle:
@@ -130,9 +130,9 @@ class StubArticleRepository:
         return stored
 
 
-def test_firestore_publisher_persists_article() -> None:
+def test_sqlite_publisher_persists_article() -> None:
     repository = StubArticleRepository()
-    publisher = FirestorePublisher(repository=repository)
+    publisher = SQLitePublisher(repository=repository)
 
     article = sample_article()
     published_at = datetime(2024, 4, 1, tzinfo=timezone.utc)
@@ -143,13 +143,13 @@ def test_firestore_publisher_persists_article() -> None:
     stored = repository.articles[result.slug]
     assert stored.title == article.title
     assert stored.published_date == published_at
-    assert "firestore/articles" in str(result.path)
+    assert "sqlite/articles" in str(result.path)
     assert result.commit_hash is None
 
 
-def test_firestore_publisher_skips_duplicates() -> None:
+def test_sqlite_publisher_skips_duplicates() -> None:
     repository = StubArticleRepository()
-    publisher = FirestorePublisher(repository=repository)
+    publisher = SQLitePublisher(repository=repository)
 
     article = sample_article()
     first = publisher.publish(article)

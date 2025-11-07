@@ -144,8 +144,8 @@ class GitPublisher:
 
 
 @dataclass(slots=True)
-class FirestorePublisher:
-    """Publish edited articles directly into the Firestore content repository."""
+class SQLitePublisher:
+    """Publish edited articles directly into the SQLite content repository."""
 
     repository: SupportsArticleRepository
 
@@ -157,9 +157,9 @@ class FirestorePublisher:
         commit_message: str | None = None,
         published_at: datetime | None = None,
     ) -> PublicationResult:
-        """Persist the article to Firestore and return metadata about the operation."""
+        """Persist the article to the database and return metadata about the operation."""
 
-        _ = commit_message  # Git-specific metadata is ignored for Firestore publishes.
+        _ = commit_message  # Git-specific metadata is ignored for database publishes.
 
         published = (published_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
         base_slug = _slugify(slug or article.title)
@@ -168,7 +168,7 @@ class FirestorePublisher:
         if existing is not None and self._is_duplicate(existing, article):
             return PublicationResult(
                 slug=existing.id or resolved_slug,
-                path=self._build_firestore_path(existing.id or resolved_slug),
+                path=self._build_database_path(existing.id or resolved_slug),
                 commit_hash=None,
                 published_at=existing.published_date,
             )
@@ -180,7 +180,7 @@ class FirestorePublisher:
         stored = self.repository.save_article(article_model)
         return PublicationResult(
             slug=stored.id or resolved_slug,
-            path=self._build_firestore_path(stored.id or resolved_slug),
+            path=self._build_database_path(stored.id or resolved_slug),
             commit_hash=None,
             published_at=stored.published_date,
         )
@@ -207,7 +207,7 @@ class FirestorePublisher:
 
     @staticmethod
     def _is_duplicate(existing: Article, article: EditedArticle) -> bool:
-        """Return ``True`` when the edited article matches the stored Firestore entry."""
+        """Return ``True`` when the edited article matches the stored database entry."""
 
         if existing.title.strip() != article.title.strip():
             return False
@@ -223,7 +223,7 @@ class FirestorePublisher:
             and set(existing.tags) == set(rendered.tags)
         )
 
-    def _build_firestore_path(self, slug: str) -> Path:
+    def _build_database_path(self, slug: str) -> Path:
         collection = getattr(self.repository.article_collection, "id", "articles")
-        return Path("firestore") / str(collection) / slug
+        return Path("sqlite") / str(collection) / slug
 

@@ -12,8 +12,8 @@ from typing import Any, Protocol, Sequence
 
 from app.models.aggregator import FeedSource
 from app.services.aggregator import LongevityNewsAggregator
-from app.services.firestore import FirestoreContentRepository
 from app.services.pipeline import TipPipeline
+from app.services.sqlite_repo import LocalSQLiteContentRepository
 from app.services.tip_generator import TipGenerator
 from app.services.tip_publisher import TipPublisher
 from app.utils.langchain_compat import AIMessage, BaseMessage
@@ -263,7 +263,7 @@ def _build_pipeline(llm: SupportsInvoke) -> TipPipeline:
     feeds = _load_feeds()
     aggregator = LongevityNewsAggregator(feeds)
     generator = TipGenerator(llm=llm)
-    repository = FirestoreContentRepository()
+    repository = LocalSQLiteContentRepository()
     publisher = TipPublisher(repository)
     return TipPipeline(aggregator=aggregator, generator=generator, publisher=publisher)
 
