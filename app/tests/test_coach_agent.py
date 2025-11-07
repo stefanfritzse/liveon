@@ -92,32 +92,20 @@ def test_ask_uses_llm_disclaimer_when_provided() -> None:
     assert answer.disclaimer == "Custom safety notice"
 
 
-def test_create_coach_llm_configures_gemini_client(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_coach_llm_configures_ollama_client(monkeypatch: pytest.MonkeyPatch) -> None:
     captured_kwargs: dict[str, Any] = {}
 
-    class _StubGeminiClient:
+    class _StubOllamaClient:
         def __init__(self, **kwargs: Any) -> None:
             captured_kwargs.update(kwargs)
             self.kwargs = kwargs
 
         def invoke(self, messages: Any) -> str:  # pragma: no cover - helper behaviour
-            return "Gemini reply"
+            return "Ollama reply"
 
-    fake_module = ModuleType("langchain_google_vertexai")
-    fake_module.ChatVertexAI = _StubGeminiClient  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "langchain_google_vertexai", fake_module)
-    monkeypatch.setattr(coach_module.google.auth, "default", lambda: (object(), "proj"), raising=False)
-    monkeypatch.setenv("LIVEON_COACH_VERTEX_MODEL", "gemini-1.5-pro")
-    monkeypatch.setenv("LIVEON_VERTEX_LOCATION", "europe-west1")
-    monkeypatch.setenv("GCP_PROJECT", "unit-test-project")
-    monkeypatch.setenv("LIVEON_MODEL_TEMPERATURE", "0.5")
-    monkeypatch.setenv("LIVEON_MODEL_MAX_OUTPUT_TOKENS", "256")
+    monkeypatch.setattr(coach_module, "ChatOllama", _StubOllamaClient)
 
     llm = coach_module.create_coach_llm()
 
-    assert isinstance(llm, _StubGeminiClient)
-    assert captured_kwargs["model_name"] == "gemini-1.5-pro"
-    assert captured_kwargs["temperature"] == 0.5
-    assert captured_kwargs["max_output_tokens"] == 256
-    assert captured_kwargs["location"] == "europe-west1"
-    assert captured_kwargs["project"] == "unit-test-project"
+    assert isinstance(llm, _StubOllamaClient)
+    assert captured_kwargs["model"] == "phi3:14b-medium-4k-instruct-q4_K_M"

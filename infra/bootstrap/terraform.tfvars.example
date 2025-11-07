@@ -1,4 +1,0 @@
-project_id                  = "live-on-473112"
-state_bucket_name           = "live-on-473112-tf-state"
-state_bucket_location       = "US"
-terraform_service_account_id = "sa-terraform"
