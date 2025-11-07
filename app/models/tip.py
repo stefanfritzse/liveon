@@ -1,4 +1,4 @@
-"""Models supporting tip generation and Firestore persistence."""
+"""Models supporting tip generation."""
 
 from __future__ import annotations
 
@@ -33,22 +33,3 @@ class TipDraft:
             tags=cleaned_tags,
             metadata=cleaned_metadata,
         )
-
-    def to_firestore(self) -> dict[str, Any]:
-        """Serialise the draft into a Firestore-friendly dictionary."""
-
-        base = {
-            "title": self.title.strip() or "Longevity Tip",
-            "body": self.body.strip(),
-            "tags": [
-                tag.strip()
-                for tag in self.tags
-                if isinstance(tag, str) and tag.strip()
-            ],
-        }
-
-        for key, value in self.metadata.items():
-            if isinstance(key, str) and key not in base:
-                base[key] = value
-
-        return base

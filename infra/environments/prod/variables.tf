@@ -121,12 +121,6 @@ variable "artifact_registry_repository_description" {
   default     = "Container images for the Live On platform."
 }
 
-variable "firestore_location" {
-  description = "Location ID for the primary Firestore database (e.g. eur3)."
-  type        = string
-  default     = "eur3"
-}
-
 variable "skip_project_deletion" {
   description = "Prevent Terraform from deleting the project."
   type        = bool
@@ -145,7 +139,6 @@ variable "activate_apis" {
     "container.googleapis.com",
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
-    "firestore.googleapis.com",
     "monitoring.googleapis.com",
     "aiplatform.googleapis.com",
   ]

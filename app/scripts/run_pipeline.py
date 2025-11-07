@@ -32,10 +32,6 @@ from dataclasses import is_dataclass, asdict
 from datetime import datetime, date, timezone
 from pathlib import Path
 
-# Firestore pieces always available in repo
-from app.services.firestore import FirestoreContentRepository
-from app.services.publisher import FirestorePublisher
-
 # SQLite repo (new)
 from app.services.sqlite_repo import LocalSQLiteContentRepository
 
@@ -135,7 +131,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Live On content pipeline.")
     parser.add_argument(
         "--storage",
-        choices=["sqlite", "firestore"],
+        choices=["sqlite"],
         default=os.getenv("LIVEON_STORAGE", "sqlite").lower(),
         help="Select backing storage (default from LIVEON_STORAGE or 'sqlite').",
     )
@@ -318,11 +314,9 @@ def _build_pipeline(storage: str, db_path: str | None, feed_limit: int) -> Conte
     editor = EditorAgent(llm=_create_llm("editor"))
 
     storage = (storage or os.getenv("LIVEON_STORAGE", "sqlite")).lower()
-    repo = None
-    publisher = None
 
     repo = LocalSQLiteContentRepository(db_path=db_path)
-    publisher = LocalDBPublisher(repository=repo)  # type: ignore[call-arg]
+    publisher = LocalDBPublisher(repository=repo)
 
     pipeline = ContentPipeline(
         aggregator=aggregator,
