@@ -19,9 +19,9 @@ from app.utils.langchain_compat import AIMessage, BaseMessage
 from app.models.aggregator import FeedSource
 from app.services.aggregator import LongevityNewsAggregator
 from app.services.editor import EditorAgent
+from app.services.firestore import FirestoreContentRepository
 from app.services.pipeline import ContentPipeline
-from app.services.publisher import SQLitePublisher
-from app.services.sqlite_repo import LocalSQLiteContentRepository
+from app.services.publisher import FirestorePublisher
 from app.services.summarizer import SummarizerAgent
 
 LOGGER = logging.getLogger("liveon.pipeline")
@@ -275,8 +275,8 @@ def _build_pipeline() -> ContentPipeline:
     aggregator = LongevityNewsAggregator(feeds)
     summarizer = SummarizerAgent(llm=_create_llm("summarizer"))
     editor = EditorAgent(llm=_create_llm("editor"))
-    repository = LocalSQLiteContentRepository()
-    publisher = SQLitePublisher(repository=repository)
+    repository = FirestoreContentRepository()
+    publisher = FirestorePublisher(repository=repository)
     return ContentPipeline(
         aggregator=aggregator,
         summarizer=summarizer,
