@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: longevity-content-pipeline
+  labels:
+    app: longevity-pipeline           # <-- changed so it won't match your web Service
+spec:
+  schedule: "0 5 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0                 # <-- no job retries
+      activeDeadlineSeconds: 1800     # kill after 30 min if stuck
+      ttlSecondsAfterFinished: 3600   # auto-clean finished jobs after 1h
+      template:
+        metadata:
+          labels:
+            app: longevity-pipeline   # <-- keep labels distinct from web app
+        spec:
+          serviceAccountName: longevity-app
+          restartPolicy: Never        # <-- pod won't restart on failure
+          containers:
+            - name: pipeline-runner
+              image: IMAGE_PLACEHOLDER
+              imagePullPolicy: Always
+              command: ["python"]
+              args: ["-m", "app.scripts.run_pipeline"]
+              env:
+                - name: LIVEON_LOG_LEVEL
+                  value: INFO
+                - name: LIVEON_FEED_LIMIT
+                  value: "5"
+                - name: LIVEON_SUMMARIZER_MODEL
+                  value: vertex
+                - name: VERTEX_MODEL
+                  value: gemini-2.0-flash-lite-001
+                - name: GOOGLE_CLOUD_PROJECT
+                  value: live-on-473112
+                - name: GOOGLE_CLOUD_REGION
+                  value: europe-north2
+              resources:              # <-- Autopilot-friendly defaults; tune as needed
+                requests:
+                  cpu: "250m"
+                  memory: "512Mi"
+                  ephemeral-storage: "2Gi"
+                limits:
+                  cpu: "500m"
+                  memory: "1Gi"
+                  ephemeral-storage: "4Gi"
