@@ -26,7 +26,7 @@
           {% if featured_tip %}
             {{ featured_tip.content_body }}
           {% else %}
-            We're preparing the first batch of AI-authored coaching tips. Once Firestore is
+            We're preparing the first batch of AI-authored coaching tips. Once the database is
             seeded you'll see a highlighted recommendation here each day.
           {% endif %}
         </p>
@@ -59,7 +59,7 @@
         {% endfor %}
       </div>
     {% else %}
-      <p>No articles are available yet. Seed Firestore to preview dynamic content.</p>
+      <p>No articles are available yet. Seed the database to preview dynamic content.</p>
     {% endif %}
   </section>
 

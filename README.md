@@ -7,9 +7,9 @@ Application source code for the Live On platform will live here.
 Phases 1–4 from the implementation plan are complete and validated:
 
 - **Phase 1 – Foundation:** The repository, container build, GKE manifests, and CI/CD plumbing are in place so code changes build and deploy automatically.
-- **Phase 2 – Web experience:** The FastAPI frontend renders Firestore-backed content with graceful fallbacks for local development and includes navigation for the planned longevity resources.
-- **Phase 3 – AI content agents:** Aggregator, summariser, and editor agents collaborate through the content pipeline to generate, refine, and publish longevity articles via the Firestore publisher. The pipeline can be executed locally or on the scheduled Kubernetes CronJob using deterministic local responders or live LLMs.
-- **Phase 4 – Web integration & automation:** The FastAPI experience now consumes the pipeline output directly from Firestore, and the `run_pipeline` CronJob keeps articles fresh by running on an automated schedule with idempotent updates.
+- **Phase 2 – Web experience:** The FastAPI frontend renders SQLite-backed content with graceful fallbacks for local development and includes navigation for the planned longevity resources.
+- **Phase 3 – AI content agents:** Aggregator, summariser, and editor agents collaborate through the content pipeline to generate, refine, and publish longevity articles via the SQLite publisher. The pipeline can be executed locally or on the scheduled Kubernetes CronJob using deterministic local responders or live LLMs.
+- **Phase 4 – Web integration & automation:** The FastAPI experience now consumes the pipeline output directly from SQLite, and the `run_pipeline` CronJob keeps articles fresh by running on an automated schedule with idempotent updates.
 
 With the automated pipeline populating the site, the project is ready to proceed to Phase 5 tasks that deliver the interactive Longevity Coach experience.
 
@@ -27,8 +27,8 @@ routes:
 | `/tips` | Listing of recent coaching tips. |
 | `/coach` | Placeholder page for the upcoming interactive coach. |
 
-The web layer fetches data from Firestore via the content repository. If
-credentials are not configured during local development the application
+The web layer fetches data from the SQLite database via the content repository. If
+the database is not available during local development the application
 falls back to in-memory sample data so that the UI remains accessible.
 
 ### Ask the Coach API
@@ -72,10 +72,10 @@ Sample response (truncated for brevity):
 Every response concludes with the safety disclaimer to reinforce that the
 coach is an educational companion rather than a medical practitioner.
 
-## Firestore content module
+## SQLite content module
 
-Phase 2 introduces a Firestore-backed content system for articles and
-coaching tips. The data access layer lives in `app/services/firestore.py`
+Phase 2 introduces a SQLite-backed content system for articles and
+coaching tips. The data access layer lives in `app/services/sqlite_repo.py`
 with the corresponding domain models in `app/models/content.py`.
 
 ## Aggregator and publisher agents
@@ -91,25 +91,25 @@ development.
 Once an article has been drafted and edited, publishers in
 `app/services/publisher.py` persist the final content. The `GitPublisher`
 converts the payload into Markdown with YAML front matter and commits it
-to the repository, treating content as code. For dynamic Firestore-backed
-deployments, the `FirestorePublisher` writes articles directly to the
-`articles` collection, deduplicating updates so rerunning the pipeline
+to the repository, treating content as code. For dynamic SQLite-backed
+deployments, the `SQLitePublisher` writes articles directly to the
+`articles` table, deduplicating updates so rerunning the pipeline
 does not spam users with repeated posts. The corresponding tests in
 `app/tests/test_publisher.py` cover both workflows: the Git path
 initialises a temporary repository to validate commits, while the
-Firestore path ensures articles are stored with deterministic slugs and
+SQLite path ensures articles are stored with deterministic slugs and
 timestamps. This lays the groundwork for integrating the multi-agent
-workflow with GitOps tooling and the live Firestore content store in
+workflow with GitOps tooling and the live SQLite content store in
 later milestones.
 
 ### Automated content refresh
 
 The `app/scripts/run_pipeline.py` entry point orchestrates the aggregator,
-summariser, editor, and Firestore publisher so that fresh articles land in the
+summariser, editor, and SQLite publisher so that fresh articles land in the
 database without manual intervention. When deployed, the
 `k8s/cronjob-pipeline.yaml` manifest schedules this script to execute
 periodically, and the pipeline skips previously processed items to avoid
-duplicates. Because the FastAPI views read directly from Firestore, any new
+duplicates. Because the FastAPI views read directly from SQLite, any new
 articles are automatically surfaced on the homepage and `/articles` listing.
 
 ### Operations runbooks
@@ -152,7 +152,7 @@ articles are automatically surfaced on the homepage and `/articles` listing.
 The pipeline can now be executed end-to-end using
 `python -m app.scripts.run_pipeline`. The runner wires together the
 aggregator, summariser, editor, and publisher agents and publishes the
-resulting article directly to Firestore so it appears on the FastAPI
+resulting article directly to the SQLite database so it appears on the FastAPI
 frontend.
 
 By default the runner uses a deterministic local responder so it works
@@ -229,21 +229,15 @@ Launch the FastAPI app with Uvicorn:
 uvicorn app.main:app --reload
 ```
 
-Set `GOOGLE_CLOUD_PROJECT` and point to a Firestore emulator (or provide
-production credentials) to serve real content. Without credentials the
-app displays seeded placeholder data.
+The application uses a local SQLite database for content persistence.
 
-### Seeding Firestore
+### Seeding the Database
 
-The `app/scripts/seed_content.py` script populates the Firestore
-collections with a starter article and tip. The script only inserts
-documents when the `articles` or `tips` collection is empty, making it
+The `app/scripts/seed_content.py` script populates the database
+with a starter article and tip. The script only inserts
+documents when the `articles` or `tips` table is empty, making it
 safe to run multiple times during development.
 
 ```bash
-export GOOGLE_CLOUD_PROJECT=<your-project-id>
 python -m app.scripts.seed_content
 ```
-
-Use the `FIRESTORE_EMULATOR_HOST` environment variable if you prefer to
-test against the Firestore emulator instead of a live project.

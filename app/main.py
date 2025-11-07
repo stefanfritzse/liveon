@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.content import Article, Tip
 from app.services.coach import CoachAgent, create_coach_llm
-from app.services.firestore import FirestoreContentRepository
+from app.services.sqlite_repo import LocalSQLiteContentRepository
 from app.utils.text import markdown_to_plain_text
 
 app = FastAPI(title="Live On Longevity Coach")
@@ -178,60 +178,9 @@ class ContentRepository(Protocol):
         """Return the most recent tip when available."""
 
 
-@dataclass(slots=True)
-class _InMemoryContentRepository:
-    """Fallback repository used when Firestore is unavailable during local dev."""
-
-    _articles: list[Article]
-    _tips: list[Tip]
-
-    def __init__(self) -> None:
-        now = datetime.now(timezone.utc)
-        self._articles = [
-            Article(
-                id="welcome-to-live-on",
-                title="Welcome to Live On",
-                content_body=(
-                    "Live On keeps you informed about actionable longevity science. "
-                    "This in-memory article appears when Firestore is not configured so "
-                    "that the web experience remains usable during development."
-                ),
-                summary="An introduction article displayed when Firestore access is unavailable.",
-                source_urls=["https://cloud.google.com/firestore/docs"],
-                tags=["introduction", "platform"],
-                published_date=now,
-            ),
-        ]
-        self._tips = [
-            Tip(
-                id="stay-hydrated",
-                title="Hydration Reminder",
-                content_body="Staying hydrated supports cellular health and overall longevity.",
-                tags=["habit", "daily"],
-                published_date=now,
-            )
-        ]
-
-    def get_latest_articles(self, *, limit: int = 5) -> list[Article]:
-        return sorted(self._articles, key=lambda article: article.published_date, reverse=True)[:limit]
-
-    def get_article(self, article_id: str) -> Article | None:
-        return next((article for article in self._articles if article.id == article_id), None)
-
-    def get_latest_tips(self, *, limit: int = 5) -> list[Tip]:
-        return sorted(self._tips, key=lambda tip: tip.published_date, reverse=True)[:limit]
-
-    def get_latest_tip(self) -> Tip | None:
-        return next(iter(self.get_latest_tips(limit=1)), None)
-
-
 def get_repository() -> ContentRepository:
-    """Resolve the content repository with graceful fallback when Firestore is unavailable."""
-
-    try:
-        return FirestoreContentRepository()
-    except (DefaultCredentialsError, GoogleAPIError):
-        return _InMemoryContentRepository()
+    """Return a new repository instance for each request."""
+    return LocalSQLiteContentRepository()
 
 
 def _safe_fetch(callback: Callable[[], list[Article] | list[Tip]]) -> list[Article] | list[Tip]:

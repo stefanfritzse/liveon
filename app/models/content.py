@@ -1,11 +1,18 @@
-"""Domain models for content stored in Firestore."""
+"""Domain models for application content."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Protocol
 
-from google.cloud.firestore_v1 import DocumentSnapshot
+
+class DocumentSnapshot(Protocol):
+    """Duck-typed version of a Firestore DocumentSnapshot."""
+
+    id: str
+
+    def to_dict(self) -> dict[str, Any] | None:
+        ...
 
 
 def _default_datetime() -> datetime:
@@ -15,7 +22,7 @@ def _default_datetime() -> datetime:
 
 @dataclass(slots=True)
 class Article:
-    """Representation of an article stored in the Firestore ``articles`` collection."""
+    """Domain model for a promotable article."""
 
     title: str
     content_body: str
@@ -27,7 +34,7 @@ class Article:
 
     @classmethod
     def from_document(cls, document: DocumentSnapshot) -> "Article":
-        """Create an :class:`Article` from a Firestore document snapshot."""
+        """Create an :class:`Article` from a document snapshot."""
         data = document.to_dict() or {}
         return cls(
             id=document.id,
@@ -40,7 +47,7 @@ class Article:
         )
 
     def to_document(self) -> dict[str, Any]:
-        """Serialise the article to a Firestore document payload."""
+        """Serialise the article to a document payload."""
         return {
             "title": self.title,
             "content_body": self.content_body,
@@ -53,7 +60,7 @@ class Article:
 
 @dataclass(slots=True)
 class Tip:
-    """Representation of a short coaching tip stored in the Firestore ``tips`` collection."""
+    """Domain model for a short coaching tip."""
 
     title: str
     content_body: str
@@ -63,7 +70,7 @@ class Tip:
 
     @classmethod
     def from_document(cls, document: DocumentSnapshot) -> "Tip":
-        """Create a :class:`Tip` from a Firestore document snapshot."""
+        """Create a :class:`Tip` from a document snapshot."""
         data = document.to_dict() or {}
         return cls(
             id=document.id,
@@ -74,7 +81,7 @@ class Tip:
         )
 
     def to_document(self) -> dict[str, Any]:
-        """Serialise the tip to a Firestore document payload."""
+        """Serialise the tip to a document payload."""
         return {
             "title": self.title,
             "content_body": self.content_body,
