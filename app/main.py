@@ -15,8 +15,6 @@ from typing import TYPE_CHECKING, Protocol
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from google.api_core.exceptions import GoogleAPIError
-from google.auth.exceptions import DefaultCredentialsError
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.content import Article, Tip
@@ -56,6 +54,7 @@ _DEFAULT_COACH_PROMPTS: tuple[dict[str, str], ...] = (
 )
 
 
+@lru_cache
 def _coach_prompt_suggestions() -> tuple[dict[str, str], ...]:
     """Return curated coach prompt presets, optionally overridden by environment."""
 
@@ -88,6 +87,7 @@ def _coach_prompt_suggestions() -> tuple[dict[str, str], ...]:
                 return tuple(prompts)
     return _DEFAULT_COACH_PROMPTS
 
+
 def _build_debug_detail(exc: Exception) -> dict[str, str]:
     """Return a serialisable mapping describing ``exc`` for debugging."""
 
@@ -101,6 +101,7 @@ def _build_debug_detail(exc: Exception) -> dict[str, str]:
 def healthz():
     return {"ok": True}
 
+@lru_cache
 def _cached_coach_agent() -> CoachAgent:
     """Create a singleton CoachAgent backed by the configured language model."""
 
@@ -113,7 +114,7 @@ def get_coach_agent() -> CoachAgent:
 
     try:
         return _cached_coach_agent()
-    except (DefaultCredentialsError, RuntimeError) as exc:
+    except RuntimeError as exc:
         logger.exception("Coach agent initialisation failed", extra={"event": "coach.agent_init"})
         debug_detail = _build_debug_detail(exc)
         raise HTTPException(
@@ -309,15 +310,12 @@ async def ask_coach_endpoint(
 
     try:
         answer = agent.ask(question)
-    except (DefaultCredentialsError, GoogleAPIError, RuntimeError) as exc:
+    except RuntimeError as exc:
         logger.exception(
             "Coach language model unavailable",
             extra={"event": "coach.error", "reason": "llm"},
         )
-
         debug_detail = _build_debug_detail(exc)
-
-
         raise HTTPException(
             status_code=503,
             detail={

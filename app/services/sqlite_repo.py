@@ -1,7 +1,7 @@
 """SQLite-backed content repository for the Live On app.
 
-This is a drop-in replacement for FirestoreContentRepository with the same surface
-the pipeline/publisher rely on:
+This repository provides the following services that the pipeline/publisher
+rely on:
   - get_article, save_article, find_article_by_source_url
   - get_latest_articles
   - (tips) get_tip, save_tip, get_latest_tips, get_latest_tip, find_tip_by_title, find_tip_by_tags
@@ -12,8 +12,7 @@ that format paths.
 Design notes
 ------------
 - Data is stored verbatim as the model's `to_document()` JSON in a `data` column.
-- We construct a tiny “snapshot” shim to call `Article.from_document(...)` / `Tip.from_document(...)`
-  exactly like the Firestore repo does, so no model changes are needed.
+- We construct a tiny “snapshot” shim to call `Article.from_document(...)` / `Tip.from_document(...)` so no model changes are needed.
 - Minimal secondary columns (title, published_date) are denormalized for ordering and lookups.
 - Source URL lookups use a small side table `article_sources(normalized_url -> article_id)`.
 - WAL mode and foreign_keys are enabled. Suitable for single-writer, multi-reader local use.
@@ -68,11 +67,11 @@ DEFAULT_TIPS_COLLECTION: Final[str] = "tips"
 
 
 # ---------------------------------------------------------------------------
-# Small helpers that emulate Firestore snapshots and collections
+# Small helpers that emulate document snapshots and collections
 # ---------------------------------------------------------------------------
 
 class _DictSnapshot:
-    """Duck-type of Firestore DocumentSnapshot for model.from_document(...)"""
+    """Duck-type of DocumentSnapshot for model.from_document(...)"""
 
     __slots__ = ("id", "_data", "exists")
 
@@ -486,9 +485,8 @@ class LocalSQLiteContentRepository:
         return secrets.token_urlsafe(15).replace("-", "_").replace(".", "_")
 
 
-# Compatibility with Firestore module's factory naming
 def create_repository(**kwargs: Any) -> LocalSQLiteContentRepository:
-    """Factory helper to mirror the Firestore module API."""
+    """Factory helper to create a repository instance."""
     # Allow env overrides for convenience
     db_path = kwargs.pop("db_path", None) or os.getenv("LIVEON_DB_PATH")
     return LocalSQLiteContentRepository(db_path=db_path, **kwargs)
