@@ -40,24 +40,18 @@ The tip CronJob relies on the following environment variables and CLI flags:
 - `LIVEON_ALLOW_LOCAL_LLM` or the `--allow-local-llm` flag – Permit the local
   stub responder when running in managed environments (disabled by default).
 - `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_REGION` – Required for the Firestore
-  repository and Vertex AI integration.
+  repository.
 
-The CronJob manifest sets `--limit-per-feed 4`, `--model-provider vertex`, and
-`--model gemini-2.0-flash-lite-001` so the task runs after the article pipeline
-with a lightweight Vertex AI model.
+The CronJob manifest sets `--limit-per-feed 4` and uses the local Ollama model.
 
 ## Coach API configuration
 
-The FastAPI deployment exposes `/api/ask`, which depends on an LLM backend for
-answers. Configure the following environment variables (defaults shown below)
-to point the service at Vertex AI or OpenAI models:
+The FastAPI deployment exposes `/api/ask`, which depends on a locally running
+Ollama LLM. Ensure that the `phi3:14b-medium-4k-instruct-q4_K_M` model is
+available.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `LIVEON_COACH_MODEL` | `local` | Selects the LLM provider (`vertex`, `openai`, or `local`). |
-| `LIVEON_COACH_VERTEX_MODEL` | `chat-bison` | Vertex AI chat model to invoke when the provider is `vertex`. |
-| `LIVEON_VERTEX_LOCATION` | _unset_ | Optional region for Vertex AI API calls. |
-| `LIVEON_COACH_OPENAI_MODEL` | `gpt-4o-mini` | OpenAI chat model to invoke when the provider is `openai`. |
 | `LIVEON_MODEL_TEMPERATURE` | `0.2` | Sampling temperature forwarded to the configured LLM. |
 | `LIVEON_MODEL_MAX_OUTPUT_TOKENS` | `1024` | Maximum tokens returned per response. |
 

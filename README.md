@@ -35,22 +35,14 @@ falls back to in-memory sample data so that the UI remains accessible.
 
 The interactive coach exposes a POST endpoint at `/api/ask`. Clients submit a
 JSON payload containing the user's prompt and receive guidance generated
-directly by Vertex AI. The request body must supply a `question` string and the
+directly by the local Ollama LLM. The request body must supply a `question` string and the
 response contains two fields:
 
-- `answer` – Vertex AI's guidance tailored to the submitted question.
+- `answer` – The Ollama model's guidance tailored to the submitted question.
 - `disclaimer` – A mandatory safety reminder appended to every reply.
 
-The coach relies exclusively on Vertex AI chat models. Provide Google
-Application Default Credentials and configure any of the following environment
-variables to fine-tune the integration:
-
-| Variable | Description |
-| --- | --- |
-| `LIVEON_COACH_VERTEX_MODEL` | Vertex AI chat model name (defaults to `chat-bison`). |
-| `LIVEON_VERTEX_LOCATION` | Optional Vertex AI region override (e.g. `us-central1`). |
-| `LIVEON_MODEL_TEMPERATURE` | Sampling temperature applied to the chat model (default: `0.2`). |
-| `LIVEON_MODEL_MAX_OUTPUT_TOKENS` | Maximum tokens returned by the model (default: `1024`). |
+The coach relies on a locally running Ollama model. Ensure that the
+`phi3:14b-medium-4k-instruct-q4_K_M` model is available.
 
 Example `curl` invocation against a locally running server:
 
@@ -156,10 +148,7 @@ resulting article directly to Firestore so it appears on the FastAPI
 frontend.
 
 By default the runner uses a deterministic local responder so it works
-without external LLM access. To invoke Vertex AI or OpenAI models instead,
-set the environment variables `LIVEON_SUMMARIZER_MODEL` and
-`LIVEON_EDITOR_MODEL` to `vertex` or `openai` and provide the corresponding
-credentials. Additional configuration options include:
+without external LLM access.
 
 | Variable | Purpose |
 | --- | --- |

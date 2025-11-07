@@ -116,17 +116,6 @@ def _load_feeds() -> list[FeedSource]:
     return feeds
 
 
-def _running_in_managed_environment() -> bool:
-    """Return True when the script appears to be running in production infrastructure."""
-    env = os.getenv("LIVEON_ENV", "").lower()
-    return bool(
-        os.getenv("GOOGLE_CLOUD_PROJECT")
-        or os.getenv("GCP_PROJECT")
-        or env in {"prod", "production"}
-        or os.getenv("KUBERNETES_SERVICE_HOST")
-    )
-
-
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Live On content pipeline.")
     parser.add_argument(
@@ -153,18 +142,11 @@ def _create_llm(agent_label: str) -> "SupportsInvoke":
     """Instantiate a LangChain compatible chat model for the given agent."""
     provider_env_key = f"LIVEON_{agent_label.upper()}_MODEL"
     provider_env_value = os.getenv(provider_env_key)
-    provider = (provider_env_value or "local").lower()
+    provider = (provider_env_value or "ollama").lower()
 
-    if provider == "vertex":  # pragma: no cover - optional dependency
-        try:
-            from langchain_google_vertexai import ChatVertexAI
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise SystemExit("Install langchain-google-vertexai to use the Vertex AI chat model") from exc
-
-        return ChatVertexAI(
-            model=os.getenv("VERTEX_MODEL", "chat-bison"),
-            temperature=float(os.getenv("LIVEON_MODEL_TEMPERATURE", "0.2")),
-        )
+    if provider == "ollama":
+        from langchain_community.chat_models import ChatOllama
+        return ChatOllama(model='phi3:14b-medium-4k-instruct-q4_K_M')
 
     if provider in {"openai", "gpt"}:  # pragma: no cover - optional dependency
         try:
@@ -177,20 +159,6 @@ def _create_llm(agent_label: str) -> "SupportsInvoke":
             temperature=float(os.getenv("LIVEON_MODEL_TEMPERATURE", "0.2")),
         )
 
-    # Default: deterministic responder so pipeline runs without external LLMs.
-    #allow_local_stub = str(os.getenv("LIVEON_ALLOW_LOCAL_LLM", "")).lower() in {"1", "true", "yes", "on"}
-    allow_local_stub = True
-    if (
-        agent_label.lower() == "summarizer"
-        and provider == "local"
-        and _running_in_managed_environment()
-        and not allow_local_stub
-        and provider_env_value is None
-    ):
-        raise RuntimeError(
-            "Local summarizer stubs are disabled in managed environments. "
-            "Set LIVEON_SUMMARIZER_MODEL to a production model or opt in via LIVEON_ALLOW_LOCAL_LLM=true."
-        )
     return LocalJSONResponder(agent_label)
 
 

@@ -14,12 +14,7 @@ def test_summarizer_local_stub_allowed_with_explicit_opt_in(monkeypatch: pytest.
     _clear_env(
         monkeypatch,
         "LIVEON_SUMMARIZER_MODEL",
-        "LIVEON_ENV",
-        "GCP_PROJECT",
-        "KUBERNETES_SERVICE_HOST",
     )
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "live-on-473112")
-    monkeypatch.setenv("LIVEON_ALLOW_LOCAL_LLM", "true")
 
     llm = _create_llm("summarizer")
 
