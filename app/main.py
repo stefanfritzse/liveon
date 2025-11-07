@@ -21,9 +21,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.content import Article, Tip
 from app.services.coach import CoachAgent, create_coach_llm
-from app.services.firestore import FirestoreContentRepository
 from app.utils.text import markdown_to_plain_text
-from app.services.sqlite_repo import LocalSQLiteContentRepository 
+from app.services.sqlite_repo import LocalSQLiteContentRepository
 
 app = FastAPI(title="Live On Longevity Coach")
 
@@ -181,7 +180,7 @@ class ContentRepository(Protocol):
 
 @dataclass(slots=True)
 class _InMemoryContentRepository:
-    """Fallback repository used when Firestore is unavailable during local dev."""
+    """Fallback repository used when the database is unavailable during local dev."""
 
     _articles: list[Article]
     _tips: list[Tip]
@@ -194,11 +193,11 @@ class _InMemoryContentRepository:
                 title="Welcome to Live On",
                 content_body=(
                     "Live On keeps you informed about actionable longevity science. "
-                    "This in-memory article appears when Firestore is not configured so "
+                    "This in-memory article appears when the database is not configured so "
                     "that the web experience remains usable during development."
                 ),
-                summary="An introduction article displayed when Firestore access is unavailable.",
-                source_urls=["https://cloud.google.com/firestore/docs"],
+                summary="An introduction article displayed when database access is unavailable.",
+                source_urls=[],
                 tags=["introduction", "platform"],
                 published_date=now,
             ),
@@ -244,28 +243,12 @@ def get_repository() -> ContentRepository:
 
     # default: Firestore (with graceful fallback)
     try:
-        return FirestoreContentRepository()
-    except (DefaultCredentialsError, GoogleAPIError):
+        db_path = os.getenv("LIVEON_DB_PATH")
+        return LocalSQLiteContentRepository(db_path=db_path)
+    except Exception as exc:
+        logger.exception("SQLite repository init failed; falling back to in-memory.")
         return _InMemoryContentRepository()
 
-
-
-def _safe_fetch(callback: Callable[[], list[Article] | list[Tip]]) -> list[Article] | list[Tip]:
-    """Execute a repository call, swallowing Firestore errors for a smooth UX."""
-
-    try:
-        return callback()
-    except (DefaultCredentialsError, GoogleAPIError):
-        return []
-
-
-def _safe_fetch_tip(callback: Callable[[], Tip | None]) -> Tip | None:
-    """Execute a repository call returning a single tip with graceful error handling."""
-
-    try:
-        return callback()
-    except (DefaultCredentialsError, GoogleAPIError):
-        return None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -275,9 +258,9 @@ async def home(
 ) -> HTMLResponse:
     """Render the homepage with highlights from articles and tips."""
 
-    articles = _safe_fetch(lambda: repository.get_latest_articles(limit=3))
-    featured_tip = _safe_fetch_tip(repository.get_latest_tip)
-    tips = _safe_fetch(lambda: repository.get_latest_tips(limit=4))
+    articles = repository.get_latest_articles(limit=3)
+    featured_tip = repository.get_latest_tip()
+    tips = repository.get_latest_tips(limit=4)
     recent_tips = [tip for tip in tips if not featured_tip or tip != featured_tip]
     return templates.TemplateResponse(
         request,
@@ -297,7 +280,7 @@ async def fetch_latest_tip(
 ) -> JSONResponse:
     """Return the most recent coaching tip for client-side integrations."""
 
-    tip = _safe_fetch_tip(repository.get_latest_tip)
+    tip = repository.get_latest_tip()
     if tip is None:
         return JSONResponse({"detail": "No tips available"}, status_code=404)
 
@@ -360,7 +343,7 @@ async def list_articles(
 ) -> HTMLResponse:
     """Render a page containing the latest longevity articles."""
 
-    articles = _safe_fetch(lambda: repository.get_latest_articles(limit=20))
+    articles = repository.get_latest_articles(limit=20)
     return templates.TemplateResponse(
         request,
         "articles/list.html",
@@ -379,11 +362,7 @@ async def article_detail(
 ) -> HTMLResponse:
     """Render the article detail page."""
 
-    try:
-        article = repository.get_article(article_id)
-    except (DefaultCredentialsError, GoogleAPIError) as exc:  # pragma: no cover - defensive
-        raise HTTPException(status_code=503, detail="Content service unavailable") from exc
-
+    article = repository.get_article(article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
 
@@ -404,7 +383,7 @@ async def list_tips(
 ) -> HTMLResponse:
     """Render a page containing the latest coaching tips."""
 
-    tips = _safe_fetch(lambda: repository.get_latest_tips(limit=20))
+    tips = repository.get_latest_tips(limit=20)
     featured_tip = tips[0] if tips else None
     recent_tips = tips[1:] if len(tips) > 1 else []
     return templates.TemplateResponse(

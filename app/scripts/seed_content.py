@@ -1,28 +1,26 @@
-"""Seed Firestore with placeholder content for Phase 2 development."""
+"""Seed the local database with placeholder content for development."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from app.models.content import Article, Tip
-from app.services.firestore import FirestoreContentRepository
+from app.services.sqlite_repo import LocalSQLiteContentRepository
 
 
 def main() -> None:
-    repository = FirestoreContentRepository()
+    repository = LocalSQLiteContentRepository()
 
     seed_articles = [
         Article(
             title="Welcome to Live On",
             content_body=(
                 "The Live On Longevity Coach keeps you informed about the science of living longer. "
-                "This placeholder article is stored in Firestore so the web experience can be wired up "
+                "This placeholder article is stored in the database so the web experience can be wired up "
                 "before the AI pipeline goes live."
             ),
-            summary="An introduction article used to validate Firestore integration.",
-            source_urls=[
-                "https://cloud.google.com/firestore/docs",  # Example citation for developer reference
-            ],
+            summary="An introduction article used to validate database integration.",
+            source_urls=[],
             tags=["introduction", "platform"],
             published_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
         ),
