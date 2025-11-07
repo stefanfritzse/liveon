@@ -26,7 +26,7 @@ class EditedArticle:
         include_takeaways: bool = True,
         include_disclaimer: bool = True,
     ) -> Article:
-        """Convert the edited payload into the Firestore-aware :class:`Article`."""
+        """Convert the edited payload into the app :class:`Article`."""
 
         sections: list[str] = [self.body.strip()]
 

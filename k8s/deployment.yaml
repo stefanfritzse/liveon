@@ -14,11 +14,10 @@ spec:
       labels:
         app: longevity-app
     spec:
-      serviceAccountName: longevity-app
       containers:
         - name: longevity-app
           image: IMAGE_PLACEHOLDER
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           env:
@@ -28,21 +27,7 @@ spec:
               value: /data/content.db
               volumeMounts:
             - name: sqlite-data
-              mountPath: /data              
-            - name: LIVEON_COACH_MODEL
-              value: "vertex"
-            - name: LIVEON_COACH_VERTEX_MODEL
-              value: "gemini-2.0-flash-lite-001"
-            - name: LIVEON_VERTEX_LOCATION
-              value: "us-central1"
-            - name: LIVEON_VERTEX_PROJECT
-              value: "live-on-473112"
-            - name: LIVEON_COACH_OPENAI_MODEL
-              value: "gpt-4o-mini"
-            - name: LIVEON_MODEL_TEMPERATURE
-              value: "0.2"
-            - name: LIVEON_MODEL_MAX_OUTPUT_TOKENS
-              value: "1024"
+              mountPath: /data
           resources:
             requests:
               cpu: 100m

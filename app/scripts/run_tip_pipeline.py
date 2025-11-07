@@ -104,18 +104,6 @@ def _load_feeds() -> list[FeedSource]:
     return feeds
 
 
-def _running_in_managed_environment() -> bool:
-    """Return ``True`` when the script appears to run in production infrastructure."""
-
-    env = os.getenv("LIVEON_ENV", "").lower()
-    return bool(
-        os.getenv("GOOGLE_CLOUD_PROJECT")
-        or os.getenv("GCP_PROJECT")
-        or env in {"prod", "production"}
-        or os.getenv("KUBERNETES_SERVICE_HOST")
-    )
-
-
 def _env_bool(variable: str, default: bool = False) -> bool:
     value = os.getenv(variable)
     if value is None:
@@ -189,14 +177,9 @@ def _create_tip_llm(provider: str, *, model_name: str | None, allow_local_stub: 
     provider_key = provider.lower()
     temperature = float(os.getenv("LIVEON_MODEL_TEMPERATURE", "0.2"))
 
-    if provider_key == "vertex":  # pragma: no cover - optional dependency
-        try:
-            from langchain_google_vertexai import ChatVertexAI
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise SystemExit("Install langchain-google-vertexai to use the Vertex AI chat model") from exc
-
-        model_id = model_name or os.getenv("LIVEON_TIP_VERTEX_MODEL") or os.getenv("VERTEX_MODEL") or "chat-bison"
-        return ChatVertexAI(model=model_id, temperature=temperature)
+    if provider_key == "ollama":
+        from langchain_community.chat_models import ChatOllama
+        return ChatOllama(model='phi3:14b-medium-4k-instruct-q4_K_M')
 
     if provider_key in {"openai", "gpt"}:  # pragma: no cover - optional dependency
         try:
@@ -209,12 +192,6 @@ def _create_tip_llm(provider: str, *, model_name: str | None, allow_local_stub: 
 
     if provider_key != "local":
         raise SystemExit(f"Unsupported model provider: {provider}")
-
-    if _running_in_managed_environment() and not allow_local_stub:
-        raise RuntimeError(
-            "Local tip generator stubs are disabled in managed environments. "
-            "Set --model-provider to a production model or opt-in via --allow-local-llm."
-        )
 
     return TipLocalJSONResponder()
 

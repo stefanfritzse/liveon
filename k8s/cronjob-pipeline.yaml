@@ -20,12 +20,11 @@ spec:
           labels:
             app: longevity-pipeline   # <-- keep labels distinct from web app
         spec:
-          serviceAccountName: longevity-app
           restartPolicy: Never        # <-- pod won't restart on failure
           containers:
             - name: pipeline-runner
               image: IMAGE_PLACEHOLDER
-              imagePullPolicy: Always
+              imagePullPolicy: IfNotPresent
               command: ["python"]
               args: ["-m", "app.scripts.run_pipeline"]
               env:
@@ -34,13 +33,7 @@ spec:
                 - name: LIVEON_FEED_LIMIT
                   value: "5"
                 - name: LIVEON_SUMMARIZER_MODEL
-                  value: vertex
-                - name: VERTEX_MODEL
-                  value: gemini-2.0-flash-lite-001
-                - name: GOOGLE_CLOUD_PROJECT
-                  value: live-on-473112
-                - name: GOOGLE_CLOUD_REGION
-                  value: europe-north2
+                  value: ollama
               resources:              # <-- Autopilot-friendly defaults; tune as needed
                 requests:
                   cpu: "250m"

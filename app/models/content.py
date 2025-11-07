@@ -13,7 +13,7 @@ def _default_datetime() -> datetime:
 
 @dataclass(slots=True)
 class Article:
-    """Representation of an article stored in the Firestore ``articles`` collection."""
+    """Representation of an article."""
 
     title: str
     content_body: str
@@ -26,7 +26,7 @@ class Article:
 
 @dataclass(slots=True)
 class Tip:
-    """Representation of a short coaching tip stored in the Firestore ``tips`` collection."""
+    """Representation of a short coaching tip."""
 
     title: str
     content_body: str

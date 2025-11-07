@@ -229,7 +229,7 @@ from functools import lru_cache
 
 @lru_cache()
 def get_repository() -> ContentRepository:
-    """Resolve the content repository (SQLite locally, Firestore in cloud)."""
+    """Resolve the content repository."""
     #storage = (os.getenv("LIVEON_STORAGE") or "sqlite").strip().lower()
     storage = "sqlite"
 
@@ -241,7 +241,7 @@ def get_repository() -> ContentRepository:
             logger.exception("SQLite repository init failed; falling back to in-memory.")
             return _InMemoryContentRepository()
 
-    # default: Firestore (with graceful fallback)
+    # default: SQLite (with graceful fallback)
     try:
         db_path = os.getenv("LIVEON_DB_PATH")
         return LocalSQLiteContentRepository(db_path=db_path)

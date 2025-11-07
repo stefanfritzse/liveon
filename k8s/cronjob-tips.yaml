@@ -20,12 +20,11 @@ spec:
           labels:
             app: longevity-tip-pipeline
         spec:
-          serviceAccountName: longevity-app
           restartPolicy: Never
           containers:
             - name: tip-pipeline-runner
               image: IMAGE_PLACEHOLDER
-              imagePullPolicy: Always
+              imagePullPolicy: IfNotPresent
               command: ["python"]
               args:
                 - "-m"
@@ -33,16 +32,10 @@ spec:
                 - "--limit-per-feed"
                 - "4"
                 - "--model-provider"
-                - "vertex"
-                - "--model"
-                - "gemini-2.0-flash-lite-001"
+                - "ollama"
               env:
                 - name: LIVEON_LOG_LEVEL
                   value: INFO
-                - name: GOOGLE_CLOUD_PROJECT
-                  value: live-on-473112
-                - name: GOOGLE_CLOUD_REGION
-                  value: europe-north2
               resources:
                 requests:
                   cpu: "250m"

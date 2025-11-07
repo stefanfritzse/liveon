@@ -1,16 +1,14 @@
-"""Conversational coach agent that generates responses using Vertex AI."""
+"""Conversational coach agent that generates responses using Ollama."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 import os
 
-import google.auth
-from google.auth.exceptions import DefaultCredentialsError
-
 from app.models.coach import CoachAnswer, CoachQuestion
 
 try:  # pragma: no cover - optional dependency guard
+    from langchain_community.chat_models import ChatOllama
     from langchain_core.prompts import ChatPromptTemplate
 except ImportError:  # pragma: no cover - handled gracefully in CoachAgent
     ChatPromptTemplate = None  # type: ignore[assignment]
@@ -32,7 +30,7 @@ _DEFAULT_DISCLAIMER = (
 
 @dataclass(slots=True)
 class CoachAgent:
-    """High level orchestration for answering user questions with Vertex AI."""
+    """High level orchestration for answering user questions with Ollama."""
 
     llm: Any
     safety_instructions: str = _DEFAULT_SAFETY_INSTRUCTIONS
@@ -139,53 +137,9 @@ class LocalCoachResponder:
 
 
 def create_coach_llm() -> Any:
-    """Construct a Vertex AI chat client for the coach agent."""
+    """Construct an Ollama chat client for the coach agent."""
 
-    try:  # pragma: no cover - optional dependency
-        from langchain_google_vertexai import ChatVertexAI
-    except ImportError as exc:  # pragma: no cover - environment dependent
-        raise RuntimeError(
-            "The coach requires 'langchain-google-vertexai' to use Vertex AI chat models."
-        ) from exc
-
-    try:  # pragma: no cover - credential discovery depends on environment
-        google.auth.default()
-    except DefaultCredentialsError as exc:  # pragma: no cover - environment dependent
-        raise RuntimeError(
-            "Google Application Default Credentials are required to access Vertex AI for the coach."
-        ) from exc
-
-    temperature = _coerce_float(os.getenv("LIVEON_MODEL_TEMPERATURE"), default=0.2)
-    max_tokens = _coerce_int(os.getenv("LIVEON_MODEL_MAX_OUTPUT_TOKENS"), default=1024)
-    model_name = os.getenv("LIVEON_COACH_VERTEX_MODEL", os.getenv("LIVEON_VERTEX_MODEL", "chat-bison"))
-    location = os.getenv("LIVEON_VERTEX_LOCATION")
-    project = (
-        os.getenv("LIVEON_VERTEX_PROJECT")
-        or os.getenv("GCP_PROJECT")
-        or os.getenv("GOOGLE_CLOUD_PROJECT")
-    )
-
-    is_gemini_model = model_name.lower().startswith("gemini-")
-
-    kwargs: dict[str, Any] = {
-        "model_name": model_name,
-        "temperature": temperature,
-        "max_output_tokens": max_tokens,
-    }
-    if location:
-        kwargs["location"] = location
-
-    if is_gemini_model and project:
-        kwargs["project"] = project
-
-    if is_gemini_model:
-        # Gemini chat models require the generative Vertex AI client which ships
-        # with the recent langchain-google-vertexai releases. Passing the
-        # project ensures the client targets the correct tenancy when
-        # constructing Gemini endpoints.
-        return ChatVertexAI(**kwargs)
-
-    return ChatVertexAI(**kwargs)
+    return ChatOllama(model='phi3:14b-medium-4k-instruct-q4_K_M')
 
 
 def _separate_disclaimer(text: str, *, default: str) -> tuple[str, str]:
@@ -225,21 +179,3 @@ def _extract_question_from_messages(messages: Any) -> str:
                 if isinstance(content, list):
                     return "".join(str(part) for part in content).strip()
     return ""
-
-
-def _coerce_float(value: str | None, *, default: float) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _coerce_int(value: str | None, *, default: int) -> int:
-    try:
-        if value is None:
-            return default
-        return int(value)
-    except (TypeError, ValueError):
-        return default

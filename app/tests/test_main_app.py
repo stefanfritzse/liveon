@@ -12,8 +12,6 @@ from types import ModuleType
 import pytest
 from fastapi.testclient import TestClient
 
-from google.api_core.exceptions import GoogleAPIError
-
 from app.main import ContentRepository, app, get_coach_agent, get_repository
 from app.models.coach import CoachAnswer
 from app.models.content import Article, Tip
@@ -286,25 +284,6 @@ def test_ask_coach_endpoint_handles_llm_failures(client: Callable[..., TestClien
     }
 
 
-def test_ask_coach_endpoint_treats_google_api_errors_as_llm_failures(
-    client: Callable[..., TestClient]
-) -> None:
-    repository = StubContentRepository(tips=[])
-    agent = _FailingCoachAgent(GoogleAPIError("vertex rpc failure"))
-    test_client = client(repository, agent=agent)
-
-    response = test_client.post("/api/ask", json={"question": "Share supplement advice"})
-
-    assert response.status_code == 503
-    payload = response.json()
-    assert payload == {
-        "detail": {
-            "message": "Coach language model unavailable",
-            "debug": {"type": "GoogleAPIError", "message": "vertex rpc failure"},
-        }
-    }
-
-
 def test_ask_coach_endpoint_exposes_agent_initialisation_debug(
     monkeypatch: pytest.MonkeyPatch, client: Callable[..., TestClient]
 ) -> None:
@@ -336,44 +315,3 @@ def test_ask_coach_endpoint_exposes_agent_initialisation_debug(
 
 
 
-def test_gemini_configuration_does_not_trigger_coach_503(
-    monkeypatch: pytest.MonkeyPatch, client: Callable[..., TestClient]
-) -> None:
-    from app import main as main_module
-    from app.services import coach as coach_module
-
-    created_kwargs: dict[str, Any] = {}
-
-    class _GeminiResponder:
-        def __init__(self, **kwargs: Any) -> None:
-            created_kwargs.update(kwargs)
-
-        def invoke(self, message: str) -> str:  # pragma: no cover - helper behaviour
-            return "Gemini says hello.\n\nDisclaimer: Stay curious."
-
-    fake_module = ModuleType("langchain_google_vertexai")
-    fake_module.ChatVertexAI = _GeminiResponder  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "langchain_google_vertexai", fake_module)
-    monkeypatch.setattr(coach_module, "ChatPromptTemplate", _SimplePromptTemplate, raising=False)
-    monkeypatch.setattr(coach_module.google.auth, "default", lambda: (object(), "proj"), raising=False)
-    monkeypatch.setenv("LIVEON_COACH_VERTEX_MODEL", "gemini-1.5-flash")
-    monkeypatch.setenv("LIVEON_VERTEX_LOCATION", "us-central1")
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "live-on-test")
-
-    main_module._cached_coach_agent.cache_clear()
-
-    repository = StubContentRepository(tips=[])
-    test_client = client(repository)
-
-    try:
-        response = test_client.post("/api/ask", json={"question": "Share recovery ideas"})
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["answer"].startswith("Gemini says hello.")
-        assert payload["disclaimer"] == "Stay curious."
-        assert created_kwargs["model_name"] == "gemini-1.5-flash"
-        assert created_kwargs["location"] == "us-central1"
-        assert created_kwargs["project"] == "live-on-test"
-    finally:
-        main_module._cached_coach_agent.cache_clear()
