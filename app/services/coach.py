@@ -137,9 +137,14 @@ class LocalCoachResponder:
 
 
 def create_coach_llm() -> Any:
-    """Construct an Ollama chat client for the coach agent."""
+    """Construct a chat client for the coach agent."""
+    provider = (os.getenv("LIVEON_LLM_PROVIDER") or "ollama").strip().lower()
 
-    return ChatOllama(model='phi3:14b-medium-4k-instruct-q4_K_M')
+    if provider == "ollama":
+        return ChatOllama(model='phi3:14b-medium-4k-instruct-q4_K_M')
+
+    # Fallback for local dev and testing
+    return LocalCoachResponder()
 
 
 def _separate_disclaimer(text: str, *, default: str) -> tuple[str, str]:
