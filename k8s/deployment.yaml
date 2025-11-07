@@ -18,7 +18,7 @@ spec:
       containers:
         - name: longevity-app
           image: IMAGE_PLACEHOLDER
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           env:
@@ -26,9 +26,6 @@ spec:
               value: sqlite
             - name: LIVEON_DB_PATH
               value: /data/content.db
-              volumeMounts:
-            - name: sqlite-data
-              mountPath: /data              
             - name: LIVEON_COACH_MODEL
               value: "vertex"
             - name: LIVEON_COACH_VERTEX_MODEL
@@ -43,6 +40,9 @@ spec:
               value: "0.2"
             - name: LIVEON_MODEL_MAX_OUTPUT_TOKENS
               value: "1024"
+          volumeMounts:
+            - name: sqlite-data
+              mountPath: /data
           resources:
             requests:
               cpu: 100m
@@ -53,4 +53,4 @@ spec:
       volumes:
       - name: sqlite-data
         persistentVolumeClaim:
-          claimName: sqlite-data              
+          claimName: sqlite-data

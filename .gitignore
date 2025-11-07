@@ -7,5 +7,6 @@ app/services/__pycache__/
 app/utils/__pycache__/
 deploy_patch.json
 refactor_implementation_steps.md
-refactor_plan.md
 app/tests/__pycache__/
+refactor_plan.mdapp/tests/__pycache__/
+

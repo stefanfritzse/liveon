@@ -23,6 +23,15 @@ spec:
         env:
         - name: TZ
           value: "Europe/Stockholm"
+        # --- ADD THIS SECTION ---
+        - name: LIVEON_STORAGE
+          value: sqlite
+        - name: LIVEON_DB_PATH
+          value: /data/content.db
+        volumeMounts:
+        - name: sqlite-data
+          mountPath: /data
+        # ------------------------
         readinessProbe:
           httpGet: { path: /healthz, port: 8080 }
           initialDelaySeconds: 5
@@ -38,6 +47,12 @@ spec:
           limits:
             cpu: "1"
             memory: "512Mi"
+      # --- AND ADD THIS SECTION ---
+      volumes:
+      - name: sqlite-data
+        persistentVolumeClaim:
+          claimName: sqlite-data
+      # ----------------------------
 ---
 apiVersion: v1
 kind: Service
