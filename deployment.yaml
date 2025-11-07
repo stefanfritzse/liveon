@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: longevity-coach-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: longevity-coach
+  template:
+    metadata:
+      labels:
+        app: longevity-coach
+    spec:
+      containers:
+      - name: longevity-coach
+        image: longevity-coach:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
