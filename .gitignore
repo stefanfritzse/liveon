@@ -1,4 +1,3 @@
-gcp_cost_toggle_state.json
 app/__pycache__/
 app/job.run-pipeline.yaml
 app/models/__pycache__/
