@@ -11,10 +11,7 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch, *keys: str) -> None:
 
 
 def test_summarizer_local_stub_allowed_with_explicit_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
-    _clear_env(
-        monkeypatch,
-        "LIVEON_SUMMARIZER_MODEL",
-    )
+    monkeypatch.setenv("LIVEON_SUMMARIZER_MODEL", "local")
 
     llm = _create_llm("summarizer")
 
