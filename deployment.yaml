@@ -17,7 +17,9 @@ spec:
         image: longevity-coach:latest
         env:
         - name: LIVEON_LLM_PROVIDER
-          value: "local"
+          value: "ollama"
+        - name: OLLAMA_HOST
+          value: "host.minikube.internal"
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8080
