@@ -4,7 +4,6 @@ app/job.run-pipeline.yaml
 app/models/__pycache__/
 app/scripts/__pycache__/
 app/services/__pycache__/
-app/services/sqlite_repo.py
 app/utils/__pycache__/
 deploy_patch.json
 refactor_implementation_steps.md

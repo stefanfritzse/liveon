@@ -56,7 +56,6 @@ _DEFAULT_COACH_PROMPTS: tuple[dict[str, str], ...] = (
 )
 
 
-@lru_cache()
 def _coach_prompt_suggestions() -> tuple[dict[str, str], ...]:
     """Return curated coach prompt presets, optionally overridden by environment."""
 
@@ -98,12 +97,10 @@ def _build_debug_detail(exc: Exception) -> dict[str, str]:
         "message": message or "No exception message provided.",
     }
 
-
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
 
-@lru_cache()
 def _cached_coach_agent() -> CoachAgent:
     """Create a singleton CoachAgent backed by the configured language model."""
 
@@ -224,10 +221,6 @@ class _InMemoryContentRepository:
     def get_latest_tip(self) -> Tip | None:
         return next(iter(self.get_latest_tips(limit=1)), None)
 
-
-from functools import lru_cache
-
-@lru_cache()
 def get_repository() -> ContentRepository:
     """Resolve the content repository (SQLite locally, Firestore in cloud)."""
     #storage = (os.getenv("LIVEON_STORAGE") or "sqlite").strip().lower()
