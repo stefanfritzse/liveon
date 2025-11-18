@@ -9,7 +9,7 @@ pipeline to be exercised without external LLM access.
 
 Storage selection:
 - Default to SQLite for local development (no GCP required).
-- Switch via --storage {sqlite,firestore} or LIVEON_STORAGE.
+- Switch via --storage sqlite or LIVEON_STORAGE.
 - For SQLite, you can set --db-path PATH or LIVEON_DB_PATH.
 """
 from __future__ import annotations

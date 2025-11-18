@@ -223,7 +223,7 @@ class _InMemoryContentRepository:
         return next(iter(self.get_latest_tips(limit=1)), None)
 
 def get_repository() -> ContentRepository:
-    """Resolve the content repository (SQLite locally, Firestore in cloud)."""
+    """Resolve the content repository (SQLite only)."""
     storage = (os.getenv("LIVEON_STORAGE") or "sqlite").strip().lower()
 
     if storage == "sqlite":

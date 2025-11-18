@@ -134,7 +134,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--model-provider",
-        choices=["local", "vertex", "openai", "gpt"],
+        choices=["local", "openai", "gpt"],
         default=_default_model_provider(),
         help="Language model backend for the tip generator",
     )
