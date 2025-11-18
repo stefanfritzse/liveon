@@ -14,8 +14,45 @@
 {% endblock %}
 
 {% block content %}
-  <section id="coach-app" class="coach-container" aria-labelledby="coach-form-heading">
+  <section id="coach-app" class="coach-container" aria-label="Longevity coach conversation">
     <div class="coach-widget">
+      <section class="coach-conversation" aria-label="Conversation history and input">
+        <section
+          id="coach-transcript"
+          class="coach-transcript"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+          tabindex="0"
+          aria-label="Conversation transcript"
+        >
+          <article class="coach-message coach-message--assistant" tabindex="-1">
+            <header class="coach-message-meta">Coach</header>
+          <p>
+            Hi there! I'm your longevity coach. Ask me something about healthy aging and
+            I'll share personalized guidance to help you get started.
+          </p>
+          </article>
+        </section>
+
+        <form id="coach-form" class="coach-form">
+          <label for="coach-question" class="coach-label">Your question</label>
+          <textarea
+            id="coach-question"
+            name="question"
+            rows="4"
+            placeholder="E.g. How can I improve my sleep quality as I age?"
+            required
+          ></textarea>
+          <div class="coach-form-actions">
+            <button type="submit" class="primary" data-default-label="Send question">
+              Send question
+            </button>
+          </div>
+          <p id="coach-error" class="coach-error" role="alert" tabindex="-1" hidden></p>
+        </form>
+      </section>
+
       {% if coach_prompts %}
       <section class="coach-suggestions" aria-label="Suggested questions">
         <h3 class="coach-suggestions-title">Need inspiration?</h3>
@@ -39,41 +76,6 @@
         </div>
       </section>
       {% endif %}
-
-      <form id="coach-form" class="coach-form">
-        <label for="coach-question" class="coach-label">Your question</label>
-        <textarea
-          id="coach-question"
-          name="question"
-          rows="4"
-          placeholder="E.g. How can I improve my sleep quality as I age?"
-          required
-        ></textarea>
-        <div class="coach-form-actions">
-          <button type="submit" class="primary" data-default-label="Send question">
-            Send question
-          </button>
-        </div>
-        <p id="coach-error" class="coach-error" role="alert" tabindex="-1" hidden></p>
-      </form>
-
-      <section
-        id="coach-transcript"
-        class="coach-transcript"
-        role="log"
-        aria-live="polite"
-        aria-relevant="additions"
-        tabindex="0"
-        aria-label="Conversation transcript"
-      >
-        <article class="coach-message coach-message--assistant" tabindex="-1">
-          <header class="coach-message-meta">Coach</header>
-          <p>
-            Hi there! I’m your longevity coach. Ask me something about healthy aging and
-            I’ll share Ollama-powered guidance to help you get started.
-          </p>
-        </article>
-      </section>
     </div>
   </section>
 
@@ -98,7 +100,16 @@
       max-width: 60ch;
     }
 
-    .coach-form { 
+    .coach-conversation {
+      display: grid;
+      gap: 1.25rem;
+      background: #f8fafc;
+      border-radius: 1rem;
+      padding: 1.25rem;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+    }
+
+    .coach-form {
       display: grid;
       gap: 1rem;
     }

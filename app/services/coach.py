@@ -5,12 +5,15 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 import os
 
+import httpx
+
 from app.models.coach import CoachAnswer, CoachQuestion
 
 try:  # pragma: no cover - optional dependency guard
     from langchain_community.chat_models import ChatOllama
     from langchain_core.prompts import ChatPromptTemplate
 except ImportError:  # pragma: no cover - handled gracefully in CoachAgent
+    ChatOllama = None  # type: ignore[assignment]
     ChatPromptTemplate = None  # type: ignore[assignment]
 
 
@@ -22,10 +25,7 @@ _DEFAULT_SAFETY_INSTRUCTIONS = (
     " longevity so the user understands the long-term wellbeing impact of each suggestion."
 )
 
-_DEFAULT_DISCLAIMER = (
-    "This conversation is for educational purposes only and is not a substitute for professional"
-    " medical advice. Always consult a qualified healthcare provider about your personal health."
-)
+_DEFAULT_DISCLAIMER = ""
 
 
 @dataclass(slots=True)
@@ -35,31 +35,26 @@ class CoachAgent:
     llm: Any
     safety_instructions: str = _DEFAULT_SAFETY_INSTRUCTIONS
     default_disclaimer: str = _DEFAULT_DISCLAIMER
-    _prompt: ChatPromptTemplate = field(init=False, repr=False)
+    _prompt: ChatPromptTemplate | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self) -> None:
-        if ChatPromptTemplate is None:  # pragma: no cover - depends on optional dependency
-            raise RuntimeError(
-                "LangChain is required to create a CoachAgent; install langchain-core to proceed."
-            )
-        self._prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "{safety_instructions}\n"
-                    "Respond in a warm, empathetic tone while staying factual and concise."
-                    " Always finish with a separate line that begins with 'Disclaimer:'"
-                    " followed by the provided disclaimer text verbatim: {default_disclaimer}",
-                ),
-                (
-                    "human",
-                    "User question:\n{question}\n\n"
+        if ChatPromptTemplate is not None:
+            self._prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        "{safety_instructions}\n"
+                        "Respond in a warm, empathetic tone while staying factual and concise."
+                    ),
+                    (
+                        "human",
+                        "User question:\n{question}\n\n"
                     "Structure the response with a short introduction, practical guidance, and"
                     " a concluding encouragement. Clearly tie the guidance back to sustaining"
                     " long-term healthspan and longevity when it is relevant to do so.",
-                ),
-            ]
-        )
+                    ),
+                ]
+            )
 
     def ask(self, question: CoachQuestion | str) -> CoachAnswer:
         """Answer ``question`` using the configured language model."""
@@ -67,13 +62,7 @@ class CoachAgent:
         question_model = question if isinstance(question, CoachQuestion) else CoachQuestion(text=str(question))
         normalized_question = question_model.stripped()
 
-        prompt_value = self._prompt.invoke(
-            {
-                "question": normalized_question,
-                "safety_instructions": self.safety_instructions,
-                "default_disclaimer": self.default_disclaimer,
-            }
-        )
+        prompt_value = self._build_prompt(normalized_question)
 
         response = self._invoke_llm(prompt_value)
         response_text = self._extract_response_text(response)
@@ -114,6 +103,34 @@ class CoachAgent:
             return str(response["content"])
         return str(response)
 
+    def _build_prompt(self, question: str) -> Any:
+        """Create a prompt payload regardless of LangChain availability."""
+
+        if self._prompt is not None:
+            return self._prompt.invoke(
+                {
+                    "question": question,
+                    "safety_instructions": self.safety_instructions,
+                }
+            )
+
+        system_message = (
+            f"{self.safety_instructions}\n"
+            "Respond in a warm, empathetic tone while staying factual and concise."
+        )
+        human_message = (
+            "User question:\n"
+            f"{question}\n\n"
+            "Structure the response with a short introduction, practical guidance, and"
+            " a concluding encouragement. Clearly tie the guidance back to sustaining"
+            " long-term healthspan and longevity when it is relevant to do so."
+        )
+
+        return [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": human_message},
+        ]
+
 
 @dataclass(slots=True)
 class LocalCoachResponder:
@@ -130,10 +147,63 @@ class LocalCoachResponder:
             "- Highlight connections to long-term wellbeing and longevity whenever reasonable.\n\n"
             f"Question received: {question if question else 'No question provided.'}"
         )
-        return f"{response}\n\nDisclaimer: {self.disclaimer}"
+        return response
 
     def __call__(self, messages: Any) -> str:  # pragma: no cover - convenience
         return self.invoke(messages)
+
+
+class OllamaHTTPChat:
+    """Minimal Ollama chat client used when LangChain is unavailable."""
+
+    def __init__(self, model: str, *, base_url: str | None = None, timeout: float = 30.0) -> None:
+        self.model = model
+        self.base_url = (base_url or os.getenv("LIVEON_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/")
+        self.timeout = timeout
+
+    def invoke(self, messages: Any) -> Any:
+        payload = {
+            "model": self.model,
+            "messages": self._normalize_messages(messages),
+            "stream": False,
+        }
+        response = httpx.post(
+            f"{self.base_url}/api/chat",
+            json=payload,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        # Align shape with LangChain response expectations
+        if isinstance(data, dict):
+            message = data.get("message")
+            if isinstance(message, dict) and "content" in message:
+                return message["content"]
+            if "response" in data:
+                return data["response"]
+        return data
+
+    def _normalize_messages(self, messages: Any) -> list[dict[str, str]]:
+        if isinstance(messages, str):
+            return [{"role": "user", "content": messages}]
+
+        if hasattr(messages, "to_messages"):
+            messages = messages.to_messages()  # type: ignore[assignment]
+
+        normalized: list[dict[str, str]] = []
+        if isinstance(messages, Sequence):
+            for message in messages:
+                role = getattr(message, "type", getattr(message, "role", "user"))
+                content = getattr(message, "content", None)
+                if isinstance(message, dict):
+                    role = message.get("role") or message.get("type") or role
+                    content = message.get("content", content)
+                text = content if isinstance(content, str) else ""
+                normalized.append({"role": str(role or "user"), "content": text})
+        else:
+            normalized.append({"role": "user", "content": str(messages)})
+
+        return normalized
 
 
 def create_coach_llm() -> Any:
@@ -141,7 +211,10 @@ def create_coach_llm() -> Any:
     provider = (os.getenv("LIVEON_LLM_PROVIDER") or "ollama").strip().lower()
 
     if provider == "ollama":
-        return ChatOllama(model='phi3:14b-medium-4k-instruct-q4_K_M')
+        model = os.getenv("LIVEON_OLLAMA_MODEL") or 'phi3:14b-medium-4k-instruct-q4_K_M'
+        if ChatOllama is not None:
+            return ChatOllama(model=model)
+        return OllamaHTTPChat(model=model)
 
     # Fallback for local dev and testing
     return LocalCoachResponder()
