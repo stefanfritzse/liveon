@@ -20,6 +20,8 @@ spec:
           value: "ollama"
         - name: OLLAMA_HOST
           value: "host.minikube.internal"
+        - name: OLLAMA_BASE_URL
+          value: "http://ollama-external.default.svc.cluster.local:11434"          
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8080
