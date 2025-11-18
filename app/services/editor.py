@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import ast
 from typing import Any
 
 from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
@@ -125,10 +126,9 @@ class EditorAgent:
         candidates.append(text)
 
         for candidate in candidates:
-            try:
-                return EditorAgent._ensure_mapping(json.loads(candidate))
-            except json.JSONDecodeError:
-                continue
+            parsed = EditorAgent._try_parse_mapping(candidate)
+            if parsed is not None:
+                return parsed
 
         scanned = EditorAgent._scan_for_object(text)
         if scanned is not None:
@@ -173,3 +173,21 @@ class EditorAgent:
         if not isinstance(payload, dict):
             raise ValueError("Editor response JSON must be an object")
         return payload
+
+    @staticmethod
+    def _try_parse_mapping(candidate: str) -> dict[str, Any] | None:
+        """Attempt to parse JSON or Python literal dicts."""
+
+        try:
+            return EditorAgent._ensure_mapping(json.loads(candidate))
+        except json.JSONDecodeError:
+            pass
+
+        try:
+            payload = ast.literal_eval(candidate)
+        except (SyntaxError, ValueError):
+            return None
+
+        if isinstance(payload, dict):
+            return payload
+        return None

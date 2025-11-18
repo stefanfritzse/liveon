@@ -6,8 +6,8 @@
 {% endblock %}
 
 {% block content %}
-  <article>
-    <p>{{ article.content_body | replace('\n\n', '</p><p>') | safe }}</p>
+  <article class="article-body">
+    {{ article.content_body | markdown_to_html }}
     {% if article.source_urls %}
       <h4>Sources</h4>
       <ul>

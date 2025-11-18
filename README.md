@@ -54,6 +54,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 | `LIVEON_OLLAMA_MODEL` | Ollama model name | `phi3:14b-medium-4k-instruct-q4_K_M` |
 | `LIVEON_OLLAMA_URL` | Ollama base URL | `http://127.0.0.1:11434` |
 
+When the Ollama daemon is bound to `0.0.0.0`, still point `LIVEON_OLLAMA_URL` (or the pipeline command's environment) at a reachable host such as `http://127.0.0.1:11434` so local clients can connect successfully.
+
 ## Running the Content Pipeline
 
 The pipeline CLI (`app/scripts/run_pipeline.py`) can be executed to aggregate feeds and publish new content:

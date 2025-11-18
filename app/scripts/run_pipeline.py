@@ -31,6 +31,7 @@ from app.services.summarizer import SummarizerAgent
 from dataclasses import is_dataclass, asdict
 from datetime import datetime, date, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 # SQLite repo (new)
 from app.services.sqlite_repo import LocalSQLiteContentRepository
@@ -145,8 +146,18 @@ def _create_llm(agent_label: str) -> "SupportsInvoke":
     provider = (provider_env_value or "ollama").lower()
 
     if provider == "ollama":
-        from langchain_community.chat_models import ChatOllama
-        return ChatOllama(model='phi3:14b-medium-4k-instruct-q4_K_M')
+        ChatOllama = _resolve_chat_ollama()
+        model_name = (
+            os.getenv(f"LIVEON_{agent_label.upper()}_OLLAMA_MODEL")
+            or os.getenv("LIVEON_OLLAMA_MODEL")
+            or 'phi3:14b-medium-4k-instruct-q4_K_M'
+        )
+        format_hint = (os.getenv("LIVEON_OLLAMA_FORMAT") or "json").strip().lower()
+        base_url = _resolve_ollama_base_url()
+        kwargs: dict[str, object] = {"model": model_name, "base_url": base_url}
+        if format_hint:
+            kwargs["format"] = format_hint
+        return ChatOllama(**kwargs)
 
     if provider in {"openai", "gpt"}:  # pragma: no cover - optional dependency
         try:
@@ -160,6 +171,38 @@ def _create_llm(agent_label: str) -> "SupportsInvoke":
         )
 
     return LocalJSONResponder(agent_label)
+
+
+def _resolve_chat_ollama():
+    try:
+        from langchain_ollama import ChatOllama  # type: ignore
+    except ImportError:
+        try:
+            from langchain_community.chat_models import ChatOllama  # type: ignore
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise SystemExit("Install langchain-ollama to use the Ollama provider") from exc
+    return ChatOllama
+
+
+def _resolve_ollama_base_url() -> str:
+    """Return a client-safe Ollama base URL, defaulting to localhost."""
+
+    raw = (os.getenv("LIVEON_OLLAMA_URL") or os.getenv("OLLAMA_HOST") or "").strip()
+    if not raw:
+        raw = "http://127.0.0.1:11434"
+
+    if "://" not in raw:
+        raw = f"http://{raw}"
+
+    parsed = urlparse(raw)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or "127.0.0.1"
+
+    if host in {"0.0.0.0", "::", "", "[::]"}:
+        host = "127.0.0.1"
+
+    port = parsed.port or 11434
+    return f"{scheme}://{host}:{port}"
 
 
 class SupportsInvoke(Protocol):

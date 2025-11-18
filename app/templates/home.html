@@ -22,14 +22,16 @@
             <p class="article-meta">Published {{ featured_tip.published_date.strftime("%B %d, %Y") }}</p>
           {% endif %}
         </header>
-        <p>
+        <div class="tip-body">
           {% if featured_tip %}
-            {{ featured_tip.content_body }}
+            {{ featured_tip.content_body | markdown_to_html }}
           {% else %}
-            We're preparing the first batch of AI-authored coaching tips. Once the database is
-            seeded you'll see a highlighted recommendation here each day.
+            <p>
+              We're preparing the first batch of AI-authored coaching tips. Once the database is
+              seeded you'll see a highlighted recommendation here each day.
+            </p>
           {% endif %}
-        </p>
+        </div>
         <footer>
           <a href="/tips">Browse the tips archive</a>
         </footer>
@@ -73,7 +75,10 @@
               <h3>{{ tip.title }}</h3>
               <p class="article-meta">Published {{ tip.published_date.strftime("%B %d, %Y") }}</p>
             </header>
-            <p>{{ tip.content_body }}</p>
+            {% set snippet = tip.content_body | markdown_to_text %}
+            <p>
+              {{ snippet[:220] }}{% if snippet|length > 220 %}&hellip;{% endif %}
+            </p>
           </article>
         {% endfor %}
       </div>

@@ -74,7 +74,6 @@ class GitPublisher:
         published_at: datetime | None = None,
     ) -> PublicationResult:
         """Write the article to disk and create a Git commit for the change."""
-        print("publish 1")
         repo_path = self.repo_path
         if not repo_path.exists():
             raise FileNotFoundError(f"Repository path '{repo_path}' does not exist")
@@ -83,7 +82,6 @@ class GitPublisher:
         published = (published_at or article_model.published_date or datetime.now(timezone.utc)).astimezone(
             timezone.utc
         )
-        print("publish 2")
 
         base_slug = _slugify(slug or article_model.title)
         final_slug, destination = self._resolve_destination(base_slug)
@@ -91,7 +89,6 @@ class GitPublisher:
         front_matter = self._build_front_matter(article, article_model, published)
         body = article_model.content_body.strip()
         payload = f"---\n{front_matter}\n---\n\n{body}\n"
-        print("publish 3")
 
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(payload, encoding="utf-8")
@@ -103,7 +100,6 @@ class GitPublisher:
         self._run_git("commit", "-m", message)
 
         commit_hash = self._run_git("rev-parse", "HEAD").stdout.strip()
-        print("publish 4")
 
         return PublicationResult(slug=final_slug, path=destination, commit_hash=commit_hash, published_at=published)
 
@@ -183,12 +179,10 @@ class LocalDBPublisher:
         published_at: datetime | None = None,
     ) -> PublicationResult:
         """Persist the article to the local DB and return publication metadata."""
-        print("db publisher 1")
         _ = commit_message  # No VCS metadata for DB publishes.
 
         published = (published_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
         base_slug = _slugify(slug or article.title)
-        print("db publisher 2")
         resolved_slug, existing = self._resolve_target(base_slug, article)
         if existing is not None and self._is_duplicate(existing, article):
             return PublicationResult(
@@ -197,13 +191,10 @@ class LocalDBPublisher:
                 commit_hash=None,
                 published_at=existing.published_date,
             )
-        print("db publisher 3")
         article_model = article.to_article()
         article_model.id = resolved_slug
         article_model.published_date = published
-        print("db publisher 4")
         stored = self.repository.save_article(article_model)
-        print("db publisher 5")
         return PublicationResult(
             slug=stored.id or resolved_slug,
             path=self._build_storage_path(stored.id or resolved_slug),

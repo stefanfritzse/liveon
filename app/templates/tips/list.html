@@ -14,7 +14,9 @@
           <h2>{{ featured_tip.title }}</h2>
           <p class="article-meta">Published {{ featured_tip.published_date.strftime("%B %d, %Y") }}</p>
         </header>
-        <p>{{ featured_tip.content_body }}</p>
+        <div class="tip-body">
+          {{ featured_tip.content_body | markdown_to_html }}
+        </div>
         {% if featured_tip.tags %}
           <footer><strong>Tags:</strong> {{ featured_tip.tags | join(', ') }}</footer>
         {% endif %}
@@ -33,7 +35,20 @@
             <h3>{{ tip.title }}</h3>
             <p class="article-meta">Published {{ tip.published_date.strftime("%B %d, %Y") }}</p>
           </header>
-          <p>{{ tip.content_body }}</p>
+          {% set snippet = tip.content_body | markdown_to_text %}
+          <p>
+            {{ snippet[:220] }}{% if snippet|length > 220 %}&hellip;{% endif %}
+          </p>
+          {% if snippet|length > 220 %}
+          <details class="tip-body">
+            <summary>Expand full guidance</summary>
+            {{ tip.content_body | markdown_to_html }}
+          </details>
+          {% else %}
+          <div class="tip-body">
+            {{ tip.content_body | markdown_to_html }}
+          </div>
+          {% endif %}
           {% if tip.tags %}
             <footer><strong>Tags:</strong> {{ tip.tags | join(', ') }}</footer>
           {% endif %}

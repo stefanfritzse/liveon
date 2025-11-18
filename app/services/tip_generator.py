@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import re
 from typing import Any, Protocol, Sequence
+from urllib.parse import urlparse
 
 from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
 
@@ -94,9 +96,11 @@ class TipGenerator:
         if merged_sources:
             metadata["sources"] = merged_sources
 
+        body = self._normalise_body(str(payload.get("body", "")))
+
         draft = TipDraft(
             title=str(payload.get("title", "")),
-            body=str(payload.get("body", "")),
+            body=body,
             tags=tags,
             metadata=metadata,
         )
@@ -203,3 +207,40 @@ class TipGenerator:
                 seen.add(normalized)
                 merged.append(normalized)
         return merged
+
+    @staticmethod
+    def _normalise_body(text: str) -> str:
+        """Shorten verbose URLs and normalise anchor tags for readability."""
+
+        if not text:
+            return ""
+
+        normalised = text.replace("“", '"').replace("”", '"')
+        normalised = TipGenerator._replace_anchor_tags(normalised)
+        normalised = TipGenerator._shorten_plain_urls(normalised)
+        normalised = re.sub(r"Key sources::", "Key sources:", normalised, flags=re.IGNORECASE)
+        return normalised
+
+    @staticmethod
+    def _replace_anchor_tags(text: str) -> str:
+        anchor_re = re.compile(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL)
+
+        def _replacement(match: re.Match[str]) -> str:
+            url = match.group(1).strip()
+            label = re.sub(r"\s+", " ", match.group(2)).strip()
+            if not label:
+                label = urlparse(url).netloc or url
+            return f"[{label}]({url})"
+
+        return anchor_re.sub(_replacement, text)
+
+    @staticmethod
+    def _shorten_plain_urls(text: str) -> str:
+        url_re = re.compile(r"(https?://[^\s)]+)")
+
+        def _replacement(match: re.Match[str]) -> str:
+            url = match.group(1).rstrip(".,")
+            domain = urlparse(url).netloc or url
+            return f"[{domain}]({url})"
+
+        return url_re.sub(_replacement, text)

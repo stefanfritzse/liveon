@@ -306,7 +306,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "succeeded": result.succeeded,
         "created": result.created,
     }
-    print(json.dumps(payload, default=_json_default, ensure_ascii=False))
+    LOGGER.debug("TIP_PIPELINE_RESULT %s", json.dumps(payload, default=_json_default, ensure_ascii=False))
 
     if not result.succeeded:
         LOGGER.error("Tip pipeline failed to produce a tip")

@@ -101,7 +101,6 @@ class ContentPipeline:
         errors: list[str] = []
 
         repository = self.repository or getattr(self.publisher, "repository", None)
-        print("1")
         selected_item: AggregatedContent | None = None
         if aggregation.items and repository is not None:
             for item in aggregation.items:
@@ -116,7 +115,6 @@ class ContentPipeline:
                 if (item.url or "").strip():
                     selected_item = item
                     break
-        print("2")
         if selected_item is None:
             if aggregation.items:
                 warnings.append("No new aggregated content available to publish.")
@@ -132,7 +130,6 @@ class ContentPipeline:
             )
 
         try_items: list[AggregatedContent] = [selected_item]
-        print("3")
         try:
             draft = self.summarizer.summarize(try_items)
         except Exception as exc:  # pragma: no cover - defensive fallback
@@ -145,7 +142,6 @@ class ContentPipeline:
                 errors=errors,
                 warnings=warnings,
             )
-        print("4")
         try:
             edited = self.editor.revise(draft)
         except Exception as exc:  # pragma: no cover - defensive fallback
@@ -158,9 +154,7 @@ class ContentPipeline:
                 errors=errors,
                 warnings=warnings,
             )
-        print("5")
         slug_to_use = slug or _slugify(selected_item.title or selected_item.url or "")
-        print("5.1")
         try:
             publication = self.publisher.publish(
                 edited,
@@ -180,7 +174,6 @@ class ContentPipeline:
                 errors=errors,
                 warnings=warnings,
             )
-        print("6")
         return PipelineResult(
             aggregation=aggregation,
             draft=draft,

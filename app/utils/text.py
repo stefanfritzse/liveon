@@ -4,6 +4,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import markdown as _markdown
+from markupsafe import Markup
+
 
 _MARKDOWN_HEADING_RE = re.compile(r"(^|\n)#{1,6}\s*")
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
@@ -12,6 +15,7 @@ _MARKDOWN_CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
 _MARKDOWN_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 _MARKDOWN_EMPHASIS_RE = re.compile(r"([*_]{1,3})([^*_]+)\1")
 _BLOCKQUOTE_RE = re.compile(r"(^|\n)>\s*")
+_MARKDOWN_EXTENSIONS: tuple[str, ...] = ("extra", "sane_lists", "smarty")
 
 
 def markdown_to_plain_text(value: Any) -> str:
@@ -45,5 +49,14 @@ def markdown_to_plain_text(value: Any) -> str:
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
+def markdown_to_html(value: Any) -> Markup:
+    """Render Markdown into HTML suitable for templates."""
 
-__all__ = ["markdown_to_plain_text"]
+    if not isinstance(value, str):
+        return Markup("")
+
+    html = _markdown.markdown(value, extensions=_MARKDOWN_EXTENSIONS, output_format="html5")
+    return Markup(html)
+
+
+__all__ = ["markdown_to_plain_text", "markdown_to_html"]

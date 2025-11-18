@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import ast
 from typing import Any, Protocol, Sequence
 
 from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
@@ -106,10 +107,9 @@ class SummarizerAgent:
         candidates.append(text)
 
         for candidate in candidates:
-            try:
-                return SummarizerAgent._ensure_mapping(json.loads(candidate))
-            except json.JSONDecodeError:
-                continue
+            parsed = SummarizerAgent._try_parse_mapping(candidate)
+            if parsed is not None:
+                return parsed
 
         scanned = SummarizerAgent._scan_for_object(text)
         if scanned is not None:
@@ -154,6 +154,22 @@ class SummarizerAgent:
         if not isinstance(payload, dict):
             raise ValueError("Summarizer response JSON must be an object")
         return payload
+
+    @staticmethod
+    def _try_parse_mapping(candidate: str) -> dict[str, Any] | None:
+        try:
+            return SummarizerAgent._ensure_mapping(json.loads(candidate))
+        except json.JSONDecodeError:
+            pass
+
+        try:
+            payload = ast.literal_eval(candidate)
+        except (SyntaxError, ValueError):
+            return None
+
+        if isinstance(payload, dict):
+            return payload
+        return None
 
     @staticmethod
     def _merge_sources(primary: Sequence[str], secondary: Sequence[str]) -> list[str]:

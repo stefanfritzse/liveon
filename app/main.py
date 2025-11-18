@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.content import Article, Tip
 from app.services.coach import CoachAgent, create_coach_llm
-from app.utils.text import markdown_to_plain_text
+from app.utils.text import markdown_to_plain_text, markdown_to_html
 from app.services.sqlite_repo import LocalSQLiteContentRepository
 
 app = FastAPI(title="Live On Longevity Coach")
@@ -28,6 +28,7 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 templates.env.globals.update(now=lambda: datetime.now(timezone.utc))
 templates.env.filters["markdown_to_text"] = markdown_to_plain_text
+templates.env.filters["markdown_to_html"] = markdown_to_html
 
 logger = logging.getLogger(__name__)
 

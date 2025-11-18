@@ -1,6 +1,7 @@
 """Data structures supporting the editorial agent that polishes article drafts."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -28,12 +29,19 @@ class EditedArticle:
     ) -> Article:
         """Convert the edited payload into the Firestore-aware :class:`Article`."""
 
-        sections: list[str] = [self.body.strip()]
+        body_text = self.body.strip()
+        sections: list[str] = [body_text]
 
         if include_takeaways and self.takeaways:
-            bullets = "\n".join(f"- {item.strip()}" for item in self.takeaways if item.strip())
-            if bullets:
-                sections.append("**Key Takeaways**\n" + bullets)
+            bullet_lines: list[str] = []
+            for raw in self.takeaways:
+                cleaned = _clean_takeaway(raw)
+                if cleaned:
+                    bullet_lines.append(f"- {cleaned}")
+
+            body_has_takeaways_heading = "key takeaways" in body_text.lower()
+            if bullet_lines and not body_has_takeaways_heading:
+                sections.append("**Key Takeaways**\n" + "\n".join(bullet_lines))
 
         if include_disclaimer and self.disclaimer:
             disclaimer_text = self.disclaimer.strip()
@@ -75,6 +83,14 @@ class EditedArticle:
             takeaways=_merge_unique(draft.takeaways, self.takeaways),
             disclaimer=(self.disclaimer or "").strip() or None,
         )
+
+
+def _clean_takeaway(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"^[\-\*\u2022]+", "", cleaned).strip()
+    return cleaned
 
 
 def _merge_unique(primary: Sequence[str], secondary: Sequence[str]) -> list[str]:
