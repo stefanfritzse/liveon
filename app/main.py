@@ -12,8 +12,8 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
@@ -176,6 +176,12 @@ class ContentRepository(Protocol):
     def get_latest_tip(self) -> Tip | None:
         """Return the most recent tip when available."""
 
+    def delete_article(self, article_id: str) -> bool:
+        """Remove an article, returning ``True`` when a row was deleted."""
+
+    def delete_tip(self, tip_id: str) -> bool:
+        """Remove a tip, returning ``True`` when a row was deleted."""
+
 
 @dataclass(slots=True)
 class _InMemoryContentRepository:
@@ -222,6 +228,16 @@ class _InMemoryContentRepository:
 
     def get_latest_tip(self) -> Tip | None:
         return next(iter(self.get_latest_tips(limit=1)), None)
+
+    def delete_article(self, article_id: str) -> bool:
+        before = len(self._articles)
+        self._articles = [article for article in self._articles if article.id != article_id]
+        return len(self._articles) != before
+
+    def delete_tip(self, tip_id: str) -> bool:
+        before = len(self._tips)
+        self._tips = [tip for tip in self._tips if tip.id != tip_id]
+        return len(self._tips) != before
 
 def get_repository() -> ContentRepository:
     """Resolve the content repository (SQLite only)."""
@@ -395,4 +411,55 @@ async def ask_the_coach(request: Request) -> HTMLResponse:
             "title": "Ask the Coach",
             "coach_prompts": list(_coach_prompt_suggestions()),
         },
+    )
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_dashboard(
+    request: Request,
+    repository: ContentRepository = Depends(get_repository),
+) -> HTMLResponse:
+    """Render the administrative console placeholder."""
+
+    articles = repository.get_latest_articles(limit=20)
+    tips = repository.get_latest_tips(limit=20)
+
+    return templates.TemplateResponse(
+        request,
+        "admin.html",
+        {
+            "title": "Admin Console",
+            "articles": articles,
+            "tips": tips,
+        },
+    )
+
+
+@app.post("/admin/articles/{article_id}/delete")
+async def delete_article_admin(
+    request: Request,
+    article_id: str,
+    repository: ContentRepository = Depends(get_repository),
+) -> RedirectResponse:
+    """Handle deletion of an article from the admin console."""
+
+    repository.delete_article(article_id)
+    return RedirectResponse(
+        request.url_for("admin_dashboard"),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.post("/admin/tips/{tip_id}/delete")
+async def delete_tip_admin(
+    request: Request,
+    tip_id: str,
+    repository: ContentRepository = Depends(get_repository),
+) -> RedirectResponse:
+    """Handle deletion of a tip from the admin console."""
+
+    repository.delete_tip(tip_id)
+    return RedirectResponse(
+        request.url_for("admin_dashboard"),
+        status_code=status.HTTP_303_SEE_OTHER,
     )

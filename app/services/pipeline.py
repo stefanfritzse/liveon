@@ -1,6 +1,7 @@
 """Orchestration layer that chains the aggregator, summariser, editor, and publisher agents."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol, Sequence
@@ -11,11 +12,13 @@ from app.models.editor import EditedArticle
 from app.models.publisher import PublicationResult
 from app.models.summarizer import ArticleDraft
 from app.models.tip import TipDraft
+from app.models.tip_editor import TipReviewResult
 from app.services.aggregator import AggregationResult
 from app.services.publisher import _slugify
 from app.services.tip_publisher import TipPublicationResult
 
 
+logger = logging.getLogger(__name__)
 class SupportsAggregation(Protocol):
     """Subset of :class:`LongevityNewsAggregator` relied on by the pipeline."""
 
@@ -187,7 +190,7 @@ class ContentPipeline:
 class SupportsTipGeneration(Protocol):
     """Protocol describing the tip generator agent interface."""
 
-    def generate(self, items: Sequence[AggregatedContent]) -> TipDraft:
+    def generate(self, items: Sequence[AggregatedContent], feedback: str | None = None) -> TipDraft:
         """Return a tip draft derived from aggregated content."""
 
 
@@ -203,6 +206,23 @@ class SupportsTipPublishing(Protocol):
         """Persist the draft and return metadata about the stored tip."""
 
 
+class SupportsTipEditing(Protocol):
+    """Protocol describing the tip editor agent interface."""
+
+    def review(self, draft: TipDraft, existing_tips: Sequence[Tip]) -> TipReviewResult:
+        """Return a review result for the provided draft."""
+
+
+class SupportsTipLookup(Protocol):
+    """Repository helper able to fetch recent tips for comparison."""
+
+    def get_latest_tips(self, *, limit: int = 5) -> list[Tip]:
+        """Return the latest stored tips, ordered by recency."""
+
+    def find_article_by_source_url(self, url: str) -> Article | None:
+        """Optional compatibility hook shared with the article repository."""
+
+
 @dataclass(slots=True)
 class TipPipelineResult:
     """Structured summary of a tip pipeline execution."""
@@ -213,6 +233,8 @@ class TipPipelineResult:
     publication: TipPublicationResult | None = None
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    generation_attempts: int = 1
+    editor_feedback: list[str] = field(default_factory=list)
 
     @property
     def succeeded(self) -> bool:
@@ -233,7 +255,10 @@ class TipPipeline:
 
     aggregator: SupportsAggregation
     generator: SupportsTipGeneration
+    editor: SupportsTipEditing
     publisher: SupportsTipPublishing
+    repository: SupportsTipLookup
+    MAX_GENERATION_ATTEMPTS: int = 3
 
     def run(
         self,
@@ -241,7 +266,7 @@ class TipPipeline:
         limit_per_feed: int = 5,
         published_at: datetime | None = None,
     ) -> TipPipelineResult:
-        """Execute the tip pipeline, returning a structured result."""
+        """Execute the tip pipeline with an editor-in-the-loop review cycle."""
 
         aggregation = self.aggregator.gather(limit_per_feed=limit_per_feed)
         warnings = list(aggregation.errors)
@@ -256,25 +281,88 @@ class TipPipeline:
                 publication=None,
                 errors=errors,
                 warnings=warnings,
+                generation_attempts=0,
+                editor_feedback=[],
             )
 
         try:
-            draft = self.generator.generate(aggregation.items)
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            errors.append(f"Tip generator failed: {exc}")
-            return TipPipelineResult(
-                aggregation=aggregation,
-                draft=None,
-                tip=None,
-                publication=None,
-                errors=errors,
-                warnings=warnings,
+            existing_tips = self.repository.get_latest_tips(limit=20)
+        except Exception as exc:
+            warnings.append(f"Could not fetch existing tips for comparison: {exc}")
+            existing_tips = []
+
+        feedback: str | None = None
+        draft: TipDraft | None = None
+        review_result: TipReviewResult | None = None
+        attempt = 0
+        feedback_log: list[str] = []
+
+        while attempt < self.MAX_GENERATION_ATTEMPTS:
+            attempt += 1
+            try:
+                draft = self.generator.generate(aggregation.items, feedback=feedback)
+            except Exception as exc:
+                error_msg = f"Tip generator failed on attempt {attempt}: {exc}"
+                errors.append(error_msg)
+                feedback = (
+                    f"The previous attempt failed with error '{exc}'. "
+                    "Generate a new, high-quality tip that avoids that issue."
+                )
+                feedback_log.append(error_msg)
+                continue
+
+            if not draft or not draft.body.strip():
+                warning_msg = f"Generator produced empty draft on attempt {attempt}."
+                warnings.append(warning_msg)
+                feedback = (
+                    "The generated tip was empty or invalid. Produce a concise title and body "
+                    "with actionable guidance."
+                )
+                feedback_log.append(warning_msg)
+                continue
+
+            logger.info(
+                "TIP_PIPELINE_DRAFT attempt=%s title=%s body=%s",
+                attempt,
+                draft.title.strip(),
+                draft.body.strip(),
             )
 
-        try:
-            publication = self.publisher.publish(draft, published_at=published_at)
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            errors.append(f"Tip publisher failed: {exc}")
+            try:
+                review_result = self.editor.review(draft, existing_tips)
+            except Exception as exc:
+                error_msg = f"Tip editor failed on attempt {attempt}: {exc}"
+                errors.append(error_msg)
+                feedback = (
+                    "The previous tip could not be reviewed due to an internal error. "
+                    "Propose a fresh tip that strictly follows the rubric."
+                )
+                feedback_log.append(error_msg)
+                review_result = None
+                continue
+
+            review_feedback = review_result.feedback or ""
+            if review_feedback:
+                feedback_log.append(f"Attempt {attempt} feedback: {review_feedback}")
+            else:
+                feedback_log.append(f"Attempt {attempt} feedback: (no feedback provided)")
+
+            if review_result.is_approved:
+                break
+
+            feedback = (
+                review_feedback
+                or "The tip was rejected for unspecified reasons. Provide a more novel, concise insight."
+            )
+            warnings.append(
+                f"Tip draft rejected (Attempt {attempt}/{self.MAX_GENERATION_ATTEMPTS}): {feedback}"
+            )
+            review_result = None
+
+        if review_result is None or not review_result.is_approved:
+            errors.append(
+                f"Failed to generate an approved tip after {self.MAX_GENERATION_ATTEMPTS} attempts."
+            )
             return TipPipelineResult(
                 aggregation=aggregation,
                 draft=draft,
@@ -282,6 +370,37 @@ class TipPipeline:
                 publication=None,
                 errors=errors,
                 warnings=warnings,
+                generation_attempts=attempt,
+                editor_feedback=feedback_log,
+            )
+
+        final_draft = review_result.revised_draft or draft
+        if final_draft is None:
+            errors.append("Editor approved review result but no draft was available.")
+            return TipPipelineResult(
+                aggregation=aggregation,
+                draft=draft,
+                tip=None,
+                publication=None,
+                errors=errors,
+                warnings=warnings,
+                generation_attempts=attempt,
+                editor_feedback=feedback_log,
+            )
+
+        try:
+            publication = self.publisher.publish(final_draft, published_at=published_at)
+        except Exception as exc:
+            errors.append(f"Tip publisher failed: {exc}")
+            return TipPipelineResult(
+                aggregation=aggregation,
+                draft=final_draft,
+                tip=None,
+                publication=None,
+                errors=errors,
+                warnings=warnings,
+                generation_attempts=attempt,
+                editor_feedback=feedback_log,
             )
 
         tip = publication.tip
@@ -290,10 +409,12 @@ class TipPipeline:
 
         return TipPipelineResult(
             aggregation=aggregation,
-            draft=draft,
+            draft=final_draft,
             tip=tip,
             publication=publication,
             errors=errors,
             warnings=warnings,
+            generation_attempts=attempt,
+            editor_feedback=feedback_log,
         )
 

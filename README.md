@@ -6,7 +6,7 @@ Live On is an experimental platform that combines agentic content pipelines with
 
 - **FastAPI application (`app/main.py`)** – Serves the public site (home, articles, tips) plus the `/coach` interface and JSON APIs (`/api/ask`, `/api/tips/latest`, `/healthz`).
 - **SQLite content repository (`app/services/sqlite_repo.py`)** – Stores articles and tips locally, mirroring the Firestore surface used in production. Falls back to in-memory seed data if a database is unavailable.
-- **Agent pipeline (`app/services/pipeline.py`, `app/scripts/run_pipeline.py`)** – Orchestrates aggregation, summarisation, editing, and publishing. Supports Git- or DB-backed publication flows.
+- **Agent pipelines (`app/services/pipeline.py`, `app/scripts/run_pipeline.py`, `app/scripts/run_tip_pipeline.py`)** – Article runs follow the Summarizer ➜ Editor ➜ Publisher chain, while the tip workflow adds a TipEditor gate that enforces a generate-review-refine loop before persisting to SQLite.
 - **Coach agent (`app/services/coach.py`)** – Wraps LangChain + Ollama (or a direct HTTP client) to generate answers with the configured local model.
 - **Deployment scripts (`deploy.ps1`, `deployment.yaml`, `service.yaml`)** – Automate build + apply steps for a Minikube cluster, including port-forwarding and health checks.
 
@@ -56,15 +56,36 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 
 When the Ollama daemon is bound to `0.0.0.0`, still point `LIVEON_OLLAMA_URL` (or the pipeline command's environment) at a reachable host such as `http://127.0.0.1:11434` so local clients can connect successfully.
 
-## Running the Content Pipeline
+## Content Generation Pipelines
 
-The pipeline CLI (`app/scripts/run_pipeline.py`) can be executed to aggregate feeds and publish new content:
+Live On ships with two parallel content flows that share the same aggregation pool but optimise for different outputs:
+
+- **Articles:** `LongevityNewsAggregator` → `SummarizerAgent` → `EditorAgent` → `Publisher`. The summariser drafts an article, the editor polishes tone / citations, and the publisher writes to either SQLite or a Git repo depending on configuration.
+- **Tips:** `LongevityNewsAggregator` → `TipGenerator` → `TipEditorAgent` → `TipPublisher`. The new TipEditor acts as a strict QA gate. Each generated `TipDraft` is reviewed against novelty, conciseness, and actionability. If the editor rejects the draft, it sends structured `TipReviewResult` feedback into the generator so it can iterate up to `MAX_GENERATION_ATTEMPTS`. The final `TipPipelineResult` now records both `generation_attempts` and the cumulative `editor_feedback`, giving you clear telemetry on how many refinement cycles were required.
+
+Both pipelines log warnings for soft failures (e.g., duplicate publications) and surface fatal errors so you can tune prompts or feeds as needed.
+
+## Running the Content Pipelines
+
+### Running the Article Pipeline
+
+The article pipeline CLI (`app/scripts/run_pipeline.py`) can be executed to aggregate feeds and publish new content:
 
 ```powershell
 python -m app.scripts.run_pipeline --feed-limit 5
 ```
 
 This command respects the same storage environment variables, so ensure `LIVEON_DB_PATH` points to the SQLite file you want to populate. The project also ships with a Git publisher for writing Markdown into a repository, making it easy to sync finished articles elsewhere.
+
+### Running the Tip Pipeline
+
+The dedicated tip runner adds the editor-in-the-loop review cycle described above:
+
+```powershell
+python -m app.scripts.run_tip_pipeline --limit-per-feed 5
+```
+
+It accepts the same environment overrides for feeds, storage, and model providers (plus `LIVEON_TIP_MODEL*` for tip-specific settings). The CLI logs additional telemetry including `generation_attempts`, `editor_feedback`, and all editor rejection reasons so you can monitor prompt quality. The JSON blob emitted at `TIP_PIPELINE_RESULT` now also contains these fields, making it easy to persist analytics or debug CI runs.
 
 ## Deployment (Minikube)
 

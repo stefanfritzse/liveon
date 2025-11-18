@@ -9,6 +9,8 @@ import re
 from typing import Any, Protocol, Sequence
 from urllib.parse import urlparse
 
+from jinja2 import Template
+
 from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
 
 from app.models.aggregator import AggregatedContent
@@ -28,36 +30,52 @@ TIP_SYSTEM_PROMPT = (
     "Keep the tone encouraging, evidence-informed, and accessible to busy readers."
 )
 
-TIP_HUMAN_PROMPT = """
-Using the research notes below, create a single actionable longevity tip suitable for our app.
-Focus on clear takeaways people can apply today.
+TIP_HUMAN_PROMPT = Template(
+    """
+{% if feedback %}
+A previous tip draft was rejected by our editor. Please generate a fresh tip from the research notes and sources below, explicitly addressing the feedback. Keep the copy tight and practical.
 
-Return valid JSON with the shape:
-{{
-  "title": "short tip title",
-  "body": "1-2 paragraph Markdown explanation with optional bullet list",
-  "tags": ["keywords"],
-  "metadata": {{
-    "sources": ["https://..."],
-    "confidence": "low|medium|high"
-  }}
-}}
+Editor feedback:
+{{ feedback }}
+{% else %}
+Using the research notes below, craft ONE concise longevity tip (2-3 sentences or a short intro plus up to 2 bullets). Make it sound like advice a health coach would give for today.
+{% endif %}
 
-Notes:
-{notes}
+Rules you MUST follow:
+- The title must be under 12 words and feel like a clear action or benefit.
+- The body must avoid URLs and raw source names. Summarise the takeaway in plain English.
+- Mention the specific behaviour (e.g., snack on carrots, schedule a strength session) and explicitly say why it helps longevity.
+- Do not invent data; if unsure, keep the claim high level but still actionable.
+
+Research notes:
+{{ notes }}
 
 Key sources:
-{sources}
+{{ sources }}
 
-Current date: {current_date}
+Current date: {{ current_date }}
+
+{% raw %}
+Respond with ONLY the JSON object in this exact structure:
+{
+  "title": "short tip title",
+  "body": "plain text with <=3 sentences or short list",
+  "tags": ["keywords"],
+  "metadata": {
+    "sources": ["https://..."],
+    "confidence": "low|medium|high"
+  }
+}
+{% endraw %}
 """.strip()
+)
 
 
 def _default_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [
             ("system", TIP_SYSTEM_PROMPT),
-            ("human", TIP_HUMAN_PROMPT),
+            ("human", "{tip_prompt}"),
         ]
     )
 
@@ -69,8 +87,12 @@ class TipGenerator:
     llm: SupportsInvoke
     prompt: ChatPromptTemplate = field(default_factory=_default_prompt)
 
-    def generate(self, items: Sequence[AggregatedContent]) -> TipDraft:
-        """Produce a tip draft from aggregated content."""
+    def generate(
+        self,
+        items: Sequence[AggregatedContent],
+        feedback: str | None = None,
+    ) -> TipDraft:
+        """Produce a tip draft from aggregated content with optional feedback to guide revisions."""
 
         if not items:
             raise ValueError("At least one aggregated content item is required")
@@ -79,11 +101,20 @@ class TipGenerator:
         tip_notes = context.to_tip_notes()
         notes_block = "\n".join(tip_notes) if tip_notes else "No concise notes available."
         sources_block = "\n".join(context.source_urls) if context.source_urls else "Not provided"
+        current_date = datetime.now(timezone.utc).date().isoformat()
 
-        messages = self.prompt.format_messages(
+        tip_prompt = self._render_tip_prompt(
             notes=notes_block,
             sources=sources_block,
-            current_date=datetime.now(timezone.utc).date().isoformat(),
+            current_date=current_date,
+            feedback=feedback,
+        )
+        messages = self.prompt.format_messages(
+            tip_prompt=tip_prompt,
+            notes=notes_block,
+            sources=sources_block,
+            current_date=current_date,
+            feedback=feedback,
         )
 
         response = self.llm.invoke(messages)
@@ -105,6 +136,23 @@ class TipGenerator:
             metadata=metadata,
         )
         return draft.with_defaults()
+
+    @staticmethod
+    def _render_tip_prompt(
+        *,
+        notes: str,
+        sources: str,
+        current_date: str,
+        feedback: str | None,
+    ) -> str:
+        """Render the human prompt via Jinja to conditionally include feedback guidance."""
+
+        return TIP_HUMAN_PROMPT.render(
+            notes=notes,
+            sources=sources,
+            current_date=current_date,
+            feedback=feedback,
+        ).strip()
 
     @staticmethod
     def _extract_content(response: BaseMessage | str) -> str:

@@ -1,26 +1,30 @@
 """Execute the longevity tip pipeline and publish the resulting content."""
+
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import logging
 import os
+import re
 import sys
-from dataclasses import asdict
-from datetime import datetime, timezone
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol, Sequence
 
 from app.models.aggregator import FeedSource
 from app.services.aggregator import LongevityNewsAggregator
 from app.services.pipeline import TipPipeline
 from app.services.tip_generator import TipGenerator
+from app.services.tip_editor import TipEditorAgent
 from app.services.tip_publisher import TipPublisher
+from app.services.sqlite_repo import LocalSQLiteContentRepository
 from app.utils.langchain_compat import AIMessage, BaseMessage
-from dataclasses import is_dataclass, asdict
-from datetime import datetime, date, timezone
-from pathlib import Path
 
 LOGGER = logging.getLogger("liveon.tip_pipeline")
+
 if not LOGGER.handlers:  # avoid duplicates on re-import
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
@@ -54,6 +58,7 @@ class SupportsInvoke(Protocol):
     def invoke(self, input: Any, **kwargs: Any) -> BaseMessage | str:  # pragma: no cover - interface
         """Invoke the underlying model."""
 
+
 def _json_default(o):
     if isinstance(o, (datetime, date)):
         # ensure timezone-aware ISO format for consistency
@@ -69,9 +74,9 @@ def _json_default(o):
     # fallback
     return str(o)
 
+
 def _configure_logging() -> None:
     """Configure root logging based on ``LIVEON_LOG_LEVEL``."""
-
     level_name = os.getenv("LIVEON_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -79,7 +84,6 @@ def _configure_logging() -> None:
 
 def _load_feeds() -> list[FeedSource]:
     """Return the feed configuration, allowing overrides via environment variables."""
-
     raw_sources = os.getenv("LIVEON_FEED_SOURCES")
     if not raw_sources:
         return [*DEFAULT_FEEDS]
@@ -211,49 +215,54 @@ class TipLocalJSONResponder:
 
     @staticmethod
     def _build_payload(prompt: str) -> dict[str, Any]:
-        notes_block = ""
-        if "Notes:" in prompt:
-            notes_block = prompt.split("Notes:", 1)[1]
-            if "Current date:" in notes_block:
-                notes_block = notes_block.split("Current date:", 1)[0]
-        notes = [line.strip(" -") for line in notes_block.splitlines() if line.strip()]
+        notes = TipLocalJSONResponder._extract_block(prompt, "Notes:", "Current date:")
+        sources = TipLocalJSONResponder._extract_block(prompt, "Key sources:", "Current date:")
 
-        sources_block = ""
-        if "Key sources:" in prompt:
-            sources_block = prompt.split("Key sources:", 1)[1]
-            if "Current date:" in sources_block:
-                sources_block = sources_block.split("Current date:", 1)[0]
-        sources = [line.strip(" -") for line in sources_block.splitlines() if line.strip()]
+        def _clean_line(raw: str) -> str:
+            text = html.unescape(raw)
+            text = re.sub(r"<[^>]+>", "", text)
+            return " ".join(text.replace("**", "").split())
 
-        title = notes[0].split(" - ")[0] if notes else "Daily Longevity Tip"
-        bullet_lines: list[str] = []
-        for note in notes:
-            parts = [part.strip() for part in note.split(" - ") if part.strip()]
-            if not parts:
-                continue
-            heading = parts[0]
-            detail = " ".join(parts[1:]) if len(parts) > 1 else "Incorporate this guidance today."
-            bullet_lines.append(f"- **{heading}:** {detail}")
+        cleaned = [_clean_line(note) for note in notes if note.strip()]
+        focus = cleaned[0] if cleaned else "Healthy habit"
+        parts = re.split(r"\s[-\u2014:]\s", focus, maxsplit=1)
+        subject = parts[0].strip(' "\'') or "Healthy habit"
+        detail = parts[1].strip() if len(parts) > 1 else "make this part of your day"
 
-        body = "Here is today's longevity tip.\\n\\n" + "\\n".join(bullet_lines) if bullet_lines else (
-            "Stay curious about longevity science and make one healthy choice today."
-        )
+        title = subject[:60] or "Daily Longevity Tip"
+        if len(subject) > 60:
+            title = title.rstrip() + "..."
 
-        tags = [notes[0].split()[0].lower()] if notes and notes[0].split() else ["longevity"]
-        metadata = {
-            "sources": sources,
-            "confidence": "medium",
-        }
+        body_sentences = [
+            f"{subject} supports long-term vitality.",
+            f"Today, focus on {detail.lower()} to put it into practice.",
+        ]
+        if len(cleaned) > 1:
+            extra_subject = cleaned[1].split(" - ")[0].strip(' "\'')
+            if extra_subject and extra_subject.lower() != subject.lower():
+                body_sentences.append(f"Pair it with {extra_subject.lower()} for an extra boost.")
+
+        body = " ".join(sentence.strip() for sentence in body_sentences if sentence.strip())
+
+        primary_tag = subject.split()[0].lower() if subject.split() else "habit"
+        tags = ["longevity", primary_tag]
+        metadata = {"sources": sources[:2], "confidence": "medium"}
+
         return {
-            "title": title or "Daily Longevity Tip",
+            "title": title,
             "body": body,
             "tags": tags,
             "metadata": metadata,
         }
 
-
-from app.services.sqlite_repo import LocalSQLiteContentRepository
-from app.services.tip_publisher import TipPublisher
+    @staticmethod
+    def _extract_block(prompt: str, start_marker: str, end_marker: str | None) -> list[str]:
+        block = ""
+        if start_marker in prompt:
+            block = prompt.split(start_marker, 1)[1]
+            if end_marker and end_marker in block:
+                block = block.split(end_marker, 1)[0]
+        return [line.strip(" -") for line in block.splitlines() if line.strip()]
 
 
 def _build_pipeline(llm: SupportsInvoke) -> TipPipeline:
@@ -262,7 +271,15 @@ def _build_pipeline(llm: SupportsInvoke) -> TipPipeline:
     generator = TipGenerator(llm=llm)
     repository = LocalSQLiteContentRepository()
     publisher = TipPublisher(repository)
-    return TipPipeline(aggregator=aggregator, generator=generator, publisher=publisher)
+    editor = TipEditorAgent(llm=llm)
+
+    return TipPipeline(
+        aggregator=aggregator,
+        generator=generator,
+        editor=editor,
+        publisher=publisher,
+        repository=repository,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -305,6 +322,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "errors": result.errors,
         "succeeded": result.succeeded,
         "created": result.created,
+        "generation_attempts": getattr(result, "generation_attempts", 1),
+        "editor_feedback": getattr(result, "editor_feedback", []),
     }
     LOGGER.debug("TIP_PIPELINE_RESULT %s", json.dumps(payload, default=_json_default, ensure_ascii=False))
 

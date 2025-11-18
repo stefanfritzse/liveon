@@ -314,6 +314,20 @@ class LocalSQLiteContentRepository:
         ).fetchone()
         return self._row_to_article(row) if row else None
 
+    def delete_article(self, article_id: str) -> bool:
+        """Delete an article and its URL index entries."""
+
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM article_sources WHERE article_id = ?;",
+                (article_id,),
+            )
+            cursor = self._conn.execute(
+                f"DELETE FROM {self._article_table} WHERE id = ?;",
+                (article_id,),
+            )
+        return cursor.rowcount > 0
+
     # --- Tip helpers ------------------------------------------------------------
 
     def get_latest_tips(self, *, limit: int = 5) -> list[Tip]:
@@ -419,6 +433,16 @@ class LocalSQLiteContentRepository:
             if candidate == sought:
                 return self._row_to_tip(r)
         return None
+
+    def delete_tip(self, tip_id: str) -> bool:
+        """Delete a tip by id."""
+
+        with self._conn:
+            cursor = self._conn.execute(
+                f"DELETE FROM {self._tip_table} WHERE id = ?;",
+                (tip_id,),
+            )
+        return cursor.rowcount > 0
 
     # --- Seed utility -----------------------------------------------------------
 
