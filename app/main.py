@@ -224,8 +224,7 @@ class _InMemoryContentRepository:
 
 def get_repository() -> ContentRepository:
     """Resolve the content repository (SQLite locally, Firestore in cloud)."""
-    #storage = (os.getenv("LIVEON_STORAGE") or "sqlite").strip().lower()
-    storage = "sqlite"
+    storage = (os.getenv("LIVEON_STORAGE") or "sqlite").strip().lower()
 
     if storage == "sqlite":
         try:
@@ -235,13 +234,9 @@ def get_repository() -> ContentRepository:
             logger.exception("SQLite repository init failed; falling back to in-memory.")
             return _InMemoryContentRepository()
 
-    # default: Firestore (with graceful fallback)
-    try:
-        db_path = os.getenv("LIVEON_DB_PATH")
-        return LocalSQLiteContentRepository(db_path=db_path)
-    except Exception as exc:
-        logger.exception("SQLite repository init failed; falling back to in-memory.")
-        return _InMemoryContentRepository()
+    # Fallback for any other storage type
+    logger.warning("Unsupported storage type '%s'; falling back to in-memory.", storage)
+    return _InMemoryContentRepository()
 
 
 
