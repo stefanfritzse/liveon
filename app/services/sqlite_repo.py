@@ -144,7 +144,7 @@ class LocalSQLiteContentRepository:
 
         # Ensure directory exists
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._db_path)
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._conn:
             self._conn.execute("PRAGMA foreign_keys = ON;")
