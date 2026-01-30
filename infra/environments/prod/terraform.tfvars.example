@@ -25,9 +25,15 @@ gke_master_authorized_networks = [
   },
 ]
 
+artifact_registry_location               = "europe-north2"
+artifact_registry_repository_id          = "longevity-app"
+artifact_registry_repository_description = "Container images for the Live On platform."
+
 # Repository that is allowed to impersonate the Terraform service account via Workload Identity Federation.
 github_repository = "your-org/your-repo"
 # github_default_branch = "main"
+
+create_liveon_app_service_account = false
 
 # GitHub Actions runner configuration. Disable or override defaults as needed.
 enable_runner             = true
