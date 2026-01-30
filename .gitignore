@@ -50,3 +50,4 @@ diagnostics.ps1
 .idea/
 .vscode/
 *.swpAI_README.MD
+.pytest_cache/
