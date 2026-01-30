@@ -19,7 +19,7 @@ def test_summarizer_local_stub_rejected_in_managed_env(monkeypatch: pytest.Monke
         "GCP_PROJECT",
         "KUBERNETES_SERVICE_HOST",
     )
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "live-on-473112")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project-id")
 
     with pytest.raises(RuntimeError) as excinfo:
         _create_llm("summarizer")
@@ -37,7 +37,7 @@ def test_summarizer_local_stub_allowed_with_explicit_opt_in(monkeypatch: pytest.
         "GCP_PROJECT",
         "KUBERNETES_SERVICE_HOST",
     )
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "live-on-473112")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project-id")
     monkeypatch.setenv("LIVEON_ALLOW_LOCAL_LLM", "true")
 
     llm = _create_llm("summarizer")
