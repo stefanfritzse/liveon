@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import ast
 from typing import Any, Protocol, Sequence
 
-from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
+from app.utils.json_repair import invoke_json_object
+from app.utils.langchain_compat import BaseMessage, ChatPromptTemplate
 
 from app.models.aggregator import AggregatedContent
 from app.models.summarizer import ArticleDraft, SummarizerContext
@@ -73,9 +72,7 @@ class SummarizerAgent:
             current_date=datetime.now(timezone.utc).date().isoformat(),
         )
 
-        response = self.llm.invoke(messages)
-        content = self._extract_content(response)
-        payload = self._parse_payload(content)
+        payload = invoke_json_object(self.llm, messages, label="Summarizer")
         draft = ArticleDraft(
             title=payload.get("title", ""),
             summary=payload.get("summary", ""),
@@ -86,90 +83,6 @@ class SummarizerAgent:
         )
         return draft.with_defaults()
 
-    @staticmethod
-    def _extract_content(response: BaseMessage | str) -> str:
-        if isinstance(response, AIMessage):
-            return response.content or ""
-        if isinstance(response, BaseMessage):
-            return str(response.content) if getattr(response, "content", None) else ""
-        return str(response)
-
-    @staticmethod
-    def _parse_payload(content: str) -> dict[str, Any]:
-        text = content.strip()
-        if not text:
-            raise ValueError("Summarizer response was not valid JSON")
-
-        candidates: list[str] = []
-        fenced = SummarizerAgent._strip_code_fence(text)
-        if fenced:
-            candidates.append(fenced)
-        candidates.append(text)
-
-        for candidate in candidates:
-            parsed = SummarizerAgent._try_parse_mapping(candidate)
-            if parsed is not None:
-                return parsed
-
-        scanned = SummarizerAgent._scan_for_object(text)
-        if scanned is not None:
-            return SummarizerAgent._ensure_mapping(scanned)
-
-        raise ValueError("Summarizer response was not valid JSON")
-
-    @staticmethod
-    def _strip_code_fence(text: str) -> str | None:
-        if not text.startswith("```"):
-            return None
-
-        closing_index = text.rfind("```")
-        if closing_index <= 0:
-            return None
-
-        first_linebreak = text.find("\n")
-        if first_linebreak == -1:
-            content = text[3:closing_index]
-        else:
-            content = text[first_linebreak + 1 : closing_index]
-
-        cleaned = content.strip()
-        return cleaned or None
-
-    @staticmethod
-    def _scan_for_object(text: str) -> dict[str, Any] | None:
-        decoder = json.JSONDecoder()
-        for index, char in enumerate(text):
-            if char != "{":
-                continue
-            try:
-                payload, _ = decoder.raw_decode(text, index)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                return payload
-        return None
-
-    @staticmethod
-    def _ensure_mapping(payload: Any) -> dict[str, Any]:
-        if not isinstance(payload, dict):
-            raise ValueError("Summarizer response JSON must be an object")
-        return payload
-
-    @staticmethod
-    def _try_parse_mapping(candidate: str) -> dict[str, Any] | None:
-        try:
-            return SummarizerAgent._ensure_mapping(json.loads(candidate))
-        except json.JSONDecodeError:
-            pass
-
-        try:
-            payload = ast.literal_eval(candidate)
-        except (SyntaxError, ValueError):
-            return None
-
-        if isinstance(payload, dict):
-            return payload
-        return None
 
     @staticmethod
     def _merge_sources(primary: Sequence[str], secondary: Sequence[str]) -> list[str]:

@@ -21,6 +21,31 @@ class TipGenerationContext:
     guidance: str | None = None
     current_date: date = field(default_factory=_default_date)
 
+    def focused(self, index: int) -> "TipGenerationContext":
+        """Return a copy whose notes are rotated so ``index`` leads.
+
+        Retries otherwise re-send the notes in the same order, so the generator keeps
+        re-deriving a tip from whichever story happens to be the most actionable and
+        the editor keeps rejecting it as repetitive. Leading with a different story
+        gives the retry somewhere new to go.
+        """
+
+        if not self.notes:
+            return self
+
+        offset = index % len(self.notes)
+        if offset == 0:
+            return self
+
+        rotated = list(self.notes[offset:]) + list(self.notes[:offset])
+        return TipGenerationContext(
+            notes=rotated,
+            sources=list(self.sources),
+            theme=self.theme,
+            guidance=self.guidance,
+            current_date=self.current_date,
+        )
+
     def notes_block(self) -> str:
         """Return newline-delimited notes suitable for prompt rendering."""
 

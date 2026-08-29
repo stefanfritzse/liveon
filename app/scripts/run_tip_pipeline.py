@@ -13,14 +13,19 @@ from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, Sequence
-from urllib.parse import urlparse
 
+from app.services.aggregator import LongevityNewsAggregator, load_feeds
+from app.services.llm_factory import (
+    SUPPORTED_PROVIDERS,
+    create_chat_model,
+    normalise_provider,
+)
 from app.services.pipeline import TipPipeline
 from app.services.tip_generator import TipGenerator
 from app.services.tip_editor import TipEditorAgent
 from app.services.tip_context import DailyTipContextProvider
 from app.services.tip_publisher import TipPublisher
-from app.services.sqlite_repo import LocalSQLiteContentRepository
+from app.services.sqlite_repo import create_repository
 from app.utils.langchain_compat import AIMessage, BaseMessage
 
 LOGGER = logging.getLogger("liveon.tip_pipeline")
@@ -71,15 +76,27 @@ def _env_bool(variable: str, default: bool = False) -> bool:
 
 
 def _default_model_provider() -> str:
-    raw = os.getenv("LIVEON_TIP_MODEL") or os.getenv("LIVEON_SUMMARIZER_MODEL") or "local"
-    return raw.lower()
+    """Provider used when ``--model-provider`` is omitted.
+
+    ``LIVEON_LLM_PROVIDER`` is consulted before falling back to the offline stub so a
+    deployment that configures Ollama for the site gets real tips too, rather than
+    silently publishing stub content.
+    """
+
+    raw = (
+        os.getenv("LIVEON_TIP_MODEL")
+        or os.getenv("LIVEON_SUMMARIZER_MODEL")
+        or os.getenv("LIVEON_LLM_PROVIDER")
+        or "local"
+    )
+    return normalise_provider(raw, default="local")
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Execute the Live On tip pipeline")
     parser.add_argument(
         "--model-provider",
-        choices=["local", "openai", "gpt"],
+        choices=sorted(SUPPORTED_PROVIDERS),
         default=_default_model_provider(),
         help="Language model backend for the tip generator",
     )
@@ -118,54 +135,33 @@ def _parse_datetime(value: str | None) -> datetime | None:
     return parsed
 
 
-def _create_tip_llm(provider: str, *, model_name: str | None, allow_local_stub: bool) -> SupportsInvoke:
-    provider_key = provider.lower()
-    temperature = float(os.getenv("LIVEON_MODEL_TEMPERATURE", "0.2"))
+def _create_tip_llm(
+    provider: str,
+    *,
+    model_name: str | None,
+    allow_local_stub: bool,
+) -> SupportsInvoke:
+    """Build the chat model backing both tip agents.
 
-    if provider_key == "ollama":
-        from langchain_community.chat_models import ChatOllama
-        model = (
-            os.getenv("LIVEON_TIP_OLLAMA_MODEL")
-            or os.getenv("LIVEON_OLLAMA_MODEL")
-            or 'phi3:14b-medium-4k-instruct-q4_K_M'
+    The deterministic stub fabricates plausible-looking tips, so publishing them is an
+    explicit decision rather than the accident of an unset environment variable.
+    """
+
+    resolved = normalise_provider(provider, default="local")
+    if resolved == "local" and not allow_local_stub:
+        raise SystemExit(
+            "The 'local' provider returns a deterministic stub, not real generated "
+            "content. Pass --allow-local-llm (or set LIVEON_ALLOW_LOCAL_LLM=1) to use "
+            "it, or choose --model-provider ollama."
         )
-        base_url = _resolve_ollama_base_url()
-        return ChatOllama(model=model, base_url=base_url)
 
-    if provider_key in {"openai", "gpt"}:  # pragma: no cover - optional dependency
-        try:
-            from langchain_openai import ChatOpenAI
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise SystemExit("Install langchain-openai to use the OpenAI chat model") from exc
-
-        model_id = model_name or os.getenv("LIVEON_TIP_OPENAI_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
-        return ChatOpenAI(model=model_id, temperature=temperature)
-
-    if provider_key != "local":
-        raise SystemExit(f"Unsupported model provider: {provider}")
-
-    return TipLocalJSONResponder()
-
-
-def _resolve_ollama_base_url() -> str:
-    """Return a client-safe Ollama base URL, defaulting to localhost."""
-
-    raw = (os.getenv("LIVEON_OLLAMA_URL") or os.getenv("OLLAMA_HOST") or "").strip()
-    if not raw:
-        raw = "http://127.0.0.1:11434"
-
-    if "://" not in raw:
-        raw = f"http://{raw}"
-
-    parsed = urlparse(raw)
-    scheme = parsed.scheme or "http"
-    host = parsed.hostname or "127.0.0.1"
-
-    if host in {"0.0.0.0", "::", "", "[::]"}:
-        host = "127.0.0.1"
-
-    port = parsed.port or 11434
-    return f"{scheme}://{host}:{port}"
+    return create_chat_model(
+        provider=resolved,
+        agent_label="tip",
+        model_name=model_name,
+        json_mode=True,
+        local_factory=TipLocalJSONResponder,
+    )
 
 
 class TipLocalJSONResponder:
@@ -239,10 +235,28 @@ class TipLocalJSONResponder:
         return [line.strip(" -") for line in block.splitlines() if line.strip()]
 
 
+def _build_tip_aggregator() -> LongevityNewsAggregator | None:
+    """Return the news aggregator that feeds tip generation, if it can be built."""
+
+    if _env_bool("LIVEON_TIP_USE_PRESETS"):
+        LOGGER.info("Tip context pinned to offline presets by LIVEON_TIP_USE_PRESETS")
+        return None
+    try:
+        return LongevityNewsAggregator(load_feeds())
+    except Exception:  # noqa: BLE001 - presets remain as the fallback
+        LOGGER.exception("Could not build the tip aggregator; using offline presets")
+        return None
+
+
 def _build_pipeline(llm: SupportsInvoke) -> TipPipeline:
-    context_provider = DailyTipContextProvider()
+    context_provider = DailyTipContextProvider(
+        aggregator=_build_tip_aggregator(),
+        feed_limit=int(os.getenv("LIVEON_FEED_LIMIT", "5")),
+    )
     generator = TipGenerator(llm=llm)
-    repository = LocalSQLiteContentRepository()
+    # Honour LIVEON_DB_PATH: this used to construct the repository with no path, so
+    # every tip run wrote to the default database regardless of configuration.
+    repository = create_repository()
     publisher = TipPublisher(repository)
     editor = TipEditorAgent(llm=llm)
 

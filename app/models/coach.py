@@ -1,17 +1,39 @@
 """Domain models used by the conversational coaching experience."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Mapping
+from dataclasses import dataclass, field
+from typing import Mapping, Sequence
+
+USER_ROLE = "user"
+COACH_ROLE = "coach"
+
+
+@dataclass(slots=True, frozen=True)
+class CoachTurn:
+    """A single earlier message in the conversation."""
+
+    role: str
+    text: str
+
+    @property
+    def is_user(self) -> bool:
+        return self.role == USER_ROLE
+
+    def stripped(self) -> str:
+        return self.text.strip()
 
 
 @dataclass(slots=True)
 class CoachQuestion:
-    """The user's question presented to the coach agent."""
+    """The user's question presented to the coach agent.
+
+    ``history`` carries the earlier turns of the same conversation, oldest first, so
+    follow-ups like "and after 50?" resolve against what was already discussed.
+    """
 
     text: str
     metadata: Mapping[str, str] | None = None
-    include_history: bool = False
+    history: Sequence[CoachTurn] = field(default_factory=tuple)
 
     def stripped(self) -> str:
         """Return a trimmed representation of the question text."""

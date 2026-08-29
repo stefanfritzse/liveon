@@ -194,8 +194,14 @@ class ContentPipeline:
 class SupportsTipGeneration(Protocol):
     """Protocol describing the tip generator agent interface."""
 
-    def generate(self, items: Sequence[AggregatedContent], feedback: str | None = None) -> TipDraft:
-        """Return a tip draft derived from aggregated content."""
+    def generate(
+        self,
+        *,
+        context: TipGenerationContext,
+        feedback: str | None = None,
+        published_tips: Sequence[Tip] = (),
+    ) -> TipDraft:
+        """Return a tip draft derived from the research context."""
 
 
 class SupportsTipPublishing(Protocol):
@@ -311,7 +317,13 @@ class TipPipeline:
         while attempt < self.MAX_GENERATION_ATTEMPTS:
             attempt += 1
             try:
-                draft = self.generator.generate(context=context, feedback=feedback)
+                # Lead each retry with a different source story; repeating the same
+                # ordering makes the generator re-derive the tip that was just rejected.
+                draft = self.generator.generate(
+                    context=context.focused(attempt - 1),
+                    feedback=feedback,
+                    published_tips=existing_tips,
+                )
             except Exception as exc:
                 error_msg = f"Tip generator failed on attempt {attempt}: {exc}"
                 errors.append(error_msg)

@@ -4,17 +4,15 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-import ast
-from typing import Any
 
-from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
+from app.utils.json_repair import invoke_json_object
+from app.utils.langchain_compat import ChatPromptTemplate
 
 from app.models.editor import EditedArticle, rejected_sources
 from app.models.summarizer import ArticleDraft
 from app.services.summarizer import SupportsInvoke
 from dataclasses import is_dataclass, asdict
-from datetime import datetime, date, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger("liveon.editor")
@@ -94,9 +92,7 @@ class EditorAgent:
             draft=json.dumps(payload, default=_json_default, ensure_ascii=False),
             current_date=datetime.now(timezone.utc).date().isoformat(),
         )
-        response = self.llm.invoke(messages)
-        content = self._extract_content(response)
-        data = self._parse_payload(content)
+        data = invoke_json_object(self.llm, messages, label="Editor", logger=logger)
         edited = EditedArticle(
             title=data.get("title", draft.title),
             summary=data.get("summary", draft.summary),
@@ -115,90 +111,3 @@ class EditorAgent:
                 extra={"event": "editor.sources_rejected", "urls": invented},
             )
         return edited.normalised(draft)
-
-    @staticmethod
-    def _extract_content(response: BaseMessage | str) -> str:
-        if isinstance(response, AIMessage):
-            return response.content or ""
-        if isinstance(response, BaseMessage):
-            return str(getattr(response, "content", "") or "")
-        return str(response)
-
-    @staticmethod
-    def _parse_payload(content: str) -> dict[str, Any]:
-        text = content.strip()
-        if not text:
-            raise ValueError("Editor response was not valid JSON")
-
-        candidates: list[str] = []
-        fenced = EditorAgent._strip_code_fence(text)
-        if fenced:
-            candidates.append(fenced)
-        candidates.append(text)
-
-        for candidate in candidates:
-            parsed = EditorAgent._try_parse_mapping(candidate)
-            if parsed is not None:
-                return parsed
-
-        scanned = EditorAgent._scan_for_object(text)
-        if scanned is not None:
-            return EditorAgent._ensure_mapping(scanned)
-
-        raise ValueError("Editor response was not valid JSON")
-
-    @staticmethod
-    def _strip_code_fence(text: str) -> str | None:
-        if not text.startswith("```"):
-            return None
-
-        closing_index = text.rfind("```")
-        if closing_index <= 0:
-            return None
-
-        first_linebreak = text.find("\n")
-        if first_linebreak == -1:
-            content = text[3:closing_index]
-        else:
-            content = text[first_linebreak + 1 : closing_index]
-
-        cleaned = content.strip()
-        return cleaned or None
-
-    @staticmethod
-    def _scan_for_object(text: str) -> dict[str, Any] | None:
-        decoder = json.JSONDecoder()
-        for index, char in enumerate(text):
-            if char != "{":
-                continue
-            try:
-                payload, _ = decoder.raw_decode(text, index)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                return payload
-        return None
-
-    @staticmethod
-    def _ensure_mapping(payload: Any) -> dict[str, Any]:
-        if not isinstance(payload, dict):
-            raise ValueError("Editor response JSON must be an object")
-        return payload
-
-    @staticmethod
-    def _try_parse_mapping(candidate: str) -> dict[str, Any] | None:
-        """Attempt to parse JSON or Python literal dicts."""
-
-        try:
-            return EditorAgent._ensure_mapping(json.loads(candidate))
-        except json.JSONDecodeError:
-            pass
-
-        try:
-            payload = ast.literal_eval(candidate)
-        except (SyntaxError, ValueError):
-            return None
-
-        if isinstance(payload, dict):
-            return payload
-        return None

@@ -45,6 +45,10 @@
             required
           ></textarea>
           <div class="coach-form-actions">
+            <span id="coach-status" class="coach-status" role="status" aria-live="polite"></span>
+            <button type="button" id="coach-cancel" class="secondary coach-cancel" hidden>
+              Stop
+            </button>
             <button type="submit" class="primary" data-default-label="Send question">
               Send question
             </button>
@@ -191,8 +195,73 @@
     }
 
     .coach-form-actions {
+      align-items: center;
       display: flex;
+      gap: 0.75rem;
       justify-content: flex-end;
+    }
+
+    .coach-status {
+      color: #475569;
+      font-size: 0.9rem;
+      font-variant-numeric: tabular-nums;
+      margin-right: auto;
+    }
+
+    .coach-cancel {
+      margin: 0;
+    }
+
+    /* Three dots that pulse while the model is still producing its first tokens. */
+    .coach-typing {
+      display: inline-flex;
+      gap: 0.3rem;
+      padding: 0.35rem 0;
+    }
+
+    .coach-typing span {
+      animation: coach-blink 1.2s infinite ease-in-out both;
+      background: #94a3b8;
+      border-radius: 50%;
+      display: block;
+      height: 0.5rem;
+      width: 0.5rem;
+    }
+
+    .coach-typing span:nth-child(2) {
+      animation-delay: 0.18s;
+    }
+
+    .coach-typing span:nth-child(3) {
+      animation-delay: 0.36s;
+    }
+
+    @keyframes coach-blink {
+      0%,
+      80%,
+      100% {
+        opacity: 0.25;
+      }
+      40% {
+        opacity: 1;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .coach-typing span {
+        animation: none;
+        opacity: 0.6;
+      }
+    }
+
+    /* The streamed answer is written into a block container, so lists and paragraphs
+       nest legally instead of being hoisted out of a <p>. */
+    .coach-message-body > :first-child {
+      margin-top: 0;
+    }
+
+    .coach-message-body > :last-child {
+      margin-bottom: 0;
     }
 
     .coach-error {
@@ -311,8 +380,14 @@
       const transcript = app.querySelector('#coach-transcript');
       const errorBanner = app.querySelector('#coach-error');
       const submitButton = form?.querySelector('button[type="submit"]');
+      const cancelButton = app.querySelector('#coach-cancel');
+      const statusLabel = app.querySelector('#coach-status');
       const defaultButtonLabel = submitButton?.dataset.defaultLabel ?? 'Send question';
       const suggestionButtons = app.querySelectorAll('.coach-suggestion');
+
+      // Slightly above the server's own ceiling, so the server's explanatory error
+      // normally wins and this only catches a genuinely stalled connection.
+      const CLIENT_TIMEOUT_MS = {{ coach_timeout_ms }};
 
       const escapeHtml = (value) =>
         value
@@ -460,9 +535,16 @@
           .join('\n');
       };
 
-      const appendMessage = (role, content, { disclaimer } = {}) => {
+      const scrollToLatest = () => {
+        if (transcript) {
+          transcript.scrollTop = transcript.scrollHeight;
+        }
+      };
+
+      // Returns a handle so a streaming answer can keep rewriting its own bubble.
+      const createMessage = (role, { focus = true } = {}) => {
         if (!transcript) {
-          return;
+          return null;
         }
 
         const message = document.createElement('article');
@@ -474,21 +556,55 @@
         header.textContent = role === 'user' ? 'You' : 'Coach';
         message.appendChild(header);
 
-        const body = document.createElement('p');
-        body.innerHTML = renderMarkdown(content);
+        const body = document.createElement('div');
+        body.className = 'coach-message-body';
         message.appendChild(body);
 
-        if (role === 'assistant' && disclaimer) {
-          const disclaimerBlock = document.createElement('p');
-          disclaimerBlock.className = 'coach-message-disclaimer';
-          disclaimerBlock.innerHTML = renderMarkdown(disclaimer);
-          message.appendChild(disclaimerBlock);
-        }
-
         transcript.appendChild(message);
-        message.focus();
-        transcript.scrollTop = transcript.scrollHeight;
+        if (focus) {
+          message.focus();
+        }
+        scrollToLatest();
 
+        let disclaimerBlock = null;
+
+        return {
+          element: message,
+          showTyping() {
+            body.innerHTML =
+              '<span class="coach-typing" aria-label="The coach is thinking">' +
+              '<span></span><span></span><span></span></span>';
+            scrollToLatest();
+          },
+          setText(text) {
+            body.innerHTML = renderMarkdown(text);
+            scrollToLatest();
+          },
+          setDisclaimer(text) {
+            if (!text) {
+              return;
+            }
+            if (!disclaimerBlock) {
+              disclaimerBlock = document.createElement('p');
+              disclaimerBlock.className = 'coach-message-disclaimer';
+              message.appendChild(disclaimerBlock);
+            }
+            disclaimerBlock.innerHTML = renderMarkdown(text);
+            scrollToLatest();
+          },
+        };
+      };
+
+      const appendMessage = (role, content, { disclaimer } = {}) => {
+        const handle = createMessage(role);
+        if (!handle) {
+          return null;
+        }
+        handle.setText(content);
+        if (role === 'assistant' && disclaimer) {
+          handle.setDisclaimer(disclaimer);
+        }
+        return handle;
       };
 
       const applySuggestion = (value) => {
@@ -510,11 +626,204 @@
         });
       });
 
+      // ------------------------------------------------------------------
+      // Conversation state
+      // ------------------------------------------------------------------
+      // The coach is stateless per request, so the transcript is the memory: each
+      // question ships the earlier turns and the server applies its own budget.
+      const conversation = [];
+
+      let activeController = null;
+      let elapsedTimer = null;
+
+      const setStatus = (text) => {
+        if (statusLabel) {
+          statusLabel.textContent = text ?? '';
+        }
+      };
+
+      const startElapsedTimer = () => {
+        const startedAt = Date.now();
+        setStatus('Thinking… 0s');
+        elapsedTimer = window.setInterval(() => {
+          const seconds = Math.round((Date.now() - startedAt) / 1000);
+          setStatus('Thinking… ' + seconds + 's');
+        }, 1000);
+      };
+
+      const stopElapsedTimer = () => {
+        if (elapsedTimer !== null) {
+          window.clearInterval(elapsedTimer);
+          elapsedTimer = null;
+        }
+        setStatus('');
+      };
+
+      const setBusy = (isBusy) => {
+        toggleLoading(isBusy);
+        if (cancelButton) {
+          cancelButton.hidden = !isBusy;
+        }
+        if (isBusy) {
+          startElapsedTimer();
+        } else {
+          stopElapsedTimer();
+        }
+      };
+
+      const cancelActiveRequest = () => {
+        if (activeController) {
+          activeController.abort();
+        }
+      };
+
+      cancelButton?.addEventListener('click', cancelActiveRequest);
+
+      // ------------------------------------------------------------------
+      // Streaming transport
+      // ------------------------------------------------------------------
+      const parseSseBlock = (block) => {
+        let eventName = 'message';
+        const dataLines = [];
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event:')) {
+            eventName = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            dataLines.push(line.slice(5).trim());
+          }
+        }
+        if (!dataLines.length) {
+          return null;
+        }
+        try {
+          return { event: eventName, data: JSON.parse(dataLines.join('\n')) };
+        } catch (parseError) {
+          return null;
+        }
+      };
+
+      // Resolves with {answer, disclaimer} or throws. onChunk receives the running text.
+      const streamAnswer = async (question, history, signal, onChunk) => {
+        const response = await fetch(basePath + '/api/ask/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question, history }),
+          signal,
+        });
+
+        if (!response.ok || !response.body) {
+          // Fall back to the plain endpoint (older proxy, response buffering, ...).
+          const unavailable = new Error('stream-unavailable');
+          unavailable.name = 'StreamUnavailable';
+          throw unavailable;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let text = '';
+        let result = null;
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+
+          let separator = buffer.indexOf('\n\n');
+          while (separator !== -1) {
+            const block = buffer.slice(0, separator);
+            buffer = buffer.slice(separator + 2);
+            const parsed = parseSseBlock(block);
+            if (parsed) {
+              if (parsed.event === 'chunk') {
+                text += parsed.data.text ?? '';
+                onChunk(text);
+              } else if (parsed.event === 'done') {
+                result = {
+                  answer: parsed.data.answer ?? text,
+                  disclaimer: parsed.data.disclaimer ?? '',
+                };
+              } else if (parsed.event === 'error') {
+                const failure = new Error(
+                  parsed.data.message ?? 'The coach is unavailable right now.',
+                );
+                failure.name = 'CoachError';
+                failure.detail = parsed.data;
+                throw failure;
+              }
+            }
+            separator = buffer.indexOf('\n\n');
+          }
+        }
+
+        if (!result) {
+          if (text) {
+            return { answer: text, disclaimer: '' };
+          }
+          const empty = new Error('The coach returned an empty response.');
+          empty.name = 'CoachError';
+          throw empty;
+        }
+        return result;
+      };
+
+      const requestAnswer = async (question, history, signal, onChunk) => {
+        try {
+          return await streamAnswer(question, history, signal, onChunk);
+        } catch (error) {
+          if (error.name !== 'StreamUnavailable') {
+            throw error;
+          }
+        }
+
+        const response = await fetch(basePath + '/api/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question, history }),
+          signal,
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          const detail = payload?.detail;
+          const message =
+            typeof detail === 'string'
+              ? detail
+              : detail?.message ?? 'The coach is unavailable right now.';
+          const failure = new Error(message);
+          failure.name = 'CoachError';
+          failure.detail = typeof detail === 'object' ? detail : null;
+          throw failure;
+        }
+        return { answer: payload?.answer ?? '', disclaimer: payload?.disclaimer ?? '' };
+      };
+
+      // ------------------------------------------------------------------
+      // Submit
+      // ------------------------------------------------------------------
+      const describeFailure = (error) => {
+        const lines = [error.message];
+        const reference = error.detail?.reference;
+        if (reference) {
+          lines.push('', 'Reference: ' + reference);
+        }
+        const debugInfo = error.detail?.debug ? formatDebugInfo(error.detail.debug) : '';
+        if (debugInfo) {
+          lines.push('', 'Debug information:', debugInfo);
+        }
+        return lines.join('\n');
+      };
+
       const handleSubmit = async (event) => {
         event.preventDefault();
         clearError();
-        const question = textarea?.value?.trim();
 
+        if (activeController) {
+          return; // a request is already in flight
+        }
+
+        const question = textarea?.value?.trim();
         if (!question) {
           showError('Please enter a question for the coach.');
           textarea?.focus();
@@ -522,60 +831,54 @@
         }
 
         appendMessage('user', question);
-        toggleLoading(true);
+        const history = conversation.slice();
+        const answerHandle = createMessage('assistant', { focus: false });
+        answerHandle?.showTyping();
+
+        const controller = new AbortController();
+        activeController = controller;
+        const clientTimeout = window.setTimeout(() => controller.abort(), CLIENT_TIMEOUT_MS);
+        setBusy(true);
+
+        if (textarea) {
+          textarea.value = '';
+        }
 
         try {
-          const response = await fetch(`${basePath}/api/ask`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question }),
-          });
-
-          const payload = await response.json();
-
-          if (!response.ok) {
-            const detail = payload?.detail ?? 'The coach is unavailable right now.';
-            const errorMessage =
-              typeof detail === 'string'
-                ? detail
-                : detail?.message ?? 'The coach is unavailable right now.';
-            showError(errorMessage);
-
-            const reference =
-              typeof detail === 'object' && detail ? detail.reference : '';
-
-            // Present only when LIVEON_DEBUG_ERRORS is enabled on the server.
-            const debugInfo =
-              typeof detail === 'object' && detail && detail.debug
-                ? formatDebugInfo(detail.debug)
-                : '';
-
-            const assistantLines = [errorMessage];
-
-            if (reference) {
-              assistantLines.push('', `Reference: ${reference}`);
-            }
-
-            if (debugInfo) {
-              assistantLines.push('', 'Debug information:', debugInfo);
-            }
-
-            appendMessage('assistant', assistantLines.join('\n'));
-            textarea?.focus();
-            return;
-          }
-
-          appendMessage('assistant', payload?.answer ?? '', {
-            disclaimer: payload?.disclaimer,
-          });
-          textarea.value = '';
-          textarea.focus();
+          const { answer, disclaimer } = await requestAnswer(
+            question,
+            history,
+            controller.signal,
+            (partial) => answerHandle?.setText(partial),
+          );
+          answerHandle?.setText(answer);
+          answerHandle?.setDisclaimer(disclaimer);
+          conversation.push({ role: 'user', text: question });
+          conversation.push({ role: 'coach', text: answer });
         } catch (error) {
-          showError('Something went wrong while contacting the coach. Please try again.');
-          appendMessage('assistant', 'I encountered an unexpected error and could not respond.');
-          textarea?.focus();
+          if (error.name === 'AbortError') {
+            answerHandle?.setText('_Stopped before the coach finished answering._');
+          } else {
+            const message =
+              error.name === 'CoachError'
+                ? error.message
+                : 'Something went wrong while contacting the coach. Please try again.';
+            showError(message);
+            answerHandle?.setText(
+              error.name === 'CoachError'
+                ? describeFailure(error)
+                : 'I could not reach the coach just now. Please try again in a moment.',
+            );
+          }
+          // Restore the question so a failed or stopped attempt does not lose it.
+          if (textarea && !textarea.value) {
+            textarea.value = question;
+          }
         } finally {
-          toggleLoading(false);
+          window.clearTimeout(clientTimeout);
+          activeController = null;
+          setBusy(false);
+          textarea?.focus();
         }
       };
 

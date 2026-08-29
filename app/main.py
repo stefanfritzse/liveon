@@ -1,7 +1,7 @@
 """FastAPI web application for the Live On Longevity Coach platform"""
 
 from __future__ import annotations
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from functools import lru_cache
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,12 +15,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlparse
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
+from app.models.coach import COACH_ROLE, USER_ROLE, CoachQuestion, CoachTurn
 from app.models.content import Article, Tip
 from app.services.coach import (
     CoachAgent,
@@ -29,6 +35,7 @@ from app.services.coach import (
     CoachUnavailableError,
     create_coach_llm,
     resolve_llm_timeout,
+    separate_disclaimer,
 )
 from app.services.pipeline_scheduler import create_pipeline_scheduler
 from app.utils.text import markdown_to_plain_text, markdown_to_html
@@ -235,10 +242,38 @@ def get_coach_agent() -> CoachAgent:
         ) from exc
 
 
+#: Ceiling on a single submitted history turn. The client sends the transcript, so the
+#: request body is untrusted input and is bounded before it reaches the model.
+_MAX_HISTORY_TURN_CHARS = 4000
+_MAX_HISTORY_TURNS_ACCEPTED = 40
+
+
+class CoachHistoryTurn(BaseModel):
+    """One earlier message in the conversation, as supplied by the client."""
+
+    role: str = Field(..., description="Either 'user' or 'coach'.")
+    text: str = Field(..., max_length=_MAX_HISTORY_TURN_CHARS)
+
+    @field_validator("role")
+    @classmethod
+    def _normalise_role(cls, value: str) -> str:
+        cleaned = (value or "").strip().lower()
+        if cleaned in {"user", "human"}:
+            return USER_ROLE
+        if cleaned in {"coach", "assistant", "ai"}:
+            return COACH_ROLE
+        raise ValueError("Role must be 'user' or 'coach'.")
+
+
 class AskCoachRequest(BaseModel):
     """API payload submitted by clients requesting coach guidance."""
 
     question: str = Field(..., description="The longevity-related question to ask the coach.")
+    history: list[CoachHistoryTurn] = Field(
+        default_factory=list,
+        max_length=_MAX_HISTORY_TURNS_ACCEPTED,
+        description="Earlier turns of this conversation, oldest first.",
+    )
 
     @field_validator("question")
     @classmethod
@@ -253,6 +288,14 @@ class AskCoachRequest(BaseModel):
         """Return the trimmed question text ready for downstream use."""
 
         return self.question.strip()
+
+    def to_coach_question(self) -> CoachQuestion:
+        """Build the domain object, letting the agent apply its own history budget."""
+
+        return CoachQuestion(
+            text=self.sanitized,
+            history=[CoachTurn(role=turn.role, text=turn.text) for turn in self.history],
+        )
 
 
 class AskCoachResponse(BaseModel):
@@ -425,6 +468,7 @@ async def ask_coach_endpoint(
         extra={
             "event": "coach.request",
             "question_length": len(question),
+            "history_turns": len(payload.history),
         },
     )
 
@@ -438,7 +482,7 @@ async def ask_coach_endpoint(
     # on its own (or dies on the transport timeout); its result is simply discarded.
     try:
         answer = await _run_with_deadline(
-            agent.ask, question, timeout=resolve_llm_timeout()
+            agent.ask, payload.to_coach_question(), timeout=resolve_llm_timeout()
         )
     except (CoachTimeoutError, TimeoutError) as exc:
         raise HTTPException(
@@ -481,6 +525,121 @@ async def ask_coach_endpoint(
         ) from exc
 
     return AskCoachResponse.from_coach_answer(answer)
+
+
+def _sse(event: str, data: dict[str, object]) -> str:
+    """Format one server-sent event."""
+
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _coach_error_event(exc: Exception) -> str:
+    """Map a coach failure onto an SSE ``error`` event.
+
+    The response status is already committed by the time generation fails, so the
+    equivalent of the JSON endpoint's status code travels in the payload instead.
+    """
+
+    if isinstance(exc, (CoachTimeoutError, TimeoutError)):
+        message = (
+            "The coach took too long to respond. The local model may still be loading — "
+            "try again in a moment."
+        )
+        event, status_code = "coach.timeout", 504
+    elif isinstance(exc, CoachUnavailableError):
+        message = "The coach is offline. Check that the local model server is running."
+        event, status_code = "coach.unavailable", 503
+    elif isinstance(exc, CoachError):
+        message = "The coach language model could not complete the request."
+        event, status_code = "coach.llm_error", 503
+    else:
+        message = "The coach could not answer that question."
+        event, status_code = "coach.error", 500
+
+    detail = _error_detail(message, exc, event=event)
+    detail["status"] = status_code
+    return _sse("error", detail)
+
+
+@app.post("/api/ask/stream")
+async def ask_coach_stream_endpoint(
+    payload: AskCoachRequest,
+    agent: CoachAgent = Depends(get_coach_agent),
+) -> StreamingResponse:
+    """Stream the coach's answer as server-sent events.
+
+    A local model needs tens of seconds to finish; streaming turns that wait into
+    visible progress. The blocking generator runs in a worker thread and hands
+    fragments to the event loop through a queue, so — as with ``/api/ask`` — the rest
+    of the site keeps serving while an answer is produced.
+    """
+
+    question = payload.to_coach_question()
+    logger.info(
+        "Coach stream requested",
+        extra={
+            "event": "coach.stream_request",
+            "question_length": len(question.stripped()),
+            "history_turns": len(payload.history),
+        },
+    )
+
+    async def event_stream() -> "AsyncIterator[str]":
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+
+        def produce() -> None:
+            try:
+                for fragment in agent.stream(question):
+                    loop.call_soon_threadsafe(queue.put_nowait, ("chunk", fragment))
+            except Exception as exc:  # noqa: BLE001 - reported as an SSE error event
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
+            else:
+                loop.call_soon_threadsafe(queue.put_nowait, ("end", None))
+
+        worker: "asyncio.Task[object]" = asyncio.ensure_future(asyncio.to_thread(produce))
+        deadline = loop.time() + resolve_llm_timeout()
+        collected: list[str] = []
+
+        try:
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    yield _coach_error_event(TimeoutError("Coach stream exceeded its deadline."))
+                    return
+                try:
+                    kind, value = await asyncio.wait_for(queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    yield _coach_error_event(TimeoutError("Coach stream exceeded its deadline."))
+                    return
+
+                if kind == "chunk":
+                    text = str(value)
+                    collected.append(text)
+                    yield _sse("chunk", {"text": text})
+                elif kind == "error":
+                    yield _coach_error_event(value)  # type: ignore[arg-type]
+                    return
+                else:
+                    break
+
+            # The disclaimer can only be split off once the full text has arrived, so
+            # the client swaps in the cleaned answer when this final event lands.
+            message, disclaimer = separate_disclaimer(
+                "".join(collected), default=agent.default_disclaimer
+            )
+            yield _sse("done", {"answer": message, "disclaimer": disclaimer})
+        finally:
+            # The worker cannot be interrupted; abandon it rather than block shutdown.
+            if not worker.done():
+                worker.cancel()
+                worker.add_done_callback(_consume_abandoned_task)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/articles", response_class=HTMLResponse)
@@ -554,6 +713,9 @@ async def ask_the_coach(request: Request) -> HTMLResponse:
         {
             "title": "Ask the Coach",
             "coach_prompts": list(_coach_prompt_suggestions()),
+            # Give the server's own deadline a chance to answer first, so the user
+            # sees the explanatory 504 rather than a bare client-side abort.
+            "coach_timeout_ms": int(resolve_llm_timeout() * 1000) + 15_000,
         },
     )
 
@@ -685,6 +847,7 @@ async def admin_dashboard(
 
     articles = repository.get_latest_articles(limit=20)
     tips = repository.get_latest_tips(limit=20)
+    scheduler = _get_scheduler()
 
     return templates.TemplateResponse(
         request,
@@ -693,7 +856,47 @@ async def admin_dashboard(
             "title": "Admin Console",
             "articles": articles,
             "tips": tips,
+            "pipeline_jobs": scheduler.describe_jobs() if scheduler else [],
+            "scheduler_enabled": scheduler is not None,
         },
+    )
+
+
+def _get_scheduler() -> object | None:
+    """Return the running pipeline scheduler, if the app started one."""
+
+    return getattr(app.state, "pipeline_scheduler", None)
+
+
+@app.post("/admin/pipelines/{job_name}/run")
+async def run_pipeline_admin(
+    request: Request,
+    job_name: str,
+    username: str = Depends(require_admin_write),
+) -> RedirectResponse:
+    """Kick off a content pipeline immediately.
+
+    Waiting for a run that takes minutes would hold the request open, so the job is
+    started in the background and the console reports progress through its run times.
+    """
+
+    scheduler = _get_scheduler()
+    if scheduler is None:
+        raise HTTPException(
+            status_code=503,
+            detail="The pipeline scheduler is not running in this process.",
+        )
+
+    if not await scheduler.trigger(job_name):
+        raise HTTPException(status_code=404, detail=f"Unknown pipeline: {job_name}")
+
+    logger.info(
+        "Admin triggered pipeline",
+        extra={"event": "admin.pipeline_triggered", "job": job_name, "actor": username},
+    )
+    return RedirectResponse(
+        request.url_for("admin_dashboard"),
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

@@ -57,6 +57,14 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 | `LIVEON_ADMIN_USER` | Admin console username | `admin` |
 | `LIVEON_ADMIN_PASSWORD` | Admin console password. **The console stays disabled until this is set.** | _(unset)_ |
 | `LIVEON_DEBUG_ERRORS` | Include exception type/message in API error responses. Development only. | `0` |
+| `LIVEON_COACH_HISTORY_TURNS` | Earlier conversation turns replayed into each coach prompt (0 disables memory) | `6` |
+| `LIVEON_ARTICLE_INTERVAL_DAYS` | Days between scheduled article runs | `1` |
+| `LIVEON_TIP_INTERVAL_DAYS` | Days between scheduled tip runs | `1` |
+| `LIVEON_ENABLE_SCHEDULER` | Run the pipelines inside the web process | `1` |
+| `LIVEON_DISABLE_SCHEDULER` | Set to any value to turn the scheduler off | _(unset)_ |
+| `LIVEON_TIP_USE_PRESETS` | Force the offline tip presets instead of live news | `0` |
+| `LIVEON_FEED_LIMIT` | Items fetched per feed | `5` |
+| `LIVEON_MODEL_TEMPERATURE` | Sampling temperature for pipeline agents | `0.2` |
 
 When the Ollama daemon is bound to `0.0.0.0`, still point `LIVEON_OLLAMA_URL` (or the pipeline command's environment) at a reachable host such as `http://127.0.0.1:11434` so local clients can connect successfully.
 
@@ -80,6 +88,33 @@ For Kubernetes, `deployment.yaml` reads the password from an optional secret:
 kubectl create secret generic liveon-admin --from-literal=password='choose-a-password'
 ```
 
+### Talking to the Coach
+
+`/coach` streams its answer as it is produced. Two endpoints back it:
+
+| Endpoint | Shape |
+| --- | --- |
+| `POST /api/ask/stream` | Server-sent events: `chunk` per fragment, then `done` with the final answer and disclaimer, or `error`. Used by the web UI. |
+| `POST /api/ask` | A single JSON response. Used as the fallback and for integrations. |
+
+Both accept the same body. `history` carries the earlier turns so follow-up questions
+resolve against what was already discussed — the coach itself holds no session state:
+
+```json
+{
+  "question": "And how should that change after 65?",
+  "history": [
+    {"role": "user", "text": "What is a good weekly strength routine?"},
+    {"role": "coach", "text": "Two full-body sessions..."}
+  ]
+}
+```
+
+History is bounded server-side (`LIVEON_COACH_HISTORY_TURNS`, plus character budgets),
+so a client cannot grow the prompt without limit. Every answer carries a safety
+disclaimer; if the model supplies its own trailing `Disclaimer:` line it replaces the
+default.
+
 ### Coach Error Responses
 
 `/api/ask` distinguishes the ways the coach can fail so the UI can say something useful:
@@ -92,12 +127,23 @@ kubectl create secret generic liveon-admin --from-literal=password='choose-a-pas
 
 Error payloads carry a `message` and a short `reference` id. The full exception and traceback are written to the server log against that same reference, keeping internal details out of the browser. Set `LIVEON_DEBUG_ERRORS=1` while developing to inline them in the response instead.
 
+## Scheduled Content Generation
+
+The web process runs both pipelines on a timer (disable with `LIVEON_DISABLE_SCHEDULER=1`).
+Defaults are daily for articles and tips, matching the "Tip of the Day" the homepage
+promises. A pipeline that has never run is due immediately, so a fresh install produces
+content on first boot rather than after the first full interval.
+
+The authenticated admin console lists each pipeline with its last run and next due time
+and offers a **Run now** button, so the first run does not have to be a CLI ritual. Only
+successful runs record a timestamp — a failed run is retried on the next check.
+
 ## Content Generation Pipelines
 
 Live On ships with two parallel content flows that share the same aggregation pool but optimise for different outputs:
 
 - **Articles:** `LongevityNewsAggregator` → `SummarizerAgent` → `EditorAgent` → `Publisher`. The summariser drafts an article, the editor polishes tone / citations, and the publisher writes to either SQLite or a Git repo depending on configuration.
-- **Tips:** `DailyTipContextProvider` → `TipGenerator` → `TipEditorAgent` → `TipPublisher`. The context provider supplies deterministic research notes/themes for local development so no RSS access is required. Each generated `TipDraft` is reviewed against novelty, conciseness, and actionability. If the editor rejects the draft, it sends structured `TipReviewResult` feedback into the generator so it can iterate up to `MAX_GENERATION_ATTEMPTS`. The final `TipPipelineResult` now records the execution context as well as `generation_attempts` and cumulative `editor_feedback`, giving you clear telemetry on how many refinement cycles were required.
+- **Tips:** `LongevityNewsAggregator` → `DailyTipContextProvider` → `TipGenerator` → `TipEditorAgent` → `TipPublisher`. The context provider distils the same aggregated news pool the article pipeline uses into research notes; a curated set of offline presets is the fallback when no feed is reachable (or when `LIVEON_TIP_USE_PRESETS=1`). Each generated `TipDraft` is reviewed against novelty, conciseness, and actionability. If the editor rejects the draft, its `TipReviewResult` feedback goes back to the generator, which also sees the recently published tips and leads the retry with a different source story so it does not re-derive the rejected tip. The final `TipPipelineResult` records the execution context, `generation_attempts`, and cumulative `editor_feedback`.
 
 Both pipelines log warnings for soft failures (e.g., duplicate publications) and surface fatal errors so you can tune prompts or feeds as needed.
 
@@ -118,10 +164,22 @@ This command respects the same storage environment variables, so ensure `LIVEON_
 The tip runner now uses the `DailyTipContextProvider` plus the editor-in-the-loop review cycle described above. No RSS feeds are required for local development:
 
 ```powershell
+python -m app.scripts.run_tip_pipeline --model-provider ollama
+```
+
+`--model-provider` accepts `ollama`, `openai`, or `local`. The `local` provider returns a
+deterministic stub rather than generated content, so publishing from it requires an
+explicit `--allow-local-llm` (or `LIVEON_ALLOW_LOCAL_LLM=1`):
+
+```powershell
 python -m app.scripts.run_tip_pipeline --model-provider local --allow-local-llm
 ```
 
-You can still select OpenAI/Ollama providers via `LIVEON_TIP_MODEL*` env vars. The CLI logs telemetry such as `generation_attempts`, `editor_feedback`, and rejection reasons, and it prints the final JSON payload so you can inspect the generated tip or feed analytics jobs.
+With no `--model-provider`, the setting is read from `LIVEON_TIP_MODEL`,
+`LIVEON_SUMMARIZER_MODEL`, then `LIVEON_LLM_PROVIDER` — so a deployment configured for
+Ollama generates real tips instead of silently publishing stub content. The CLI logs
+telemetry such as `generation_attempts`, `editor_feedback`, and rejection reasons, and
+prints the final JSON payload.
 
 ## Deployment (Minikube)
 

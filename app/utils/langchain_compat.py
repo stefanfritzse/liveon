@@ -9,6 +9,7 @@ __all__ = [
     "AIMessage",
     "BaseMessage",
     "ChatPromptTemplate",
+    "HumanMessage",
 ]
 
 
@@ -24,7 +25,7 @@ def _module_available(module: str) -> bool:
 
 
 if _module_available("langchain_core.messages"):
-    from langchain_core.messages import AIMessage, BaseMessage  # type: ignore
+    from langchain_core.messages import AIMessage, BaseMessage, HumanMessage  # type: ignore
 else:
     @dataclass(slots=True)
     class BaseMessage:  # pragma: no cover - trivial container
@@ -35,6 +36,12 @@ else:
     @dataclass(slots=True)
     class AIMessage(BaseMessage):  # pragma: no cover - trivial container
         """Fallback :class:`langchain_core.messages.AIMessage` implementation."""
+
+        pass
+
+    @dataclass(slots=True)
+    class HumanMessage(BaseMessage):  # pragma: no cover - trivial container
+        """Fallback :class:`langchain_core.messages.HumanMessage` implementation."""
 
         pass
 

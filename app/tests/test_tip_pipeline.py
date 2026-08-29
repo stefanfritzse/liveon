@@ -27,14 +27,17 @@ class StubTipGenerator:
     draft: TipDraft
     fail_on_attempts: set[int] = field(default_factory=set)
     calls: int = 0
+    seen_published: list = field(default_factory=list)
 
     def generate(
         self,
         *,
         context: TipGenerationContext,
         feedback: str | None = None,
+        published_tips: Sequence[object] = (),
     ) -> TipDraft:
         self.calls += 1
+        self.seen_published.append(list(published_tips))
         if self.calls in self.fail_on_attempts:
             raise RuntimeError("model offline")
         return self.draft

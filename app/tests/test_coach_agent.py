@@ -93,19 +93,20 @@ def test_ask_uses_llm_disclaimer_when_provided() -> None:
 
 
 def test_create_coach_llm_configures_ollama_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The coach delegates model construction to the shared factory."""
+
     captured_kwargs: dict[str, Any] = {}
+    sentinel = object()
 
-    class _StubOllamaClient:
-        def __init__(self, **kwargs: Any) -> None:
-            captured_kwargs.update(kwargs)
-            self.kwargs = kwargs
+    def _fake_build(**kwargs: Any) -> Any:
+        captured_kwargs.update(kwargs)
+        return sentinel
 
-        def invoke(self, messages: Any) -> str:  # pragma: no cover - helper behaviour
-            return "Ollama reply"
-
-    monkeypatch.setattr(coach_module, "ChatOllama", _StubOllamaClient)
+    monkeypatch.setattr(coach_module, "build_chat_ollama", _fake_build)
 
     llm = coach_module.create_coach_llm()
 
-    assert isinstance(llm, _StubOllamaClient)
+    assert llm is sentinel
     assert captured_kwargs["model"] == "phi3:14b-medium-4k-instruct-q4_K_M"
+    # Conversational answers are prose, so JSON mode stays off for the coach.
+    assert captured_kwargs["json_mode"] is False

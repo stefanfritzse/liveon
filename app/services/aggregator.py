@@ -24,6 +24,51 @@ _TRACKING_PARAM_PREFIXES = ("utm_", "mc_", "icid", "oly_", "vero_id")
 _TRACKING_PARAM_NAMES = {"fbclid", "gclid", "gs_l", "msclkid", "yclid"}
 
 
+DEFAULT_FEEDS: Sequence[FeedSource] = (
+    FeedSource(
+        name="Google News: Longevity Research",
+        url="https://news.google.com/rss/search?q=longevity+research&hl=en-US&gl=US&ceid=US:en",
+        topic="research",
+    ),
+    FeedSource(
+        name="Google News: Healthy Aging",
+        url="https://news.google.com/rss/search?q=%22healthy+aging%22&hl=en-US&gl=US&ceid=US:en",
+        topic="aging",
+    ),
+    FeedSource(
+        name="Google News: Longevity Nutrition",
+        url="https://news.google.com/rss/search?q=longevity+nutrition&hl=en-US&gl=US&ceid=US:en",
+        topic="lifestyle",
+    ),
+)
+
+
+def load_feeds() -> list[FeedSource]:
+    """Return the configured feeds, allowing a JSON override via the environment.
+
+    Shared by both pipelines so the article and tip runs draw on the same pool.
+    """
+
+    raw_sources = os.getenv("LIVEON_FEED_SOURCES")
+    if not raw_sources:
+        return [*DEFAULT_FEEDS]
+
+    try:
+        payload = json.loads(raw_sources)
+    except json.JSONDecodeError as exc:
+        raise ValueError("LIVEON_FEED_SOURCES must contain valid JSON") from exc
+
+    feeds: list[FeedSource] = []
+    for entry in payload:
+        try:
+            feeds.append(
+                FeedSource(name=entry["name"], url=entry["url"], topic=entry.get("topic"))
+            )
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"Feed configuration missing key: {exc}") from exc
+    return feeds
+
+
 @dataclass(slots=True)
 class AggregationResult:
     """Outcome of running the aggregator across configured feeds."""

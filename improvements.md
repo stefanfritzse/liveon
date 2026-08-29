@@ -28,7 +28,22 @@ its `timeout` to a *streaming* `requests.post`, where it bounds the gap between 
 total duration — so it alone is not a ceiling. A wall-clock deadline in the endpoint supplies the
 real bound.
 
-P1–P3 remain open and unchanged.
+**P1 (items 6–13): implemented and verified — 2026-08-29.** The suite went from 101 to 216
+passing. Verified live against real Ollama and live Google News feeds: the coach streamed
+698 fragments across 78% of a 10.4s answer; a follow-up question resolved its implied
+subject from history alone; and the tip pipeline generated, reviewed, refined, and
+published a tip drawn from that morning's headlines.
+
+Live testing changed the diagnosis twice, and both corrections are folded into the items
+below. First, a scheduler run appeared to show the tip editor inventing repetition
+against an empty tip list — it was not. `run_tip_pipeline` built its repository with no
+`db_path`, so it ignored `LIVEON_DB_PATH` and read the *default* database, where a
+matching tip really did exist. That bug is now fixed (item 10). Second, once the editor
+was seen to be judging correctly, the real defect surfaced: the editor knew the
+publication history and the generator did not, so the review loop could never converge —
+the generator kept re-mining a story it had already covered and could not see why.
+
+P2–P3 remain open and unchanged.
 
 ---
 
@@ -132,7 +147,7 @@ instead of a Python exception.
 
 ## P1 — AI functionality. This is what makes the product feel like a coach.
 
-### 6. The coach has no conversation memory
+### 6. The coach has no conversation memory — ✅ FIXED
 
 The UI is a transcript, so users will naturally ask "and what about after 50?" — but every
 `/api/ask` builds a fresh two-message prompt from the single question
@@ -143,7 +158,15 @@ interface promises continuity the model cannot deliver; follow-ups get confident
 **Fix:** accept an optional `history` array in `AskCoachRequest`, cap it server-side (last ~6
 turns / N characters), and fold it into the prompt. The client already holds the transcript.
 
-### 7. No streaming — 30–120 seconds of dead air
+**Fixed.** `CoachQuestion` carries a `history` of `CoachTurn`s, which `/api/ask` and
+`/api/ask/stream` accept and the agent replays as prior conversation turns. The dead
+`include_history` flag is gone. History is bounded twice over — turn count
+(`LIVEON_COACH_HISTORY_TURNS`, default 6) and character budgets — because the client
+supplies the transcript. Verified live: after one exchange about strength training,
+"And how should that change after 65?" produced an answer about resistance training it
+was never re-told the subject of, and differed from the same question asked cold.
+
+### 7. No streaming — 30–120 seconds of dead air — ✅ FIXED
 
 The only feedback is the submit button changing to "Sending…"
 ([coach.html:394-404](app/templates/coach.html#L394-L404)). There is no typing indicator in the
@@ -156,7 +179,17 @@ as SSE and render tokens as they arrive. If that is too large a step, ship the c
 first: a pulsing "Coach is thinking…" bubble, an elapsed-seconds counter, an `AbortController`
 with a Cancel button, and a client timeout.
 
-### 8. Health answers ship with an empty disclaimer
+**Fixed.** `POST /api/ask/stream` emits server-sent events — `chunk` per fragment, then
+`done` with the cleaned answer and disclaimer, or `error` carrying the status the JSON
+endpoint would have returned. The blocking generator runs in a worker thread and feeds
+the event loop through a queue, so streaming inherits the P0 non-blocking guarantee and
+the same wall-clock deadline. The UI adds a pulsing "thinking" bubble, an elapsed-seconds
+counter, a Stop button (`AbortController`), a client-side timeout, and it restores the
+question after a failure or stop. It falls back to `/api/ask` if the stream cannot open.
+Verified live with `qwen2.5:14b`: 698 chunks, first token at 2.25s, spread across 78% of
+a 10.4s answer.
+
+### 8. Health answers ship with an empty disclaimer — ✅ FIXED
 
 `_DEFAULT_DISCLAIMER = ""` ([coach.py:29](app/services/coach.py#L29)), while
 `AskCoachResponse.disclaimer` is documented as the "Safety disclaimer appended to every
@@ -167,7 +200,11 @@ should not be luck-of-the-draw — the site footer is not the same thing.
 
 **Fix:** set a real default (one sentence: educational only, consult a professional).
 
-### 9. `_separate_disclaimer` can truncate a real answer
+**Fixed.** `_DEFAULT_DISCLAIMER` is now a real sentence, so every answer carries it
+whether or not the model volunteers one; a model-supplied trailing `Disclaimer:` still
+takes precedence.
+
+### 9. `_separate_disclaimer` can truncate a real answer — ✅ FIXED
 
 [coach.py:247-260](app/services/coach.py#L247-L260) does `lower.rfind("disclaimer:")` anywhere
 in the text and discards everything after it. An answer that legitimately mentions "…the
@@ -176,7 +213,12 @@ supplement label disclaimer: …" loses its tail into the disclaimer box.
 **Fix:** only split on a `Disclaimer:` that starts its own line near the end — or better, ask the
 model for JSON and stop scraping prose.
 
-### 10. "Tips" are three hard-coded presets on a 3-day rotation
+**Fixed.** The marker must now start its own line *and* open the final block of the
+response. A mid-answer mention keeps its full text. The first regex missed
+`**Disclaimer:**` — emphasis can close on either side of the colon — which the tests
+caught.
+
+### 10. "Tips" are three hard-coded presets on a 3-day rotation — ✅ FIXED
 
 `DailyTipContextProvider` picks `presets[today.toordinal() % 3]`
 ([tip_context.py:16-94](app/services/tip_context.py#L16-L94)) from three literal dicts. The tip
@@ -195,7 +237,25 @@ the URL-dedup work), keep the presets only as an offline fallback, and pass rece
 not just titles ([tip_editor.py:154-170](app/services/tip_editor.py#L154-L170)) — into the
 novelty check.
 
-### 11. Default cadences contradict the product
+**Fixed.** `DailyTipContextProvider` now takes the aggregator and distils the same news
+pool the article pipeline uses into notes and sources, falling back to the presets when
+no feed is reachable or `LIVEON_TIP_USE_PRESETS=1`. Feed configuration moved to
+`app/services/aggregator.py` so both pipelines share one definition. The novelty check
+sees tip *bodies*, not just titles.
+
+Two further defects surfaced only under live testing:
+
+- `run_tip_pipeline._build_pipeline` constructed `LocalSQLiteContentRepository()` with no
+  path, so every tip run ignored `LIVEON_DB_PATH` and wrote to the default database. Both
+  it and `seed_content` now use `create_repository()`.
+- The editor knew the publication history and the generator did not, so the loop could not
+  converge. The generator now receives recently published tips with an explicit
+  "pick a different angle" instruction, and each retry leads with a different source story
+  (`TipGenerationContext.focused`). Verified live: against a database already holding a
+  conflicting tip, the generator moved to an entirely different story, and a subsequent
+  run converged on attempt 3 to publish a specific, news-derived tip.
+
+### 11. Default cadences contradict the product — ✅ FIXED
 
 [pipeline_scheduler.py:245-246](app/services/pipeline_scheduler.py#L245-L246): articles every
 **7 days**, tips every **1 month** — under a homepage that says "Tip of the Day". Worse,
@@ -208,7 +268,16 @@ out-of-box experience.
 than starting the clock; document the knobs; add a "Run now" button to the (now-authenticated)
 admin console so the first run isn't a CLI ritual.
 
-### 12. The tip CLI can't reach Ollama, and one env var breaks it outright
+**Fixed.** Articles and tips both default to daily (`LIVEON_ARTICLE_INTERVAL_DAYS`,
+`LIVEON_TIP_INTERVAL_DAYS`); `LIVEON_TIP_INTERVAL_MONTHS` still works if set. A job with
+no recorded run is due immediately instead of having `last_run` stamped to now, and only
+a *successful* run records a timestamp, so a failure is retried rather than skipped. The
+admin console lists each pipeline with its last run and next due time and offers
+"Run now", which starts the job in the background rather than holding the request open.
+Verified live: a server started against an empty database published an article on first
+boot, and the failed tip run correctly recorded no timestamp.
+
+### 12. The tip CLI can't reach Ollama, and one env var breaks it outright — ✅ FIXED
 
 - `--model-provider` allows only `["local", "openai", "gpt"]`
   ([run_tip_pipeline.py:82](app/scripts/run_tip_pipeline.py#L82)) although `_create_tip_llm`
@@ -228,7 +297,17 @@ admin console so the first run isn't a CLI ritual.
 **Fix:** add `ollama` to `choices`, share one `_create_llm` helper between both scripts, and
 either implement or delete `--allow-local-llm`.
 
-### 13. Four copies of the JSON-repair code, and no retry when it fails
+**Fixed.** `app/services/llm_factory.py` is now the single place chat models are built,
+shared by both CLIs and the coach; the three copies of the Ollama URL resolver are gone.
+`--model-provider` offers every supported provider including `ollama`, and an inherited
+`LIVEON_SUMMARIZER_MODEL=ollama` no longer aborts the tip CLI. `--allow-local-llm` is
+enforced: the deterministic stub requires explicit opt-in, since publishing fabricated
+tips should be a decision rather than the accident of an unset variable. The default
+provider now consults `LIVEON_LLM_PROVIDER`, so a deployment configured for Ollama gets
+real tips. The tip path finally gets the `format="json"` and low temperature the article
+path always had.
+
+### 13. Four copies of the JSON-repair code, and no retry when it fails — ✅ FIXED
 
 `_parse_payload` / `_strip_code_fence` / `_scan_for_object` / `_try_parse_mapping` are duplicated
 near-verbatim in [summarizer.py](app/services/summarizer.py#L98-L160),
@@ -241,6 +320,14 @@ from a small local model discards all the aggregation work.
 **Fix:** extract `app/utils/json_repair.py`, and add one bounded re-ask ("your last reply was not
 valid JSON, return only the object") before failing — the tip pipeline already proves the
 feedback-loop pattern works.
+
+**Fixed.** `app/utils/json_repair.py` holds the one parsing ladder — whole response,
+fenced block, embedded object, Python literal — and all four agents call it; roughly 300
+lines of duplication removed. `invoke_json_object` re-asks once with the parse error and
+the offending reply attached, so a single malformed response no longer discards the feed
+fetching and summarisation that preceded it. Writing the tests caught a bug in the new
+helper: list-shaped message content was returned unjoined, which would have failed
+downstream on `.strip()`.
 
 ---
 
@@ -402,12 +489,11 @@ from single-user to multi-user. **#22 (stop hiding pipeline failures) is still o
 was grouped here because it is a one-line fix with the same "silent failure" character, but it sits
 in the pipeline rather than the request path, so it was not part of the P0 set.
 
-**Week 2 — make it feel like a coach.** #7 (streaming, or at minimum a thinking indicator and
-cancel) → #6 (conversation memory) → #8 (real disclaimer) → #14 and #15 (404 page, stale copy).
+**Week 2 — make it feel like a coach. ✅ Done** for #6–#9. #14 and #15 (404 page, stale
+copy) are P2 and remain open.
 
-**Week 3 — make the content real.** #10 (feed tips from the aggregator) → #11 (sane cadences and
-first-run behaviour) → #12 and #13 (unify the LLM setup, add a JSON re-ask) → #23 (shared
-repository).
+**Week 3 — make the content real. ✅ Done** for #10–#13. #23 (shared repository) is P3 and
+remains open.
 
 Then P2/P3 as capacity allows. #24 (sanitization) should jump the queue if the site is ever
 exposed beyond localhost.

@@ -1,15 +1,21 @@
 """Conversational coach agent that generates responses using Ollama."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Sequence
+from dataclasses import dataclass
+from typing import Any, Iterator, Sequence
+import json
 import logging
 import os
-from urllib.parse import urlparse
+import re
 
 import httpx
 
-from app.models.coach import CoachAnswer, CoachQuestion
+from app.models.coach import CoachAnswer, CoachQuestion, CoachTurn
+from app.services.llm_factory import (
+    DEFAULT_OLLAMA_MODEL,
+    build_chat_ollama,
+    resolve_ollama_base_url,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -29,11 +35,67 @@ _DEFAULT_SAFETY_INSTRUCTIONS = (
     " longevity so the user understands the long-term wellbeing impact of each suggestion."
 )
 
-_DEFAULT_DISCLAIMER = ""
+# Every answer is health guidance, so the safety note travels with it rather than
+# depending on the model happening to emit one or on the reader noticing the footer.
+_DEFAULT_DISCLAIMER = (
+    "Live On shares general educational information, not medical advice. Check with a"
+    " qualified healthcare professional before changing your health routine, especially"
+    " if you have a medical condition or take medication."
+)
 
 # A 14B model answering on CPU routinely needs well over a minute. The ceiling exists to
 # stop a wedged daemon from pinning a worker forever, not to cut generation short.
 _DEFAULT_LLM_TIMEOUT = 180.0
+
+# History is replayed into every prompt, so it is bounded twice over: by turn count and
+# by characters. A local model has a modest context window, and the client supplies the
+# transcript, so neither bound may be left to the caller.
+_DEFAULT_HISTORY_TURNS = 6
+_MAX_HISTORY_CHARS = 4000
+_MAX_TURN_CHARS = 2000
+
+
+def resolve_history_turns() -> int:
+    """Return how many earlier turns are replayed into the prompt."""
+
+    raw = (os.getenv("LIVEON_COACH_HISTORY_TURNS") or "").strip()
+    if not raw:
+        return _DEFAULT_HISTORY_TURNS
+    try:
+        turns = int(raw)
+    except ValueError:
+        return _DEFAULT_HISTORY_TURNS
+    return max(0, turns)
+
+
+def trim_history(history: Sequence[CoachTurn]) -> list[CoachTurn]:
+    """Return the most recent turns that fit within the configured budgets.
+
+    Turns are taken newest-first so the freshest context survives, then restored to
+    chronological order for the prompt.
+    """
+
+    limit = resolve_history_turns()
+    if limit <= 0:
+        return []
+
+    kept: list[CoachTurn] = []
+    budget = _MAX_HISTORY_CHARS
+    for turn in reversed(list(history)):
+        text = turn.stripped()
+        if not text:
+            continue
+        if len(text) > _MAX_TURN_CHARS:
+            text = text[:_MAX_TURN_CHARS].rstrip() + "…"
+        if len(text) > budget:
+            break
+        budget -= len(text)
+        kept.append(CoachTurn(role=turn.role, text=text))
+        if len(kept) >= limit:
+            break
+
+    kept.reverse()
+    return kept
 
 
 class CoachError(RuntimeError):
@@ -116,26 +178,6 @@ class CoachAgent:
     llm: Any
     safety_instructions: str = _DEFAULT_SAFETY_INSTRUCTIONS
     default_disclaimer: str = _DEFAULT_DISCLAIMER
-    _prompt: ChatPromptTemplate | None = field(init=False, repr=False, default=None)
-
-    def __post_init__(self) -> None:
-        if ChatPromptTemplate is not None:
-            self._prompt = ChatPromptTemplate.from_messages(
-                [
-                    (
-                        "system",
-                        "{safety_instructions}\n"
-                        "Respond in a warm, empathetic tone while staying factual and concise."
-                    ),
-                    (
-                        "human",
-                        "User question:\n{question}\n\n"
-                    "Structure the response with a short introduction, practical guidance, and"
-                    " a concluding encouragement. Clearly tie the guidance back to sustaining"
-                    " long-term healthspan and longevity when it is relevant to do so.",
-                    ),
-                ]
-            )
 
     def ask(self, question: CoachQuestion | str) -> CoachAnswer:
         """Answer ``question`` using the configured language model."""
@@ -143,7 +185,7 @@ class CoachAgent:
         question_model = question if isinstance(question, CoachQuestion) else CoachQuestion(text=str(question))
         normalized_question = question_model.stripped()
 
-        prompt_value = self._build_prompt(normalized_question)
+        prompt_value = self._build_prompt(normalized_question, question_model.history)
 
         try:
             response = self._invoke_llm(prompt_value)
@@ -151,17 +193,48 @@ class CoachAgent:
             raise classify_llm_error(exc) from exc
 
         response_text = self._extract_response_text(response)
-        message, disclaimer = _separate_disclaimer(response_text, default=self.default_disclaimer)
+        message, disclaimer = separate_disclaimer(response_text, default=self.default_disclaimer)
         return CoachAnswer(message=message, disclaimer=disclaimer)
+
+    def stream(self, question: CoachQuestion | str) -> "Iterator[str]":
+        """Yield answer fragments as the model produces them.
+
+        Falls back to a single fragment when the underlying client cannot stream, so
+        callers can treat streaming as always available.
+        """
+
+        question_model = question if isinstance(question, CoachQuestion) else CoachQuestion(text=str(question))
+        prompt_value = self._build_prompt(question_model.stripped(), question_model.history)
+
+        try:
+            if hasattr(self.llm, "stream"):
+                messages = self._as_messages(prompt_value)
+                for chunk in self.llm.stream(messages):
+                    text = self._extract_response_text(chunk)
+                    if text:
+                        yield text
+                return
+            response = self._invoke_llm(prompt_value)
+        except Exception as exc:  # noqa: BLE001 - re-raised as a classified CoachError
+            raise classify_llm_error(exc) from exc
+
+        text = self._extract_response_text(response)
+        if text:
+            yield text
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _invoke_llm(self, prompt_value: Any) -> Any:
+    @staticmethod
+    def _as_messages(prompt_value: Any) -> Any:
+        """Return the message sequence for ``prompt_value``."""
+
         if hasattr(prompt_value, "to_messages"):
-            messages = prompt_value.to_messages()  # type: ignore[assignment]
-        else:
-            messages = prompt_value
+            return prompt_value.to_messages()
+        return prompt_value
+
+    def _invoke_llm(self, prompt_value: Any) -> Any:
+        messages = self._as_messages(prompt_value)
 
         if hasattr(self.llm, "invoke"):
             try:
@@ -188,33 +261,49 @@ class CoachAgent:
             return str(response["content"])
         return str(response)
 
-    def _build_prompt(self, question: str) -> Any:
-        """Create a prompt payload regardless of LangChain availability."""
+    def _build_prompt(
+        self,
+        question: str,
+        history: Sequence[CoachTurn] = (),
+    ) -> Any:
+        """Create a prompt payload regardless of LangChain availability.
 
-        if self._prompt is not None:
-            return self._prompt.invoke(
-                {
-                    "question": question,
-                    "safety_instructions": self.safety_instructions,
-                }
-            )
+        Messages are plain ``{"role", "content"}`` mappings. LangChain converts those
+        natively, and :class:`OllamaHTTPChat` translates the roles at the wire boundary,
+        so one representation covers both clients — and, unlike a fixed
+        ``ChatPromptTemplate``, it can carry a variable number of prior turns.
+        """
 
-        system_message = (
+        messages: list[dict[str, str]] = [{"role": "system", "content": self._system_message()}]
+
+        for turn in trim_history(history):
+            text = turn.stripped()
+            if text:
+                messages.append({"role": "human" if turn.is_user else "ai", "content": text})
+
+        messages.append({"role": "human", "content": self._human_message(question, bool(history))})
+        return messages
+
+    def _system_message(self) -> str:
+        return (
             f"{self.safety_instructions}\n"
             "Respond in a warm, empathetic tone while staying factual and concise."
         )
-        human_message = (
-            "User question:\n"
-            f"{question}\n\n"
+
+    @staticmethod
+    def _human_message(question: str, has_history: bool) -> str:
+        guidance = (
             "Structure the response with a short introduction, practical guidance, and"
             " a concluding encouragement. Clearly tie the guidance back to sustaining"
             " long-term healthspan and longevity when it is relevant to do so."
         )
-
-        return [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": human_message},
-        ]
+        if has_history:
+            guidance = (
+                "This continues the conversation above, so resolve any references to"
+                " what was already discussed and do not repeat advice you have already"
+                f" given. {guidance}"
+            )
+        return f"User question:\n{question}\n\n{guidance}"
 
 
 @dataclass(slots=True)
@@ -243,7 +332,7 @@ class OllamaHTTPChat:
 
     def __init__(self, model: str, *, base_url: str | None = None, timeout: float | None = None) -> None:
         self.model = model
-        resolved_base_url = base_url or _resolve_ollama_base_url()
+        resolved_base_url = base_url or resolve_ollama_base_url()
         self.base_url = resolved_base_url.rstrip("/")
         self.timeout = resolve_llm_timeout() if timeout is None else timeout
 
@@ -269,6 +358,49 @@ class OllamaHTTPChat:
                 return data["response"]
         return data
 
+    def stream(self, messages: Any) -> Iterator[str]:
+        """Yield content fragments from Ollama's newline-delimited JSON stream."""
+
+        payload = {
+            "model": self.model,
+            "messages": self._normalize_messages(messages),
+            "stream": True,
+        }
+        with httpx.stream(
+            "POST",
+            f"{self.base_url}/api/chat",
+            json=payload,
+            timeout=self.timeout,
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except ValueError:  # pragma: no cover - defensive against partial lines
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                message = data.get("message")
+                if isinstance(message, dict):
+                    content = message.get("content")
+                    if isinstance(content, str) and content:
+                        yield content
+                if data.get("done"):
+                    break
+
+    # Ollama's chat API speaks system/user/assistant, while LangChain messages carry
+    # human/ai. Translate at the wire boundary so one internal representation serves
+    # both clients.
+    _WIRE_ROLES = {"human": "user", "ai": "assistant", "assistant": "assistant",
+                   "user": "user", "system": "system"}
+
+    @classmethod
+    def _wire_role(cls, role: Any) -> str:
+        return cls._WIRE_ROLES.get(str(role or "user").lower(), "user")
+
     def _normalize_messages(self, messages: Any) -> list[dict[str, str]]:
         if isinstance(messages, str):
             return [{"role": "user", "content": messages}]
@@ -285,32 +417,11 @@ class OllamaHTTPChat:
                     role = message.get("role") or message.get("type") or role
                     content = message.get("content", content)
                 text = content if isinstance(content, str) else ""
-                normalized.append({"role": str(role or "user"), "content": text})
+                normalized.append({"role": self._wire_role(role), "content": text})
         else:
             normalized.append({"role": "user", "content": str(messages)})
 
         return normalized
-
-
-def _resolve_ollama_base_url() -> str:
-    """Return a client-safe Ollama base URL, defaulting to localhost."""
-
-    raw = (os.getenv("LIVEON_OLLAMA_URL") or os.getenv("OLLAMA_HOST") or "").strip()
-    if not raw:
-        raw = "http://127.0.0.1:11434"
-
-    if "://" not in raw:
-        raw = f"http://{raw}"
-
-    parsed = urlparse(raw)
-    scheme = parsed.scheme or "http"
-    host = parsed.hostname or "127.0.0.1"
-
-    if host in {"0.0.0.0", "::", "", "[::]"}:
-        host = "127.0.0.1"
-
-    port = parsed.port or 11434
-    return f"{scheme}://{host}:{port}"
 
 
 def create_coach_llm() -> Any:
@@ -318,39 +429,55 @@ def create_coach_llm() -> Any:
     provider = (os.getenv("LIVEON_LLM_PROVIDER") or "ollama").strip().lower()
 
     if provider == "ollama":
-        model = os.getenv("LIVEON_OLLAMA_MODEL") or 'phi3:14b-medium-4k-instruct-q4_K_M'
-        base_url = _resolve_ollama_base_url()
+        model = os.getenv("LIVEON_OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL
+        base_url = resolve_ollama_base_url()
         timeout = resolve_llm_timeout()
         if ChatOllama is not None:
-            try:
-                return ChatOllama(model=model, base_url=base_url, timeout=int(timeout))
-            except (TypeError, ValueError) as exc:
-                # Not every ChatOllama build exposes ``timeout`` (langchain-ollama takes it
-                # via client options). Losing the ceiling is worth a warning, not a crash.
-                LOGGER.warning(
-                    "ChatOllama rejected the timeout option; running without one: %s",
-                    exc,
-                    extra={"event": "coach.timeout_unsupported"},
-                )
-                return ChatOllama(model=model, base_url=base_url)
+            # Conversational replies are prose, so no JSON mode here.
+            return build_chat_ollama(
+                model=model, base_url=base_url, json_mode=False, timeout=timeout
+            )
         return OllamaHTTPChat(model=model, base_url=base_url, timeout=timeout)
 
     # Fallback for local dev and testing
     return LocalCoachResponder()
 
 
-def _separate_disclaimer(text: str, *, default: str) -> tuple[str, str]:
+# A trailing disclaimer starts its own line, optionally dressed up as a bullet or in
+# bold. Matching mid-sentence mentions ("read the label disclaimer: ...") used to eat
+# the rest of the answer, so the marker must anchor to the start of a line.
+# Emphasis may close before or after the colon: "**Disclaimer:**" and "**Disclaimer**:"
+# are both common, so an optional marker is allowed on either side.
+_EMPHASIS = r"(?:\*\*|__|\*|_)?"
+_DISCLAIMER_LINE_RE = re.compile(
+    rf"^[ \t]*(?:[-*>]\s+)?{_EMPHASIS}\s*disclaimer\s*{_EMPHASIS}\s*[:\-–—]\s*{_EMPHASIS}\s*",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+def separate_disclaimer(text: str, *, default: str) -> tuple[str, str]:
+    """Split a trailing ``Disclaimer:`` note off the end of ``text``.
+
+    Two conditions must hold: the marker starts its own line, and it opens the final
+    block of the response (nothing after it is separated by a blank line). A mid-answer
+    mention — "check the supplement label disclaimer: ..." — therefore keeps its text,
+    where the previous ``rfind`` on the bare word silently discarded everything after it.
+    """
+
     cleaned = (text or "").strip()
     if not cleaned:
         return "", default
 
-    marker = "disclaimer:"
-    lower = cleaned.lower()
-    if marker in lower:
-        index = lower.rfind(marker)
-        answer = cleaned[:index].strip()
-        disclaimer_text = cleaned[index + len(marker) :].strip()
-        return answer, disclaimer_text or default
+    for match in reversed(list(_DISCLAIMER_LINE_RE.finditer(cleaned))):
+        remainder = cleaned[match.end() :]
+        if "\n\n" in remainder.strip():
+            # More paragraphs follow, so this is body text rather than a closing note.
+            continue
+        answer = cleaned[: match.start()].strip()
+        if not answer:
+            # The whole response was the disclaimer; keep it as the answer.
+            break
+        return answer, remainder.strip() or default
+
     return cleaned, default
 
 

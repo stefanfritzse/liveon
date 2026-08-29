@@ -83,7 +83,7 @@ class _RecordingCoachAgent:
         self.answer = answer
         self.questions: list[str] = []
 
-    def ask(self, question: str) -> CoachAnswer:
+    def ask(self, question: object) -> CoachAnswer:
         self.questions.append(question)
         return self.answer
 
@@ -252,7 +252,7 @@ def test_ask_coach_endpoint_returns_structured_response(client: Callable[..., Te
     payload = response.json()
     assert payload["answer"] == "Here is guidance."
     assert payload["disclaimer"] == "Stay safe."
-    assert agent.questions == ["How do I sleep better?"]
+    assert [item.stripped() for item in agent.questions] == ["How do I sleep better?"]
 
 
 def test_ask_coach_endpoint_rejects_blank_questions(client: Callable[..., TestClient]) -> None:

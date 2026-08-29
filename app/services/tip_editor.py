@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 from dataclasses import dataclass, field
 from typing import Any, Sequence
@@ -10,7 +9,11 @@ from typing import Any, Sequence
 from app.models.tip import TipDraft
 from app.models.tip_editor import TipReviewResult
 from app.services.tip_generator import SupportsInvoke
-from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
+from app.utils.json_repair import invoke_json_object
+from app.utils.langchain_compat import ChatPromptTemplate
+
+#: Recent tip bodies are trimmed to this length before entering the novelty prompt.
+_EXISTING_TIP_BODY_CHARS = 200
 
 
 TIP_EDITOR_SYSTEM_PROMPT = """You are an exacting, helpful, and concise senior editor for a health and wellness publication. Your sole purpose is to act as a quality-control gate for AI-generated content. You must be strict.
@@ -91,9 +94,7 @@ class TipEditorAgent:
             existing_tips=self._format_existing_titles(existing_tips or ()),
             draft_json=self._draft_to_json(draft),
         )
-        response = self.llm.invoke(messages)
-        content = self._extract_content(response)
-        payload = self._parse_payload(content)
+        payload = invoke_json_object(self.llm, messages, label="Tip editor")
 
         is_approved = bool(payload.get("is_approved"))
         feedback = self._normalise_feedback(payload.get("feedback"))
@@ -117,33 +118,53 @@ class TipEditorAgent:
 
     @staticmethod
     def _format_existing_titles(existing_tips: Sequence[Any]) -> str:
+        """Render recent tips as title *and* body for the novelty comparison.
+
+        Titles alone hid near-duplicates: two tips can be worded differently and
+        still give the same advice, which is exactly what the rubric is meant to
+        catch. Bodies are trimmed so a long backlog cannot crowd out the draft.
+        """
+
         if isinstance(existing_tips, str):
             iterable: Sequence[Any] = [existing_tips]
         else:
             iterable = existing_tips
 
-        titles: list[str] = []
+        entries: list[str] = []
         for tip in iterable:
-            title = TipEditorAgent._extract_title(tip)
-            if title:
-                titles.append(title)
+            title = TipEditorAgent._extract_field(tip, "title")
+            body = TipEditorAgent._extract_field(tip, "content_body") or (
+                TipEditorAgent._extract_field(tip, "body")
+            )
+            if not title and not body:
+                continue
+            if body:
+                body = " ".join(body.split())
+                if len(body) > _EXISTING_TIP_BODY_CHARS:
+                    body = body[:_EXISTING_TIP_BODY_CHARS].rstrip() + "…"
+            entries.append(f"- {title or '(untitled)'}: {body}" if body else f"- {title}")
 
-        if not titles:
-            return "- None"
+        if not entries:
+            # Saying "None" invited the model to reject drafts as "repetitive of
+            # recently published tips" that do not exist. Be explicit instead.
+            return (
+                "(No tips have been published yet, so the Non-Repetitive criterion "
+                "cannot fail. Do not claim repetition.)"
+            )
 
-        return "\n".join(f"- {title}" for title in titles)
+        return "\n".join(entries)
 
     @staticmethod
-    def _extract_title(tip: Any) -> str:
+    def _extract_field(tip: Any, field: str) -> str:
         if isinstance(tip, str):
-            return tip.strip() or ""
+            return tip.strip() if field == "title" else ""
 
-        candidate = getattr(tip, "title", None)
+        candidate = getattr(tip, field, None)
         if isinstance(candidate, str):
             return candidate.strip()
 
         if isinstance(tip, dict):
-            value = tip.get("title")
+            value = tip.get(field)
             if isinstance(value, str):
                 return value.strip()
 
@@ -195,85 +216,3 @@ class TipEditorAgent:
         if isinstance(value, dict):
             return dict(value)
         return {}
-
-    @staticmethod
-    def _extract_content(response: BaseMessage | str) -> str:
-        if isinstance(response, AIMessage):
-            return response.content or ""
-        if isinstance(response, BaseMessage):
-            return str(getattr(response, "content", "") or "")
-        return str(response)
-
-    @staticmethod
-    def _parse_payload(content: str) -> dict[str, Any]:
-        text = content.strip()
-        if not text:
-            raise ValueError("Tip editor response was not valid JSON")
-
-        candidates: list[str] = []
-        fenced = TipEditorAgent._strip_code_fence(text)
-        if fenced:
-            candidates.append(fenced)
-        candidates.append(text)
-
-        for candidate in candidates:
-            parsed = TipEditorAgent._try_parse_mapping(candidate)
-            if parsed is not None:
-                return parsed
-
-        scanned = TipEditorAgent._scan_for_object(text)
-        if scanned is not None:
-            return scanned
-
-        raise ValueError("Tip editor response was not valid JSON")
-
-    @staticmethod
-    def _strip_code_fence(text: str) -> str | None:
-        if not text.startswith("```"):
-            return None
-
-        closing_index = text.rfind("```")
-        if closing_index <= 0:
-            return None
-
-        first_linebreak = text.find("\n")
-        if first_linebreak == -1:
-            content = text[3:closing_index]
-        else:
-            content = text[first_linebreak + 1 : closing_index]
-
-        cleaned = content.strip()
-        return cleaned or None
-
-    @staticmethod
-    def _scan_for_object(text: str) -> dict[str, Any] | None:
-        decoder = json.JSONDecoder()
-        for index, char in enumerate(text):
-            if char != "{":
-                continue
-            try:
-                payload, _ = decoder.raw_decode(text, index)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                return payload
-        return None
-
-    @staticmethod
-    def _try_parse_mapping(candidate: str) -> dict[str, Any] | None:
-        try:
-            payload = json.loads(candidate)
-        except json.JSONDecodeError:
-            payload = None
-
-        if isinstance(payload, dict):
-            return payload
-
-        try:
-            parsed = ast.literal_eval(candidate)
-        except (SyntaxError, ValueError):
-            return None
-
-        if isinstance(parsed, dict):
-            return parsed
-        return None

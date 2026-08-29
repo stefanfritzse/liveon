@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 import re
@@ -11,10 +10,14 @@ from urllib.parse import urlparse
 
 from jinja2 import Template
 
-from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
+from app.utils.json_repair import invoke_json_object
+from app.utils.langchain_compat import BaseMessage, ChatPromptTemplate
 
 from app.models.tip import TipDraft
 from app.models.tip_context import TipGenerationContext
+
+#: Published tip bodies are trimmed before entering the generator prompt.
+_PUBLISHED_BODY_CHARS = 160
 
 
 class SupportsInvoke(Protocol):
@@ -42,6 +45,12 @@ Using the research notes below, craft ONE concise longevity tip (2-3 sentences o
 
 {% if guidance %}
 Today's focus: {{ guidance }}
+{% endif %}
+
+{% if published %}
+Already published recently — pick a DIFFERENT angle or a different research note, and
+do not restate any of these:
+{{ published }}
 {% endif %}
 
 Rules you MUST follow:
@@ -95,8 +104,14 @@ class TipGenerator:
         *,
         context: TipGenerationContext,
         feedback: str | None = None,
+        published_tips: Sequence[Any] = (),
     ) -> TipDraft:
-        """Produce a tip draft from structured context with optional feedback to guide revisions."""
+        """Produce a tip draft from structured context, feedback, and publication history.
+
+        The editor has always known what was published; the generator did not. That
+        asymmetry made the review loop unconvergeable — the generator kept re-mining a
+        story it had already covered and could not see why it was being rejected.
+        """
 
         notes_block = context.notes_block()
         sources_block = context.sources_block()
@@ -109,6 +124,7 @@ class TipGenerator:
             current_date=current_date,
             guidance=guidance,
             feedback=feedback,
+            published=self._format_published(published_tips),
         )
         messages = self.prompt.format_messages(
             tip_prompt=tip_prompt,
@@ -119,9 +135,7 @@ class TipGenerator:
             feedback=feedback,
         )
 
-        response = self.llm.invoke(messages)
-        content = self._extract_content(response)
-        payload = self._parse_payload(content)
+        payload = invoke_json_object(self.llm, messages, label="Tip generator")
         tags = self._coerce_tags(payload.get("tags"))
         metadata = self._coerce_metadata(payload.get("metadata"))
 
@@ -148,6 +162,24 @@ class TipGenerator:
         return value.isoformat()
 
     @staticmethod
+    def _format_published(published_tips: Sequence[Any]) -> str:
+        """Render recent tip titles and bodies for the "do not repeat" block."""
+
+        lines: list[str] = []
+        for tip in published_tips:
+            title = str(getattr(tip, "title", "") or "").strip()
+            body = str(
+                getattr(tip, "content_body", "") or getattr(tip, "body", "") or ""
+            ).strip()
+            if not title and not body:
+                continue
+            body = " ".join(body.split())
+            if len(body) > _PUBLISHED_BODY_CHARS:
+                body = body[:_PUBLISHED_BODY_CHARS].rstrip() + "…"
+            lines.append(f"- {title or '(untitled)'}: {body}" if body else f"- {title}")
+        return "\n".join(lines)
+
+    @staticmethod
     def _render_tip_prompt(
         *,
         notes: str,
@@ -155,8 +187,9 @@ class TipGenerator:
         current_date: str,
         guidance: str | None,
         feedback: str | None,
+        published: str = "",
     ) -> str:
-        """Render the human prompt via Jinja to conditionally include feedback guidance."""
+        """Render the human prompt via Jinja to conditionally include extra guidance."""
 
         return (
             TIP_HUMAN_PROMPT.render(
@@ -165,78 +198,10 @@ class TipGenerator:
                 current_date=current_date,
                 guidance=guidance,
                 feedback=feedback,
+                published=published,
             ).strip()
         )
 
-    @staticmethod
-    def _extract_content(response: BaseMessage | str) -> str:
-        if isinstance(response, AIMessage):
-            return response.content or ""
-        if isinstance(response, BaseMessage):
-            return str(response.content) if getattr(response, "content", None) else ""
-        return str(response)
-
-    @staticmethod
-    def _parse_payload(content: str) -> dict[str, Any]:
-        text = content.strip()
-        if not text:
-            raise ValueError("Tip generator response was not valid JSON")
-
-        candidates: list[str] = []
-        fenced = TipGenerator._strip_code_fence(text)
-        if fenced:
-            candidates.append(fenced)
-        candidates.append(text)
-
-        for candidate in candidates:
-            try:
-                return TipGenerator._ensure_mapping(json.loads(candidate))
-            except json.JSONDecodeError:
-                continue
-
-        scanned = TipGenerator._scan_for_object(text)
-        if scanned is not None:
-            return TipGenerator._ensure_mapping(scanned)
-
-        raise ValueError("Tip generator response was not valid JSON")
-
-    @staticmethod
-    def _strip_code_fence(text: str) -> str | None:
-        if not text.startswith("```"):
-            return None
-
-        closing_index = text.rfind("```")
-        if closing_index <= 0:
-            return None
-
-        first_linebreak = text.find("\n")
-        if first_linebreak == -1:
-            content = text[3:closing_index]
-        else:
-            content = text[first_linebreak + 1 : closing_index]
-
-        cleaned = content.strip()
-        return cleaned or None
-
-    @staticmethod
-    def _scan_for_object(text: str) -> dict[str, Any] | None:
-        decoder = json.JSONDecoder()
-        for index, char in enumerate(text):
-            if char != "{":
-                continue
-            try:
-                payload, _ = decoder.raw_decode(text, index)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                return payload
-        return None
-
-    @staticmethod
-    def _ensure_mapping(payload: Any) -> dict[str, Any]:
-        if not isinstance(payload, dict):
-            raise ValueError("Tip generator response JSON must be an object")
-        return payload
 
     @staticmethod
     def _coerce_tags(value: Any) -> list[str]:

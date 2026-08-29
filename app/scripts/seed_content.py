@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.models.content import Article, Tip
-from app.services.sqlite_repo import LocalSQLiteContentRepository
+from app.services.sqlite_repo import create_repository
 
 
 def main() -> None:
-    repository = LocalSQLiteContentRepository()
+    repository = create_repository()
 
     seed_articles = [
         Article(

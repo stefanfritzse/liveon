@@ -19,19 +19,19 @@ import json
 import logging
 import os
 import sys
-from typing import Protocol, Sequence
+from typing import Protocol
 
 from app.utils.langchain_compat import AIMessage, BaseMessage
 
 from app.models.aggregator import FeedSource
-from app.services.aggregator import LongevityNewsAggregator
+from app.services.aggregator import LongevityNewsAggregator, load_feeds
 from app.services.editor import EditorAgent
 from app.services.pipeline import ContentPipeline
+from app.services.llm_factory import create_chat_model
 from app.services.summarizer import SummarizerAgent
 from dataclasses import is_dataclass, asdict
 from datetime import datetime, date, timezone
 from pathlib import Path
-from urllib.parse import urlparse
 
 # SQLite repo (new)
 from app.services.sqlite_repo import LocalSQLiteContentRepository
@@ -51,24 +51,6 @@ if not LOGGER.handlers:  # avoid dupes on re-import
     LOGGER.propagate = False
 
 LOGGER.info("PIPELINE_START")
-
-DEFAULT_FEEDS: Sequence[FeedSource] = (
-    FeedSource(
-        name="Google News: Longevity Research",
-        url="https://news.google.com/rss/search?q=longevity+research&hl=en-US&gl=US&ceid=US:en",
-        topic="research",
-    ),
-    FeedSource(
-        name="Google News: Healthy Aging",
-        url="https://news.google.com/rss/search?q=%22healthy+aging%22&hl=en-US&gl=US&ceid=US:en",
-        topic="aging",
-    ),
-    FeedSource(
-        name="Google News: Longevity Nutrition",
-        url="https://news.google.com/rss/search?q=longevity+nutrition&hl=en-US&gl=US&ceid=US:en",
-        topic="lifestyle",
-    ),
-)
 
 def _json_default(o):
     if isinstance(o, (datetime, date)):
@@ -92,29 +74,12 @@ def _configure_logging() -> None:
 
 
 def _load_feeds() -> list[FeedSource]:
-    """Return the feed configuration, allowing overrides via environment variables."""
-    raw_sources = os.getenv("LIVEON_FEED_SOURCES")
-    if not raw_sources:
-        return [*DEFAULT_FEEDS]
+    """Return the shared feed configuration, surfacing config errors as exit codes."""
 
     try:
-        payload = json.loads(raw_sources)
-    except json.JSONDecodeError as exc:  # pragma: no cover - user configuration
-        raise SystemExit("LIVEON_FEED_SOURCES must contain valid JSON") from exc
-
-    feeds: list[FeedSource] = []
-    for entry in payload:
-        try:
-            feeds.append(
-                FeedSource(
-                    name=entry["name"],
-                    url=entry["url"],
-                    topic=entry.get("topic"),
-                )
-            )
-        except KeyError as exc:  # pragma: no cover - user configuration
-            raise SystemExit(f"Feed configuration missing key: {exc}") from exc
-    return feeds
+        return load_feeds()
+    except ValueError as exc:  # pragma: no cover - user configuration
+        raise SystemExit(str(exc)) from exc
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -141,86 +106,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _create_llm(agent_label: str) -> "SupportsInvoke":
     """Instantiate a LangChain compatible chat model for the given agent."""
-    provider_env_key = f"LIVEON_{agent_label.upper()}_MODEL"
-    provider_env_value = os.getenv(provider_env_key)
-    provider = (provider_env_value or "ollama").lower()
 
-    if provider == "ollama":
-        ChatOllama = _resolve_chat_ollama()
-        model_name = (
-            os.getenv(f"LIVEON_{agent_label.upper()}_OLLAMA_MODEL")
-            or os.getenv("LIVEON_OLLAMA_MODEL")
-            or 'phi3:14b-medium-4k-instruct-q4_K_M'
-        )
-        format_hint = (os.getenv("LIVEON_OLLAMA_FORMAT") or "json").strip().lower()
-        base_url = _resolve_ollama_base_url()
-        # Ollama defaults to temperature 0.8, which invents dates and URLs on a
-        # summarisation task. Apply the same low temperature the OpenAI branch uses.
-        kwargs: dict[str, object] = {
-            "model": model_name,
-            "base_url": base_url,
-            "temperature": _model_temperature(),
-        }
-        if format_hint:
-            kwargs["format"] = format_hint
-        return ChatOllama(**kwargs)
-
-    if provider in {"openai", "gpt"}:  # pragma: no cover - optional dependency
-        try:
-            from langchain_openai import ChatOpenAI
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise SystemExit("Install langchain-openai to use the OpenAI chat model") from exc
-
-        return ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            temperature=_model_temperature(),
-        )
-
-    return LocalJSONResponder(agent_label)
-
-
-def _model_temperature(default: float = 0.2) -> float:
-    """Sampling temperature for every provider; falls back on a bad value."""
-
-    raw = (os.getenv("LIVEON_MODEL_TEMPERATURE") or "").strip()
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
-def _resolve_chat_ollama():
-    try:
-        from langchain_ollama import ChatOllama  # type: ignore
-    except ImportError:
-        try:
-            from langchain_community.chat_models import ChatOllama  # type: ignore
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise SystemExit("Install langchain-ollama to use the Ollama provider") from exc
-    return ChatOllama
-
-
-def _resolve_ollama_base_url() -> str:
-    """Return a client-safe Ollama base URL, defaulting to localhost."""
-
-    raw = (os.getenv("LIVEON_OLLAMA_URL") or os.getenv("OLLAMA_HOST") or "").strip()
-    if not raw:
-        raw = "http://127.0.0.1:11434"
-
-    if "://" not in raw:
-        raw = f"http://{raw}"
-
-    parsed = urlparse(raw)
-    scheme = parsed.scheme or "http"
-    host = parsed.hostname or "127.0.0.1"
-
-    if host in {"0.0.0.0", "::", "", "[::]"}:
-        host = "127.0.0.1"
-
-    port = parsed.port or 11434
-    return f"{scheme}://{host}:{port}"
+    return create_chat_model(
+        agent_label=agent_label,
+        json_mode=True,
+        local_factory=lambda: LocalJSONResponder(agent_label),
+    )
 
 
 class SupportsInvoke(Protocol):

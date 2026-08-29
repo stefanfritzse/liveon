@@ -43,12 +43,12 @@ def _add_months(value: datetime, months: int) -> datetime:
     return value.replace(year=year, month=month, day=day)
 
 
-def _positive_int(raw: str | None, default: int) -> int:
+def _positive_int(raw: str | None, default: int, *, minimum: int = 1) -> int:
     try:
         value = int(raw) if raw is not None else default
     except (TypeError, ValueError):
         return default
-    return value if value > 0 else default
+    return value if value >= minimum else default
 
 
 @dataclass(frozen=True)
@@ -108,13 +108,29 @@ class PipelineScheduleStore:
                 (job_name, timestamp),
             )
 
-    def ensure_initialized(self, job_name: str, now: datetime) -> datetime:
-        last_run = self.get_last_run(job_name)
+    def is_due(self, job: "JobConfig", now: datetime) -> bool:
+        """Return ``True`` when ``job`` should run.
+
+        A job with no recorded run is due immediately. Stamping ``last_run = now`` on
+        first boot — as this used to — meant a fresh install produced no articles for a
+        week and no tips for a month, which reads as a broken site rather than a
+        scheduled one.
+        """
+
+        last_run = self.get_last_run(job.name)
         if last_run is None:
-            self.set_last_run(job_name, now)
-            logger.info("Initialized pipeline schedule for %s at %s", job_name, now.isoformat())
-            return now
-        return last_run
+            logger.info(
+                "No previous run recorded for %s; running now", job.name,
+                extra={"event": "pipeline_scheduler.first_run", "job": job.name},
+            )
+            return True
+        return now >= job.next_run_at(last_run)
+
+    def next_due(self, job: "JobConfig") -> datetime | None:
+        """Return when ``job`` is next due, or ``None`` when it has never run."""
+
+        last_run = self.get_last_run(job.name)
+        return job.next_run_at(last_run) if last_run else None
 
 
 class PipelineScheduler:
@@ -133,6 +149,7 @@ class PipelineScheduler:
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        self._running: set[str] = set()
 
     async def start(self) -> None:
         if self._task is not None:
@@ -162,17 +179,70 @@ class PipelineScheduler:
         async with self._lock:
             now = _utc_now()
             for job in self._jobs:
-                last_run = self._store.ensure_initialized(job.name, now)
-                next_run = job.next_run_at(last_run)
-                if now < next_run:
+                if not self._store.is_due(job, now):
                     continue
-                logger.info("Starting scheduled pipeline: %s", job.name)
-                success = await asyncio.to_thread(job.runner, now)
-                if success:
-                    self._store.set_last_run(job.name, now)
-                    logger.info("Scheduled pipeline finished: %s", job.name)
-                else:
-                    logger.warning("Scheduled pipeline failed: %s", job.name)
+                await self._execute(job, now)
+
+    async def _execute(self, job: JobConfig, now: datetime) -> bool:
+        """Run one job, recording the timestamp only when it succeeds."""
+
+        logger.info("Starting pipeline: %s", job.name)
+        success = await asyncio.to_thread(job.runner, now)
+        if success:
+            self._store.set_last_run(job.name, now)
+            logger.info("Pipeline finished: %s", job.name)
+        else:
+            logger.warning("Pipeline failed: %s", job.name)
+        return success
+
+    # ------------------------------------------------------------------
+    # Manual control
+    # ------------------------------------------------------------------
+    @property
+    def job_names(self) -> list[str]:
+        return [job.name for job in self._jobs]
+
+    def describe_jobs(self) -> list[dict[str, object]]:
+        """Summarise each job for the admin console."""
+
+        summaries: list[dict[str, object]] = []
+        for job in self._jobs:
+            last_run = self._store.get_last_run(job.name)
+            summaries.append(
+                {
+                    "name": job.name,
+                    "last_run": last_run,
+                    "next_run": self._store.next_due(job),
+                    "running": job.name in self._running,
+                }
+            )
+        return summaries
+
+    async def trigger(self, job_name: str) -> bool:
+        """Start ``job_name`` in the background, returning ``False`` if unknown.
+
+        The caller is an HTTP request and the job takes minutes, so this returns as
+        soon as the work is scheduled; the console shows progress via the run times.
+        """
+
+        job = next((item for item in self._jobs if item.name == job_name), None)
+        if job is None:
+            return False
+        if job.name in self._running:
+            logger.info("Pipeline %s is already running; ignoring trigger", job.name)
+            return True
+
+        self._running.add(job.name)
+
+        async def _runner() -> None:
+            try:
+                async with self._lock:
+                    await self._execute(job, _utc_now())
+            finally:
+                self._running.discard(job.name)
+
+        asyncio.create_task(_runner())
+        return True
 
 
 def scheduler_enabled() -> bool:
@@ -242,8 +312,11 @@ def create_pipeline_scheduler() -> PipelineScheduler | None:
     if not scheduler_enabled():
         return None
 
-    article_days = _positive_int(os.getenv("LIVEON_ARTICLE_INTERVAL_DAYS"), 7)
-    tip_months = _positive_int(os.getenv("LIVEON_TIP_INTERVAL_MONTHS"), 1)
+    # The homepage headlines a "Tip of the Day", so a tip run has to happen daily.
+    # Articles were weekly, which left the site looking abandoned between runs.
+    article_days = _positive_int(os.getenv("LIVEON_ARTICLE_INTERVAL_DAYS"), 1)
+    tip_days = _positive_int(os.getenv("LIVEON_TIP_INTERVAL_DAYS"), 1)
+    tip_months = _positive_int(os.getenv("LIVEON_TIP_INTERVAL_MONTHS"), 0, minimum=0)
     check_interval = _positive_int(os.getenv("LIVEON_PIPELINE_CHECK_INTERVAL_SEC"), 3600)
 
     try:
@@ -251,8 +324,13 @@ def create_pipeline_scheduler() -> PipelineScheduler | None:
     except Exception:
         logger.exception("Pipeline scheduler unavailable: failed to open schedule store")
         return None
+    tip_job = (
+        JobConfig(name="tips", runner=_run_tip_pipeline, interval_months=tip_months)
+        if tip_months
+        else JobConfig(name="tips", runner=_run_tip_pipeline, interval_days=tip_days)
+    )
     jobs = [
         JobConfig(name="articles", runner=_run_article_pipeline, interval_days=article_days),
-        JobConfig(name="tips", runner=_run_tip_pipeline, interval_months=tip_months),
+        tip_job,
     ]
     return PipelineScheduler(store, jobs, check_interval_sec=check_interval)

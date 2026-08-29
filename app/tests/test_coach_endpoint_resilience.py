@@ -278,38 +278,16 @@ def test_http_fallback_client_adopts_configured_timeout(monkeypatch: pytest.Monk
 def test_create_coach_llm_passes_timeout_to_chat_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    class _StubChatOllama:
-        def __init__(self, **kwargs: object) -> None:
-            captured.update(kwargs)
+    def _fake_build(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
 
     monkeypatch.setenv("LIVEON_LLM_TIMEOUT", "120")
-    monkeypatch.setattr(coach_module, "ChatOllama", _StubChatOllama)
+    monkeypatch.setattr(coach_module, "build_chat_ollama", _fake_build)
 
     coach_module.create_coach_llm()
 
-    assert captured["timeout"] == 120
-
-
-def test_create_coach_llm_survives_a_client_without_timeout_support(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Some ChatOllama builds take the timeout elsewhere; that must not be fatal."""
-
-    attempts: list[dict[str, object]] = []
-
-    class _PickyChatOllama:
-        def __init__(self, **kwargs: object) -> None:
-            attempts.append(kwargs)
-            if "timeout" in kwargs:
-                raise TypeError("unexpected keyword argument 'timeout'")
-
-    monkeypatch.setattr(coach_module, "ChatOllama", _PickyChatOllama)
-
-    llm = coach_module.create_coach_llm()
-
-    assert isinstance(llm, _PickyChatOllama)
-    assert len(attempts) == 2
-    assert "timeout" not in attempts[1]
+    assert captured["timeout"] == 120.0
 
 
 @pytest.mark.parametrize(
