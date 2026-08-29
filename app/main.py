@@ -5,19 +5,31 @@ from collections.abc import Callable
 from functools import lru_cache
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import asyncio
 import json
 import logging
 import os
+import secrets
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
+from urllib.parse import urlparse
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.content import Article, Tip
-from app.services.coach import CoachAgent, create_coach_llm
+from app.services.coach import (
+    CoachAgent,
+    CoachError,
+    CoachTimeoutError,
+    CoachUnavailableError,
+    create_coach_llm,
+    resolve_llm_timeout,
+)
 from app.services.pipeline_scheduler import create_pipeline_scheduler
 from app.utils.text import markdown_to_plain_text, markdown_to_html
 from app.services.sqlite_repo import LocalSQLiteContentRepository
@@ -111,6 +123,73 @@ def _build_debug_detail(exc: Exception) -> dict[str, str]:
     }
 
 
+def _consume_abandoned_task(task: "asyncio.Task[object]") -> None:
+    """Retrieve an abandoned task's outcome so asyncio does not log it as unhandled."""
+
+    if not task.cancelled():
+        task.exception()
+
+
+async def _run_with_deadline(func: Callable[..., object], *args: object, timeout: float) -> object:
+    """Run a blocking callable in a worker thread under a wall-clock deadline.
+
+    A Python thread cannot be interrupted, so when the deadline expires the worker is
+    *abandoned* rather than awaited: the caller regains control immediately and the
+    thread finishes on its own (or dies on the client's transport timeout) with its
+    result discarded. ``asyncio.wait_for`` cannot be used here because it waits for the
+    cancelled task to settle, which for an uninterruptible thread means waiting out the
+    very call the deadline was meant to bound.
+    """
+
+    task: "asyncio.Task[object]" = asyncio.ensure_future(asyncio.to_thread(func, *args))
+    done, _pending = await asyncio.wait({task}, timeout=timeout)
+    if not done:
+        task.cancel()
+        task.add_done_callback(_consume_abandoned_task)
+        raise TimeoutError(f"Call exceeded the {timeout:g}s deadline.")
+    return task.result()
+
+
+def _debug_errors_enabled() -> bool:
+    """Return ``True`` when exception details may be sent to the client."""
+
+    raw = (os.getenv("LIVEON_DEBUG_ERRORS") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _error_detail(message: str, exc: Exception, *, event: str) -> dict[str, object]:
+    """Log ``exc`` against a fresh reference id and build the client-facing detail.
+
+    Internal exception text is not something a visitor asking about sleep should ever
+    read, so the default payload carries only a reference the operator can grep for in
+    the logs. Set ``LIVEON_DEBUG_ERRORS=1`` to inline the details while developing.
+    """
+
+    reference = uuid.uuid4().hex[:12]
+    logger.exception(
+        "%s (reference=%s)",
+        message,
+        reference,
+        extra={"event": event, "error_reference": reference},
+    )
+
+    detail: dict[str, object] = {"message": message, "reference": reference}
+    if _debug_errors_enabled():
+        detail["debug"] = _build_debug_detail(exc)
+    return detail
+
+
+@app.on_event("startup")
+async def _log_admin_console_state() -> None:
+    if admin_console_enabled():
+        logger.info("Admin console enabled", extra={"event": "admin.enabled"})
+    else:
+        logger.warning(
+            "Admin console disabled: set LIVEON_ADMIN_PASSWORD to enable content management",
+            extra={"event": "admin.disabled"},
+        )
+
+
 @app.on_event("startup")
 async def _start_pipeline_scheduler() -> None:
     scheduler = create_pipeline_scheduler()
@@ -145,15 +224,14 @@ def get_coach_agent() -> CoachAgent:
 
     try:
         return _cached_coach_agent()
-    except RuntimeError as exc:
-        logger.exception("Coach agent initialisation failed", extra={"event": "coach.agent_init"})
-        debug_detail = _build_debug_detail(exc)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the client as 503
         raise HTTPException(
             status_code=503,
-            detail={
-                "message": "Coach service temporarily unavailable",
-                "debug": debug_detail,
-            },
+            detail=_error_detail(
+                "Coach service temporarily unavailable",
+                exc,
+                event="coach.agent_init",
+            ),
         ) from exc
 
 
@@ -350,20 +428,56 @@ async def ask_coach_endpoint(
         },
     )
 
+    # The model call is synchronous and can run for minutes on a local 14B model.
+    # Running it on the event loop would freeze every other request for the duration
+    # and starve the container's liveness probe into restarting the pod mid-answer.
+    #
+    # The client's own timeout only bounds the gap between streamed tokens, so a model
+    # that keeps emitting slowly would never trip it. The wall-clock ceiling here is
+    # what actually guarantees the request ends. The abandoned worker thread finishes
+    # on its own (or dies on the transport timeout); its result is simply discarded.
     try:
-        answer = agent.ask(question)
-    except RuntimeError as exc:
-        logger.exception(
-            "Coach language model unavailable",
-            extra={"event": "coach.error", "reason": "llm"},
+        answer = await _run_with_deadline(
+            agent.ask, question, timeout=resolve_llm_timeout()
         )
-        debug_detail = _build_debug_detail(exc)
+    except (CoachTimeoutError, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=_error_detail(
+                "The coach took too long to respond. The local model may still be loading — "
+                "try again in a moment.",
+                exc,
+                event="coach.timeout",
+            ),
+        ) from exc
+    except CoachUnavailableError as exc:
         raise HTTPException(
             status_code=503,
-            detail={
-                "message": "Coach language model unavailable",
-                "debug": debug_detail,
-            },
+            detail=_error_detail(
+                "The coach is offline. Check that the local model server is running.",
+                exc,
+                event="coach.unavailable",
+            ),
+        ) from exc
+    except CoachError as exc:
+        # Reached the model but could not get an answer out of it (model not pulled,
+        # bad response, protocol error). The dependency is at fault, not the request.
+        raise HTTPException(
+            status_code=503,
+            detail=_error_detail(
+                "The coach language model could not complete the request.",
+                exc,
+                event="coach.llm_error",
+            ),
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - every failure gets a friendly answer
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail(
+                "The coach could not answer that question.",
+                exc,
+                event="coach.error",
+            ),
         ) from exc
 
     return AskCoachResponse.from_coach_answer(answer)
@@ -444,12 +558,130 @@ async def ask_the_coach(request: Request) -> HTMLResponse:
     )
 
 
+# ----------------------------------------------------------------------
+# Admin console access control
+# ----------------------------------------------------------------------
+# The console can permanently delete published content, so it is gated on credentials
+# supplied through the environment. When none are configured it is switched off rather
+# than left open: an unconfigured deployment should not ship a public delete button.
+
+_admin_security = HTTPBasic(auto_error=False)
+
+_ADMIN_AUTH_HEADERS = {"WWW-Authenticate": 'Basic realm="Live On admin console"'}
+
+
+def admin_credentials() -> tuple[str, str] | None:
+    """Return the configured admin username/password, or ``None`` when disabled."""
+
+    password = os.getenv("LIVEON_ADMIN_PASSWORD") or ""
+    if not password:
+        return None
+    username = (os.getenv("LIVEON_ADMIN_USER") or "admin").strip() or "admin"
+    return username, password
+
+
+def admin_console_enabled() -> bool:
+    """Return ``True`` when admin credentials have been configured."""
+
+    return admin_credentials() is not None
+
+
+def require_admin(
+    credentials: HTTPBasicCredentials | None = Depends(_admin_security),
+) -> str:
+    """Authenticate an admin request, returning the verified username."""
+
+    expected = admin_credentials()
+    if expected is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The admin console is disabled. Set LIVEON_ADMIN_PASSWORD "
+                "(and optionally LIVEON_ADMIN_USER) to enable it."
+            ),
+        )
+
+    expected_user, expected_password = expected
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Admin credentials required.",
+            headers=_ADMIN_AUTH_HEADERS,
+        )
+
+    # Compare both fields unconditionally so the response time does not reveal
+    # which half of the credential was wrong.
+    user_ok = secrets.compare_digest(
+        credentials.username.encode("utf-8"), expected_user.encode("utf-8")
+    )
+    password_ok = secrets.compare_digest(
+        credentials.password.encode("utf-8"), expected_password.encode("utf-8")
+    )
+    if not (user_ok and password_ok):
+        logger.warning(
+            "Rejected admin credentials", extra={"event": "admin.auth_failed"}
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid admin credentials.",
+            headers=_ADMIN_AUTH_HEADERS,
+        )
+
+    return credentials.username
+
+
+def _request_is_same_origin(request: Request) -> bool:
+    """Return ``True`` when the request originates from this site.
+
+    Browsers attach ``Origin`` to cross-site form posts, so comparing it against the
+    ``Host`` we were addressed by blocks a third-party page from driving the admin
+    console with the browser's cached Basic-auth credentials.
+    """
+
+    host = request.headers.get("host")
+    if not host:
+        return False
+
+    for header in ("origin", "referer"):
+        raw = request.headers.get(header)
+        if not raw:
+            continue
+        netloc = urlparse(raw).netloc
+        return bool(netloc) and netloc == host
+
+    # Neither header present: a browser always sends at least one on a cross-site
+    # POST, so treat the absence as untrusted.
+    return False
+
+
+def require_admin_write(
+    request: Request,
+    username: str = Depends(require_admin),
+) -> str:
+    """Authenticate a state-changing admin request and reject cross-site submissions."""
+
+    if not _request_is_same_origin(request):
+        logger.warning(
+            "Rejected cross-origin admin write",
+            extra={
+                "event": "admin.cross_origin_blocked",
+                "origin": request.headers.get("origin"),
+            },
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Cross-origin admin requests are not allowed.",
+        )
+    return username
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(
     request: Request,
     repository: ContentRepository = Depends(get_repository),
+    _: str = Depends(require_admin),
 ) -> HTMLResponse:
-    """Render the administrative console placeholder."""
+    """Render the administrative console."""
 
     articles = repository.get_latest_articles(limit=20)
     tips = repository.get_latest_tips(limit=20)
@@ -470,10 +702,20 @@ async def delete_article_admin(
     request: Request,
     article_id: str,
     repository: ContentRepository = Depends(get_repository),
+    username: str = Depends(require_admin_write),
 ) -> RedirectResponse:
     """Handle deletion of an article from the admin console."""
 
-    repository.delete_article(article_id)
+    deleted = repository.delete_article(article_id)
+    logger.info(
+        "Admin deleted article",
+        extra={
+            "event": "admin.article_deleted",
+            "article_id": article_id,
+            "actor": username,
+            "deleted": deleted,
+        },
+    )
     return RedirectResponse(
         request.url_for("admin_dashboard"),
         status_code=status.HTTP_303_SEE_OTHER,
@@ -485,10 +727,20 @@ async def delete_tip_admin(
     request: Request,
     tip_id: str,
     repository: ContentRepository = Depends(get_repository),
+    username: str = Depends(require_admin_write),
 ) -> RedirectResponse:
     """Handle deletion of a tip from the admin console."""
 
-    repository.delete_tip(tip_id)
+    deleted = repository.delete_tip(tip_id)
+    logger.info(
+        "Admin deleted tip",
+        extra={
+            "event": "admin.tip_deleted",
+            "tip_id": tip_id,
+            "actor": username,
+            "deleted": deleted,
+        },
+    )
     return RedirectResponse(
         request.url_for("admin_dashboard"),
         status_code=status.HTTP_303_SEE_OTHER,

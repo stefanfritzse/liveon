@@ -58,6 +58,17 @@ spec:
           value: "qwen2.5:14b-instruct"
         - name: LIVEON_MODEL_TEMPERATURE
           value: "0.2"
+        # Ceiling on a single coach answer, so a wedged model server cannot pin a worker.
+        - name: LIVEON_LLM_TIMEOUT
+          value: "180"
+        # The admin console stays disabled until a password exists. Enable it with:
+        #   kubectl create secret generic liveon-admin --from-literal=password='<choose one>'
+        - name: LIVEON_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: liveon-admin
+              key: password
+              optional: true
         - name: OLLAMA_HOST
           value: "host.minikube.internal:11434"
         - name: OLLAMA_BASE_URL
@@ -75,18 +86,25 @@ spec:
           limits:
             cpu: "200m"
             memory: "256Mi"
+        # The coach now answers off the event loop, so /healthz stays responsive during
+        # generation. The timeouts below still leave headroom for the CPU contention a
+        # local model creates, so a slow answer can never restart the pod.
         livenessProbe:
           httpGet:
             path: /healthz
             port: 8080
           initialDelaySeconds: 15
           periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
       volumes:
       - name: liveon-data
         persistentVolumeClaim:

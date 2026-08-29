@@ -53,8 +53,44 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 | `LIVEON_LLM_PROVIDER` | `ollama` or a future provider | `ollama` |
 | `LIVEON_OLLAMA_MODEL` | Ollama model name | `phi3:14b-medium-4k-instruct-q4_K_M` |
 | `LIVEON_OLLAMA_URL` | Ollama base URL | `http://127.0.0.1:11434` |
+| `LIVEON_LLM_TIMEOUT` | Seconds a single coach answer may take before the request is abandoned with a `504` | `180` |
+| `LIVEON_ADMIN_USER` | Admin console username | `admin` |
+| `LIVEON_ADMIN_PASSWORD` | Admin console password. **The console stays disabled until this is set.** | _(unset)_ |
+| `LIVEON_DEBUG_ERRORS` | Include exception type/message in API error responses. Development only. | `0` |
 
 When the Ollama daemon is bound to `0.0.0.0`, still point `LIVEON_OLLAMA_URL` (or the pipeline command's environment) at a reachable host such as `http://127.0.0.1:11434` so local clients can connect successfully.
+
+### Admin Console
+
+`/admin` lists stored articles and tips and can permanently delete them, so it is protected:
+
+- **It is disabled unless `LIVEON_ADMIN_PASSWORD` is set.** An unconfigured deployment answers `503` rather than exposing delete buttons to anyone who finds the URL.
+- Access uses HTTP Basic auth, so the browser prompts for the credentials.
+- Deletions require a same-origin submission and a confirmation dialog, and each one is logged with the acting username.
+- The console is deliberately not linked from the site navigation; browse to `/admin` directly.
+
+```powershell
+$env:LIVEON_ADMIN_PASSWORD = "choose-a-password"
+uvicorn app.main:app --host 0.0.0.0 --port 8080
+```
+
+For Kubernetes, `deployment.yaml` reads the password from an optional secret:
+
+```powershell
+kubectl create secret generic liveon-admin --from-literal=password='choose-a-password'
+```
+
+### Coach Error Responses
+
+`/api/ask` distinguishes the ways the coach can fail so the UI can say something useful:
+
+| Status | Meaning |
+| --- | --- |
+| `503` | The model server could not be reached, or could not complete the request. |
+| `504` | The answer exceeded `LIVEON_LLM_TIMEOUT`. |
+| `500` | An unexpected server-side error. |
+
+Error payloads carry a `message` and a short `reference` id. The full exception and traceback are written to the server log against that same reference, keeping internal details out of the browser. Set `LIVEON_DEBUG_ERRORS=1` while developing to inline them in the response instead.
 
 ## Content Generation Pipelines
 

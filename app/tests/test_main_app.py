@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from app.main import ContentRepository, app, get_coach_agent, get_repository
 from app.models.coach import CoachAnswer
 from app.models.content import Article, Tip
+from app.services.coach import CoachUnavailableError
 
 
 class StubContentRepository(ContentRepository):
@@ -269,22 +270,19 @@ def test_ask_coach_endpoint_rejects_blank_questions(client: Callable[..., TestCl
 
 def test_ask_coach_endpoint_handles_llm_failures(client: Callable[..., TestClient]) -> None:
     repository = StubContentRepository(tips=[])
-    agent = _FailingCoachAgent(RuntimeError("LLM offline"))
+    agent = _FailingCoachAgent(CoachUnavailableError("Connection refused"))
     test_client = client(repository, agent=agent)
 
     response = test_client.post("/api/ask", json={"question": "Share exercise tips"})
 
     assert response.status_code == 503
-    payload = response.json()
-    assert payload == {
-        "detail": {
-            "message": "Coach language model unavailable",
-            "debug": {"type": "RuntimeError", "message": "LLM offline"},
-        }
-    }
+    detail = response.json()["detail"]
+    assert "offline" in detail["message"].lower()
+    # The raw exception text stays in the server log, not in the response.
+    assert "Connection refused" not in json.dumps(detail)
 
 
-def test_ask_coach_endpoint_exposes_agent_initialisation_debug(
+def test_ask_coach_endpoint_hides_agent_initialisation_details(
     monkeypatch: pytest.MonkeyPatch, client: Callable[..., TestClient]
 ) -> None:
     from app import main as main_module
@@ -294,7 +292,7 @@ def test_ask_coach_endpoint_exposes_agent_initialisation_debug(
     main_module._cached_coach_agent.cache_clear()
 
     def _raise_runtime() -> None:
-        raise RuntimeError("LangChain dependency missing")
+        raise RuntimeError("LangChain dependency missing at /opt/venv/lib")
 
     monkeypatch.setattr(main_module, "_cached_coach_agent", _raise_runtime)
 
@@ -303,15 +301,12 @@ def test_ask_coach_endpoint_exposes_agent_initialisation_debug(
     response = test_client.post("/api/ask", json={"question": "Share sleep advice"})
 
     assert response.status_code == 503
-    assert response.json() == {
-        "detail": {
-            "message": "Coach service temporarily unavailable",
-            "debug": {
-                "type": "RuntimeError",
-                "message": "LangChain dependency missing",
-            },
-        }
-    }
+    detail = response.json()["detail"]
+    assert detail["message"] == "Coach service temporarily unavailable"
+    assert "debug" not in detail
+    assert "/opt/venv" not in json.dumps(detail)
+    # A reference the operator can grep the logs for is still handed back.
+    assert detail["reference"]
 
 
 

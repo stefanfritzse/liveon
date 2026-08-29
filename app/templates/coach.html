@@ -541,14 +541,20 @@
                 : detail?.message ?? 'The coach is unavailable right now.';
             showError(errorMessage);
 
+            const reference =
+              typeof detail === 'object' && detail ? detail.reference : '';
+
+            // Present only when LIVEON_DEBUG_ERRORS is enabled on the server.
             const debugInfo =
-              typeof detail === 'object' && detail
-                ? formatDebugInfo(detail.debug ?? detail)
+              typeof detail === 'object' && detail && detail.debug
+                ? formatDebugInfo(detail.debug)
                 : '';
 
-            const assistantLines = [
-              'I was unable to retrieve guidance just now. Please try again in a moment.',
-            ];
+            const assistantLines = [errorMessage];
+
+            if (reference) {
+              assistantLines.push('', `Reference: ${reference}`);
+            }
 
             if (debugInfo) {
               assistantLines.push('', 'Debug information:', debugInfo);

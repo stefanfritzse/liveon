@@ -3,12 +3,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Sequence
+import logging
 import os
 from urllib.parse import urlparse
 
 import httpx
 
 from app.models.coach import CoachAnswer, CoachQuestion
+
+LOGGER = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency guard
     from langchain_community.chat_models import ChatOllama
@@ -27,6 +30,83 @@ _DEFAULT_SAFETY_INSTRUCTIONS = (
 )
 
 _DEFAULT_DISCLAIMER = ""
+
+# A 14B model answering on CPU routinely needs well over a minute. The ceiling exists to
+# stop a wedged daemon from pinning a worker forever, not to cut generation short.
+_DEFAULT_LLM_TIMEOUT = 180.0
+
+
+class CoachError(RuntimeError):
+    """Base class for coach failures that the API layer knows how to translate.
+
+    Inherits from :class:`RuntimeError` so existing callers that only guard against
+    ``RuntimeError`` keep working.
+    """
+
+
+class CoachUnavailableError(CoachError):
+    """The language model could not be reached (daemon down, wrong host, DNS)."""
+
+
+class CoachTimeoutError(CoachError):
+    """The language model accepted the request but did not answer in time."""
+
+
+def resolve_llm_timeout() -> float:
+    """Return the per-request language model timeout in seconds."""
+
+    raw = (os.getenv("LIVEON_LLM_TIMEOUT") or "").strip()
+    if not raw:
+        return _DEFAULT_LLM_TIMEOUT
+    try:
+        timeout = float(raw)
+    except ValueError:
+        return _DEFAULT_LLM_TIMEOUT
+    return timeout if timeout > 0 else _DEFAULT_LLM_TIMEOUT
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """Return ``exc`` plus its ``__cause__``/``__context__`` ancestry."""
+
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def classify_llm_error(exc: Exception) -> CoachError:
+    """Translate an arbitrary model-client exception into a coach-specific error.
+
+    The coach can sit behind ``langchain-community`` (which uses ``requests``), the
+    built-in ``httpx`` client, or whatever a future provider brings. Rather than
+    enumerating every library's exception hierarchy, classify on the exception chain
+    using the shared naming conventions those libraries follow.
+    """
+
+    if isinstance(exc, CoachError):
+        return exc
+
+    chain = _exception_chain(exc)
+    names = [type(item).__name__.lower() for item in chain]
+
+    # Order matters: a connect *timeout* is more usefully reported as unreachable.
+    if any("connect" in name or "unreachable" in name for name in names):
+        return CoachUnavailableError(str(exc) or "Could not reach the language model.")
+
+    if any(isinstance(item, (TimeoutError, httpx.TimeoutException)) for item in chain):
+        return CoachTimeoutError(str(exc) or "The language model timed out.")
+
+    if any("timeout" in name or "timedout" in name for name in names):
+        return CoachTimeoutError(str(exc) or "The language model timed out.")
+
+    if any(isinstance(item, (ConnectionError, httpx.TransportError)) for item in chain):
+        return CoachUnavailableError(str(exc) or "Could not reach the language model.")
+
+    return CoachError(str(exc) or "The language model failed to answer.")
 
 
 @dataclass(slots=True)
@@ -65,7 +145,11 @@ class CoachAgent:
 
         prompt_value = self._build_prompt(normalized_question)
 
-        response = self._invoke_llm(prompt_value)
+        try:
+            response = self._invoke_llm(prompt_value)
+        except Exception as exc:  # noqa: BLE001 - re-raised as a classified CoachError
+            raise classify_llm_error(exc) from exc
+
         response_text = self._extract_response_text(response)
         message, disclaimer = _separate_disclaimer(response_text, default=self.default_disclaimer)
         return CoachAnswer(message=message, disclaimer=disclaimer)
@@ -157,11 +241,11 @@ class LocalCoachResponder:
 class OllamaHTTPChat:
     """Minimal Ollama chat client used when LangChain is unavailable."""
 
-    def __init__(self, model: str, *, base_url: str | None = None, timeout: float = 30.0) -> None:
+    def __init__(self, model: str, *, base_url: str | None = None, timeout: float | None = None) -> None:
         self.model = model
         resolved_base_url = base_url or _resolve_ollama_base_url()
         self.base_url = resolved_base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = resolve_llm_timeout() if timeout is None else timeout
 
     def invoke(self, messages: Any) -> Any:
         payload = {
@@ -236,9 +320,20 @@ def create_coach_llm() -> Any:
     if provider == "ollama":
         model = os.getenv("LIVEON_OLLAMA_MODEL") or 'phi3:14b-medium-4k-instruct-q4_K_M'
         base_url = _resolve_ollama_base_url()
+        timeout = resolve_llm_timeout()
         if ChatOllama is not None:
-            return ChatOllama(model=model, base_url=base_url)
-        return OllamaHTTPChat(model=model, base_url=base_url)
+            try:
+                return ChatOllama(model=model, base_url=base_url, timeout=int(timeout))
+            except (TypeError, ValueError) as exc:
+                # Not every ChatOllama build exposes ``timeout`` (langchain-ollama takes it
+                # via client options). Losing the ceiling is worth a warning, not a crash.
+                LOGGER.warning(
+                    "ChatOllama rejected the timeout option; running without one: %s",
+                    exc,
+                    extra={"event": "coach.timeout_unsupported"},
+                )
+                return ChatOllama(model=model, base_url=base_url)
+        return OllamaHTTPChat(model=model, base_url=base_url, timeout=timeout)
 
     # Fallback for local dev and testing
     return LocalCoachResponder()
