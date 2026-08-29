@@ -143,6 +143,21 @@ def build_chat_ollama(
     if timeout is not None:
         kwargs["timeout"] = int(timeout)
 
+    # These clients are pydantic models that accept unknown keywords silently, so an
+    # unsupported option would look applied while doing nothing. Drop what the class
+    # does not declare, and say so — for `timeout` in particular, the caller should
+    # know the request deadline is then the only thing bounding a call.
+    declared = getattr(chat_ollama, "model_fields", None)
+    if isinstance(declared, dict):
+        for key in [key for key in kwargs if key not in declared and key != "model"]:
+            kwargs.pop(key)
+            LOGGER.info(
+                "%s does not support %r; relying on the caller's deadline instead.",
+                getattr(chat_ollama, "__name__", "ChatOllama"),
+                key,
+                extra={"event": "llm.option_unavailable", "option": key},
+            )
+
     optional_keys = ["timeout", "format", "temperature"]
     while True:
         try:

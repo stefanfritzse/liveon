@@ -52,7 +52,13 @@ server to be the single renderer, which meant sending server-rendered HTML to th
 widening a vector that already existed. `sanitize_html` now runs over every rendered
 Markdown output, so #24 is closed too.
 
-P3 otherwise remains open.
+**P3 (items 22–30): implemented and verified — 2026-08-29.** The suite went from 288 to 348
+passing, `pyflakes` is clean across the application, and every environment variable the code
+reads is now documented. Verified live: a real two-article pipeline run against Google News
+feeds, and `/api/articles` measured at 0.36 ms of database work per request — against the
+~1.08 ms that *repository construction alone* used to cost.
+
+All items in this document are now closed.
 
 ---
 
@@ -453,7 +459,7 @@ stuck retry loop from monopolising a single local model, not to defend a public 
 
 ## P3 — Correctness, hygiene, and documentation
 
-### 22. The article pipeline hides publisher failures and exits 0
+### 22. The article pipeline hides publisher failures and exits 0 — ✅ FIXED
 
 [pipeline.py:173](app/services/pipeline.py#L173) has `errors.append(f"Publisher failed: {exc}")`
 commented out in favour of a bare `logging.exception`. The result is a `PipelineResult` with no
@@ -462,7 +468,11 @@ publication *and no errors*, so `run()` reports "Pipeline finished without produ
 CronJob or the in-app scheduler treats a broken publisher as a successful no-op — and the
 scheduler then stamps `last_run`, silently skipping the next window. Restore the append.
 
-### 23. Every page view opens a new database *(measured)*
+**Fixed.** The `errors.append` is restored, so a publisher exception surfaces as a
+pipeline error, the CLI exits non-zero, and the scheduler does not stamp `last_run` on a
+failed run. Verified both directions: a failing publisher exits 1, a working one exits 0.
+
+### 23. Every page view opens a new database *(measured)* — ✅ FIXED
 
 `get_repository()` ([main.py:272](app/main.py#L272)) is a per-request FastAPI dependency that
 constructs a `LocalSQLiteContentRepository`, which `mkdir`s, opens a connection, sets two PRAGMAs
@@ -472,6 +482,12 @@ a shared connection** (1.08 ms vs 0.010 ms per query locally; worse on the Kuber
 
 **Fix:** build one repository at startup, store it on `app.state`, and have the dependency return
 it.
+
+**Fixed.** The repository is built once and kept on `app.state`, created lazily so importing
+the module never touches the filesystem, and closed on shutdown by the new lifespan. `memory`
+also became a *supported* value rather than one that happened to land on the "unsupported"
+fallback. Measured live: 0.36 ms of database work per request for a full browse — filter,
+paginate, and collect tags — against the ~1.08 ms construction alone previously cost.
 
 ### 24. Rendered markdown is never sanitized — ✅ FIXED (with #16)
 
@@ -487,19 +503,35 @@ allowlist of tags, attributes, and URL schemes, dropping script/style/iframe bod
 entirely and hardening outbound links. It is stdlib-only (`html.parser`), so no new
 dependency. Closed early because #16 required sending server-rendered HTML to the browser.
 
-### 25. Deprecated APIs that will break on the next upgrade
+### 25. Deprecated APIs that will break on the next upgrade — ✅ FIXED
 
 - `@app.on_event("startup"/"shutdown")` ([main.py:113-130](app/main.py#L113-L130)) — FastAPI already warns; migrate to `lifespan`.
 - `datetime.utcnow()` ([sqlite_repo.py:120](app/services/sqlite_repo.py#L120)) — deprecated in 3.12, and returns a *naive* timestamp into a codebase that is otherwise carefully tz-aware.
 - `from langchain_community.chat_models import ChatOllama` ([coach.py:14](app/services/coach.py#L14)) — deprecated in favour of `langchain-ollama`, which the README already tells users to install but which the coach never imports. `run_pipeline._resolve_chat_ollama` gets this right; copy it.
 
-### 26. Dependency and packaging gaps
+**Fixed.** `@app.on_event` became a `lifespan` context manager (which also gave shutdown a
+place to release the repository); `datetime.utcnow()` became an aware `datetime.now(timezone.utc)`;
+and the coach no longer imports `langchain_community` directly — it asks the shared factory,
+which prefers the maintained `langchain-ollama`. With that package now declared, the
+deprecation warning is gone from start-up.
+
+The migration also surfaced something worth knowing: `langchain_ollama.ChatOllama` has no
+`timeout` field but *accepts the keyword silently*, so a timeout would have looked applied
+while doing nothing. The factory now drops options a client does not declare and logs that it
+did, since for `timeout` the caller needs to know the request deadline is the only bound.
+
+### 26. Dependency and packaging gaps — ✅ FIXED
 
 `app/requirements.txt` pins everything except `langchain-community` (unpinned — a breaking release
 lands silently), omits `langchain-ollama` despite the README recommending it, and ships `pytest`
 into the production image ([Dockerfile:29](Dockerfile#L29)). Split dev requirements out.
 
-### 27. Repository hygiene
+**Fixed.** `app/requirements.txt` is runtime-only and fully pinned — including
+`langchain-community`, which an unpinned minor release could previously have broken silently,
+and `langchain-ollama`, which the README recommended but nothing installed. `pytest` moved to a
+new `requirements-dev.txt` that includes the runtime set, so it no longer ships in the image.
+
+### 27. Repository hygiene — ✅ FIXED
 
 Tracked build/run artifacts: `uvicorn.log`, `data/results.db`,
 `data/embeddings/**/ad_full.npy`, and `controller_manifest.json` (which embeds absolute local
@@ -508,7 +540,13 @@ is missing a trailing newline, so its last line reads `refactor_plan.mdapp/tests
 **both** of those patterns are inert. Add `.venv/`, `__pycache__/`, `.pytest_cache/`, `*.db`,
 `*.log`.
 
-### 28. README drift
+**Fixed.** `.gitignore` was rewritten and now ends with a newline, so its last two patterns
+are no longer fused into one inert line. It covers `__pycache__/`, `.venv/`, `.pytest_cache/`,
+`*.db`, `*.log`, `*.npy`, and `*.bak`. `uvicorn.log`, `data/results.db`, the embeddings `.npy`,
+and `controller_manifest.json` were untracked with `git rm --cached` — the files stay on disk,
+they just leave version control. A test asserts no such artifact is tracked again.
+
+### 28. README drift — ✅ FIXED
 
 Beyond #10 and #12: the README says the PVC mounts at `/root/liveon/data` while
 [deployment.yaml:73](deployment.yaml#L73) mounts `/home/appuser/liveon/data`; `LIVEON_STORAGE` is
@@ -521,7 +559,14 @@ environment variables are undocumented — `LIVEON_ROOT_PATH`, `LIVEON_COACH_PRO
 `LIVEON_OLLAMA_FORMAT`, `LIVEON_TIP_CONTEXT_PRESETS`, `LIVEON_LOG_LEVEL`. The in-app scheduler is
 not mentioned in the README at all, which matters since it is on by default.
 
-### 29. Test coverage gaps
+**Fixed.** The environment reference was rebuilt as grouped tables covering *every*
+variable the code reads — storage, model, coach, admin, scheduling, feeds, and diagnostics —
+including the per-agent `LIVEON_<AGENT>_*` override pattern. The PVC path now matches
+`deployment.yaml` (`/home/appuser/liveon/data`, the non-root user the image runs as), the
+install instructions cover the dev requirements, the feed-limit/article-count distinction is
+explained, and the JSON API has its own table. A check confirms nothing is left undocumented.
+
+### 29. Test coverage gaps — ✅ FIXED
 
 52 tests pass, but nothing covers the admin routes (including the destructive ones),
 `LocalSQLiteContentRepository`, `PipelineScheduler`, the `/articles` routes, or the coach's
@@ -529,7 +574,14 @@ non-`RuntimeError` failure path. Note that `scheduler_enabled()` returns `False`
 `PYTEST_CURRENT_TEST` ([pipeline_scheduler.py:172](app/services/pipeline_scheduler.py#L172)) —
 convenient, but it means the default-on production behaviour is never exercised.
 
-### 30. Smaller items
+**Fixed** across this and the previous rounds. The admin routes have 20 tests, the coach's
+non-`RuntimeError` paths are covered, and `/articles` is exercised through search, filtering,
+and pagination. This round added `LocalSQLiteContentRepository` coverage — round-trips, updates,
+source-URL lookup, cascade on delete, tips, and seeding — plus the scheduler's cross-process
+lock. `scheduler_enabled()` is now tested with `PYTEST_CURRENT_TEST` removed, so the default-on
+production behaviour is exercised rather than skipped.
+
+### 30. Smaller items — ✅ FIXED
 
 - `LongevityNewsAggregator` creates an `httpx.Client` it never closes ([aggregator.py:60](app/services/aggregator.py#L60)); no context manager, no `close()`.
 - `_TRACKING_PARAM_PREFIXES` / `_TRACKING_PARAM_NAMES` ([aggregator.py:23-24](app/services/aggregator.py#L23-L24)) are dead — only the `utm_` prefix is actually stripped, so `fbclid`/`gclid` variants of the same link still slip past de-duplication.
@@ -538,6 +590,26 @@ convenient, but it means the default-on production behaviour is never exercised.
 - `run_pipeline` logs `PIPELINE_START` at *import* time ([run_pipeline.py:56](app/scripts/run_pipeline.py#L56)), so the web app logs a pipeline start whenever the scheduler imports the module.
 - `ContentPipeline.run` publishes exactly one article per invocation regardless of `--feed-limit`, which only widens the candidate pool. Worth documenting, or making it explicit with a `--max-articles`.
 - No `/api/articles` endpoint although `/api/tips/latest` exists — an asymmetric public API.
+
+**Fixed**, item by item:
+
+- The aggregator closes the HTTP client it opened, supports `with`, and leaves a
+  caller-supplied client alone.
+- The tracking-parameter constants are wired up: `fbclid`, `gclid`, `msclkid` and friends are
+  stripped alongside `utm_`, so links differing only by campaign tags now deduplicate together
+  instead of arriving as separate items.
+- `SupportsTipGeneration` matches the real signature again (fixed with #10); a test compares
+  the two directly so they cannot drift apart silently.
+- The scheduler takes a cross-process claim in SQLite before running a job, so
+  `uvicorn --workers N` no longer gives N schedulers racing. Claims expire, so a worker that
+  dies mid-run cannot wedge the job.
+- `PIPELINE_START` moved out of import into `run()`; importing the module — which the web app
+  does to reach the scheduled job — no longer announces a pipeline start.
+- `--max-articles` (default 1) now decides how many articles a run publishes, separately from
+  `--feed-limit`, which only widens the candidate pool. Verified live: a run with
+  `--max-articles 2` published exactly two articles from real feeds.
+- `GET /api/articles` and `GET /api/articles/{id}` fill the gap left by the tips-only API,
+  accepting the same `q`/`tag`/`page` parameters as the HTML listing.
 
 ---
 
@@ -557,5 +629,8 @@ remains open.
 **P2 (#14–#21): ✅ Done.** #24 (sanitisation) was pulled forward with it, since #16 required
 sending server-rendered HTML to the browser.
 
-**Remaining: P3**, of which #22 (silent pipeline failures) is still the cheapest win — a
-one-line change that stops a broken publisher from reporting success.
+**P3 (#22–#30): ✅ Done.**
+
+Every item in this document is now closed. What is left is not on this list: the scheduler's
+claim is per-database rather than truly distributed, deletion still has no undo (that needs
+soft-delete), and the Kubernetes manifests still assume a single replica.

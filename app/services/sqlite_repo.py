@@ -118,7 +118,13 @@ def _json_or_none(txt: str | None) -> dict[str, Any] | None:
 
 
 def _iso_now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    """Return the current UTC time as an ISO-8601 string.
+
+    ``datetime.utcnow()`` is deprecated in 3.12 and returned a *naive* timestamp into
+    a codebase that is otherwise carefully timezone-aware.
+    """
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 # ---------------------------------------------------------------------------

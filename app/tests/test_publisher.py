@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import yaml
 
-from app.models.content import Article
 from app.models.editor import EditedArticle
 from app.services.publisher import GitPublisher
 

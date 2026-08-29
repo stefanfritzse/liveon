@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import logging
 import os
+import socket
 from pathlib import Path
 import sqlite3
 from typing import Callable, Iterable
@@ -85,6 +86,17 @@ class PipelineScheduleStore:
                 );
                 """
             )
+            # Claimed while a job runs, so N uvicorn workers do not each start the
+            # same pipeline against the same database.
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pipeline_lock (
+                    job_name TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+                """
+            )
 
     def get_last_run(self, job_name: str) -> datetime | None:
         row = self._conn.execute(
@@ -126,6 +138,41 @@ class PipelineScheduleStore:
             return True
         return now >= job.next_run_at(last_run)
 
+    def try_acquire(self, job_name: str, owner: str, *, now: datetime, ttl_seconds: int) -> bool:
+        """Claim ``job_name`` for ``owner``, returning ``False`` if someone else holds it.
+
+        The claim expires so a worker that dies mid-run cannot wedge the job forever.
+        """
+
+        expires_at = _format_timestamp(now + timedelta(seconds=ttl_seconds))
+        try:
+            with self._conn:  # BEGIN ... COMMIT, so the read and write are atomic
+                self._conn.execute(
+                    "DELETE FROM pipeline_lock WHERE job_name = ? AND expires_at <= ?;",
+                    (job_name, _format_timestamp(now)),
+                )
+                cursor = self._conn.execute(
+                    """
+                    INSERT INTO pipeline_lock(job_name, owner, expires_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(job_name) DO NOTHING;
+                    """,
+                    (job_name, owner, expires_at),
+                )
+        except sqlite3.OperationalError:
+            # Another process holds the write lock; it is running the job.
+            return False
+        return cursor.rowcount > 0
+
+    def release(self, job_name: str, owner: str) -> None:
+        """Release a claim held by ``owner``; a claim held by anyone else is left alone."""
+
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM pipeline_lock WHERE job_name = ? AND owner = ?;",
+                (job_name, owner),
+            )
+
     def next_due(self, job: "JobConfig") -> datetime | None:
         """Return when ``job`` is next due, or ``None`` when it has never run."""
 
@@ -150,6 +197,11 @@ class PipelineScheduler:
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         self._running: set[str] = set()
+        # Identifies this process when claiming a job across workers.
+        self._owner = f"{socket.gethostname()}:{os.getpid()}"
+        # Long enough for a slow local model to finish a run, short enough that a
+        # crashed worker's claim is reclaimed rather than blocking forever.
+        self._lock_ttl_sec = max(self._check_interval_sec * 2, 3600)
 
     async def start(self) -> None:
         if self._task is not None:
@@ -184,16 +236,29 @@ class PipelineScheduler:
                 await self._execute(job, now)
 
     async def _execute(self, job: JobConfig, now: datetime) -> bool:
-        """Run one job, recording the timestamp only when it succeeds."""
+        """Run one job under a cross-process claim, stamping only on success."""
 
-        logger.info("Starting pipeline: %s", job.name)
-        success = await asyncio.to_thread(job.runner, now)
-        if success:
-            self._store.set_last_run(job.name, now)
-            logger.info("Pipeline finished: %s", job.name)
-        else:
-            logger.warning("Pipeline failed: %s", job.name)
-        return success
+        if not self._store.try_acquire(
+            job.name, self._owner, now=now, ttl_seconds=self._lock_ttl_sec
+        ):
+            logger.info(
+                "Pipeline %s is claimed by another worker; skipping this cycle",
+                job.name,
+                extra={"event": "pipeline_scheduler.locked", "job": job.name},
+            )
+            return False
+
+        try:
+            logger.info("Starting pipeline: %s", job.name)
+            success = await asyncio.to_thread(job.runner, now)
+            if success:
+                self._store.set_last_run(job.name, now)
+                logger.info("Pipeline finished: %s", job.name)
+            else:
+                logger.warning("Pipeline failed: %s", job.name)
+            return success
+        finally:
+            self._store.release(job.name, self._owner)
 
     # ------------------------------------------------------------------
     # Manual control
@@ -268,8 +333,11 @@ def _run_article_pipeline(run_at: datetime) -> bool:
         storage = (os.getenv("LIVEON_STORAGE") or "sqlite").strip().lower()
         db_path = os.getenv("LIVEON_DB_PATH")
         feed_limit = _positive_int(os.getenv("LIVEON_FEED_LIMIT"), 5)
+        max_articles = _positive_int(os.getenv("LIVEON_MAX_ARTICLES"), 1)
         pipeline = run_pipeline._build_pipeline(storage, db_path, feed_limit)
-        result = pipeline.run(limit_per_feed=feed_limit, published_at=run_at)
+        result = pipeline.run(
+            limit_per_feed=feed_limit, max_articles=max_articles, published_at=run_at
+        )
     except Exception:
         logger.exception("Article pipeline execution failed")
         return False

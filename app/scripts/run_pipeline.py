@@ -50,8 +50,6 @@ if not LOGGER.handlers:  # avoid dupes on re-import
     LOGGER.setLevel(logging.INFO)
     LOGGER.propagate = False
 
-LOGGER.info("PIPELINE_START")
-
 def _json_default(o):
     if isinstance(o, (datetime, date)):
         # ensure timezone-aware ISO format for consistency
@@ -99,7 +97,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--feed-limit",
         type=int,
         default=int(os.getenv("LIVEON_FEED_LIMIT", "5")),
-        help="Max items per feed to aggregate.",
+        help="Max items per feed to aggregate (widens the candidate pool).",
+    )
+    parser.add_argument(
+        "--max-articles",
+        type=int,
+        default=int(os.getenv("LIVEON_MAX_ARTICLES", "1")),
+        help="How many articles to publish in this run (default 1).",
     )
     return parser.parse_args(argv)
 
@@ -253,11 +257,14 @@ def _build_pipeline(storage: str, db_path: str | None, feed_limit: int) -> Conte
 
 def run(argv: list[str] | None = None) -> int:
     _configure_logging()
+    # Logged here rather than at import: the web app imports this module to run the
+    # scheduled job, and used to announce a pipeline start just by loading it.
+    LOGGER.info("PIPELINE_START")
     args = _parse_args(argv)
     pipeline = _build_pipeline(args.storage, args.db_path, args.feed_limit)
 
     limit = int(os.getenv("LIVEON_FEED_LIMIT", "5"))
-    result = pipeline.run(limit_per_feed=limit)
+    result = pipeline.run(limit_per_feed=limit, max_articles=args.max_articles)
 
     for warning in result.warnings:
         LOGGER.warning(warning)
@@ -271,11 +278,14 @@ def run(argv: list[str] | None = None) -> int:
         LOGGER.warning("Pipeline finished without producing content. No articles were published this run.")
         return 0
 
-    publication = result.publication
-    assert publication is not None  # for mypy
-
-    LOGGER.info("Published article '%s' at %s", publication.slug, publication.published_at.isoformat())
-    LOGGER.info("Storage path: %s", publication.path)
+    for publication in result.publications:
+        LOGGER.info(
+            "Published article '%s' at %s",
+            publication.slug,
+            publication.published_at.isoformat(),
+        )
+        LOGGER.info("Storage path: %s", publication.path)
+    LOGGER.info("PIPELINE_COMPLETE published=%d", result.published_count)
     return 0
 
 

@@ -14,17 +14,25 @@ from app.models.coach import CoachAnswer, CoachQuestion, CoachTurn
 from app.services.llm_factory import (
     DEFAULT_OLLAMA_MODEL,
     build_chat_ollama,
+    resolve_chat_ollama_class,
     resolve_ollama_base_url,
 )
 
 LOGGER = logging.getLogger(__name__)
 
-try:  # pragma: no cover - optional dependency guard
-    from langchain_community.chat_models import ChatOllama
-    from langchain_core.prompts import ChatPromptTemplate
-except ImportError:  # pragma: no cover - handled gracefully in CoachAgent
-    ChatOllama = None  # type: ignore[assignment]
-    ChatPromptTemplate = None  # type: ignore[assignment]
+def _langchain_chat_available() -> bool:
+    """Return ``True`` when a LangChain chat client can be constructed.
+
+    The direct ``langchain_community`` import this replaced is deprecated; the shared
+    factory prefers the maintained ``langchain-ollama`` package and falls back to the
+    community build only if that is all that is installed.
+    """
+
+    try:
+        resolve_chat_ollama_class()
+    except Exception:  # noqa: BLE001 - absence is the answer, not an error
+        return False
+    return True
 
 
 _DEFAULT_SAFETY_INSTRUCTIONS = (
@@ -271,7 +279,7 @@ class CoachAgent:
         Messages are plain ``{"role", "content"}`` mappings. LangChain converts those
         natively, and :class:`OllamaHTTPChat` translates the roles at the wire boundary,
         so one representation covers both clients — and, unlike a fixed
-        ``ChatPromptTemplate``, it can carry a variable number of prior turns.
+        fixed prompt template, it can carry a variable number of prior turns.
         """
 
         messages: list[dict[str, str]] = [{"role": "system", "content": self._system_message()}]
@@ -432,7 +440,7 @@ def create_coach_llm() -> Any:
         model = os.getenv("LIVEON_OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL
         base_url = resolve_ollama_base_url()
         timeout = resolve_llm_timeout()
-        if ChatOllama is not None:
+        if _langchain_chat_available():
             # Conversational replies are prose, so no JSON mode here.
             return build_chat_ollama(
                 model=model, base_url=base_url, json_mode=False, timeout=timeout

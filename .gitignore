@@ -1,11 +1,31 @@
-app/__pycache__/
-app/job.run-pipeline.yaml
-app/models/__pycache__/
-app/scripts/__pycache__/
-app/services/__pycache__/
-app/utils/__pycache__/
-deploy_patch.json
-refactor_implementation_steps.md
-app/tests/__pycache__/
-refactor_plan.mdapp/tests/__pycache__/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
 
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local data and run artifacts
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.npy
+
+# Editor and OS noise
+*.bak
+.DS_Store
+
+# Machine-specific tooling config (absolute paths)
+controller_manifest.json
+
+# Local planning notes
+deploy_patch.json
+refactor_plan.md
+refactor_implementation_steps.md
+app/job.run-pipeline.yaml

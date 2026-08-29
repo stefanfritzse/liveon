@@ -6,8 +6,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
 
 import json
-import sys
-from types import ModuleType
 
 import pytest
 from fastapi.testclient import TestClient

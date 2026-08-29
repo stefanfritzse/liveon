@@ -70,6 +70,7 @@ class PipelineResult:
     draft: ArticleDraft | None = None
     edited: EditedArticle | None = None
     publication: PublicationResult | None = None
+    publications: list[PublicationResult] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -78,6 +79,10 @@ class PipelineResult:
         """Return ``True`` when the pipeline produced a publication without fatal errors."""
 
         return self.publication is not None and not self.errors
+
+    @property
+    def published_count(self) -> int:
+        return len(self.publications)
 
 
 @dataclass(slots=True)
@@ -94,101 +99,104 @@ class ContentPipeline:
         self,
         *,
         limit_per_feed: int = 5,
+        max_articles: int = 1,
         slug: str | None = None,
         commit_message: str | None = None,
         published_at: datetime | None = None,
     ) -> PipelineResult:
-        """Execute the end-to-end content pipeline, returning the aggregated results."""
+        """Execute the end-to-end content pipeline.
+
+        ``limit_per_feed`` only widens the candidate pool; ``max_articles`` is what
+        decides how many get written. They used to be conflated, so raising the feed
+        limit looked like it should produce more articles and never did.
+        """
 
         aggregation = self.aggregator.gather(limit_per_feed=limit_per_feed)
         warnings = list(aggregation.errors)
         errors: list[str] = []
 
-        repository = self.repository or getattr(self.publisher, "repository", None)
-        selected_item: AggregatedContent | None = None
-        if aggregation.items and repository is not None:
-            for item in aggregation.items:
-                url = (item.url or "").strip()
-                if not url:
-                    continue
-                if repository.find_article_by_source_url(url) is None:
-                    selected_item = item
-                    break
-        elif aggregation.items:
-            for item in aggregation.items:
-                if (item.url or "").strip():
-                    selected_item = item
-                    break
-        if selected_item is None:
-            if aggregation.items:
-                warnings.append("No new aggregated content available to publish.")
-            else:
-                warnings.append("No aggregated content available to summarise.")
+        wanted = max(1, int(max_articles))
+        candidates = self._select_candidates(aggregation, limit=wanted)
+
+        if not candidates:
+            warnings.append(
+                "No new aggregated content available to publish."
+                if aggregation.items
+                else "No aggregated content available to summarise."
+            )
             return PipelineResult(
-                aggregation=aggregation,
-                draft=None,
-                edited=None,
-                publication=None,
-                errors=errors,
-                warnings=warnings,
+                aggregation=aggregation, errors=errors, warnings=warnings
             )
 
-        try_items: list[AggregatedContent] = [selected_item]
-        try:
-            draft = self.summarizer.summarize(try_items)
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            errors.append(f"Summarizer failed: {exc}")
-            return PipelineResult(
-                aggregation=aggregation,
-                draft=None,
-                edited=None,
-                publication=None,
-                errors=errors,
-                warnings=warnings,
-            )
-        try:
-            edited = self.editor.revise(draft)
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            errors.append(f"Editor failed: {exc}")
-            return PipelineResult(
-                aggregation=aggregation,
-                draft=draft,
-                edited=None,
-                publication=None,
-                errors=errors,
-                warnings=warnings,
-            )
-        slug_to_use = slug or _slugify(selected_item.title or selected_item.url or "")
-        # Without this the publisher stamps "now", so a write-up of an older
-        # story claims to have been published the moment it was scraped.
-        effective_published_at = published_at or getattr(selected_item, "published_at", None)
-        try:
-            publication = self.publisher.publish(
-                edited,
-                slug=slug_to_use,
-                commit_message=commit_message,
-                published_at=effective_published_at,
-            )
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            #errors.append(f"Publisher failed: {exc}")
-            import logging
-            logging.getLogger("liveon.pipeline").exception("Publisher failed")
-            return PipelineResult(
-                aggregation=aggregation,
-                draft=draft,
-                edited=edited,
-                publication=None,
-                errors=errors,
-                warnings=warnings,
-            )
+        publications: list[PublicationResult] = []
+        last_draft: ArticleDraft | None = None
+        last_edited: EditedArticle | None = None
+
+        for item in candidates:
+            try:
+                draft = self.summarizer.summarize([item])
+            except Exception as exc:
+                errors.append(f"Summarizer failed: {exc}")
+                break
+            last_draft = draft
+
+            try:
+                edited = self.editor.revise(draft)
+            except Exception as exc:
+                errors.append(f"Editor failed: {exc}")
+                break
+            last_edited = edited
+
+            # Without this the publisher stamps "now", so a write-up of an older
+            # story claims to have been published the moment it was scraped.
+            effective_published_at = published_at or getattr(item, "published_at", None)
+            try:
+                publication = self.publisher.publish(
+                    edited,
+                    slug=slug or _slugify(item.title or item.url or ""),
+                    commit_message=commit_message,
+                    published_at=effective_published_at,
+                )
+            except Exception as exc:
+                # This append was once commented out, which made a broken publisher
+                # look like a successful no-op all the way out to the exit code.
+                errors.append(f"Publisher failed: {exc}")
+                logger.exception(
+                    "Publisher failed", extra={"event": "pipeline.publish_failed"}
+                )
+                break
+
+            publications.append(publication)
+
         return PipelineResult(
             aggregation=aggregation,
-            draft=draft,
-            edited=edited,
-            publication=publication,
+            draft=last_draft,
+            edited=last_edited,
+            publication=publications[0] if publications else None,
+            publications=publications,
             errors=errors,
             warnings=warnings,
         )
+
+    def _select_candidates(
+        self, aggregation: AggregationResult, *, limit: int
+    ) -> list[AggregatedContent]:
+        """Return up to ``limit`` aggregated items that have not been published yet."""
+
+        repository = self.repository or getattr(self.publisher, "repository", None)
+        chosen: list[AggregatedContent] = []
+
+        for item in aggregation.items:
+            if len(chosen) >= limit:
+                break
+            url = (item.url or "").strip()
+            if not url:
+                continue
+            if repository is not None and repository.find_article_by_source_url(url) is not None:
+                continue
+            chosen.append(item)
+
+        return chosen
 
 
 class SupportsTipGeneration(Protocol):

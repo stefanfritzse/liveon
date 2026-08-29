@@ -1,46 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-import sys
-from types import ModuleType
 from typing import Any
 
 import pytest
 
 from app.services import coach as coach_module
 from app.services.coach import CoachAgent, LocalCoachResponder
-
-
-class _DummyPromptValue:
-    """Lightweight stand-in for LangChain prompt values used in tests."""
-
-    def __init__(self, messages: list[dict[str, str]]) -> None:
-        self._messages = messages
-
-    def to_messages(self) -> list[dict[str, str]]:
-        return self._messages
-
-    def to_string(self) -> str:  # pragma: no cover - debug helper
-        return "\n\n".join(f"{item['role']}: {item['content']}" for item in self._messages)
-
-
-class _DummyChatPromptTemplate:
-    """Mimics the subset of LangChain's prompt template API required by CoachAgent."""
-
-    def __init__(self, message_specs: Sequence[tuple[str, ...]]) -> None:
-        self._message_specs = message_specs
-
-    @classmethod
-    def from_messages(cls, message_specs: Sequence[tuple[str, ...]]) -> "_DummyChatPromptTemplate":
-        return cls(message_specs)
-
-    def invoke(self, mapping: dict[str, str]) -> _DummyPromptValue:
-        formatted: list[dict[str, str]] = []
-        for spec in self._message_specs:
-            role, *parts = spec
-            template = "".join(parts)
-            formatted.append({"role": role, "content": template.format(**mapping)})
-        return _DummyPromptValue(formatted)
 
 
 class _RecordingResponder(LocalCoachResponder):
@@ -58,13 +24,6 @@ class _RecordingResponder(LocalCoachResponder):
 class _EchoResponder:
     def invoke(self, messages):  # type: ignore[override]
         return "Here is support.\n\nDisclaimer: Custom safety notice"
-
-
-@pytest.fixture(autouse=True)
-def _stub_prompt_template(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ensure CoachAgent can be constructed without the langchain-core dependency."""
-
-    monkeypatch.setattr(coach_module, "ChatPromptTemplate", _DummyChatPromptTemplate)
 
 
 def test_ask_returns_answer_with_default_disclaimer() -> None:

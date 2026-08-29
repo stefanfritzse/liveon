@@ -20,8 +20,17 @@ LOGGER = logging.getLogger(__name__)
 
 Fetcher = Callable[[str], str]
 
+# Analytics parameters that identify a *campaign*, not a document. Two links that
+# differ only by these point at the same story, so they are stripped before
+# comparison — previously only the "utm_" prefix was, letting fbclid/gclid variants
+# through as separate items.
 _TRACKING_PARAM_PREFIXES = ("utm_", "mc_", "icid", "oly_", "vero_id")
-_TRACKING_PARAM_NAMES = {"fbclid", "gclid", "gs_l", "msclkid", "yclid"}
+_TRACKING_PARAM_NAMES = frozenset({"fbclid", "gclid", "gs_l", "msclkid", "yclid", "igshid", "ref"})
+
+
+def _is_tracking_param(key: str) -> bool:
+    lowered = (key or "").lower()
+    return lowered in _TRACKING_PARAM_NAMES or lowered.startswith(_TRACKING_PARAM_PREFIXES)
 
 
 DEFAULT_FEEDS: Sequence[FeedSource] = (
@@ -102,8 +111,22 @@ class LongevityNewsAggregator:
         self._feeds = list(feeds)
         self._headers = self._build_headers(headers)
         self._timeout = self._resolve_timeout(timeout)
+        # Track whether the client is ours: a caller-supplied one is theirs to close.
+        self._owns_client = client is None
         self._client = client or httpx.Client(headers=self._headers, timeout=self._timeout)
         self._fetcher = fetcher or self._default_fetcher
+
+    def close(self) -> None:
+        """Release the HTTP connection pool this aggregator opened."""
+
+        if self._owns_client:
+            self._client.close()
+
+    def __enter__(self) -> "LongevityNewsAggregator":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     def gather(self, *, limit_per_feed: int = 5) -> AggregationResult:
         """Collect recent updates from each feed, returning a combined result set."""
@@ -300,7 +323,7 @@ def _normalise_url(url: str | None) -> str:
     query_pairs = [
         (key, value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if not key.lower().startswith("utm_")
+        if not _is_tracking_param(key)
     ]
     query_pairs.sort()
     query = urlencode(query_pairs, doseq=True)
@@ -356,7 +379,10 @@ def _has_tracking(url: str) -> bool:
         return False
 
     parsed = urlparse(url)
-    return any(key.lower().startswith("utm_") for key, _ in parse_qsl(parsed.query, keep_blank_values=True))
+    return any(
+        _is_tracking_param(key)
+        for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+    )
 
 
 def _remove_indexes(

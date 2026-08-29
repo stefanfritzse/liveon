@@ -3,11 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
-import feedparser
 
 import httpx
 
-from app.models.aggregator import AggregatedContent, FeedSource
+from app.models.aggregator import FeedSource
 from app.services.aggregator import LongevityNewsAggregator
 
 

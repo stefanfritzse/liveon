@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator, Callable
 from functools import lru_cache
 from dataclasses import dataclass
@@ -51,8 +52,48 @@ def _normalize_root_path(value: str) -> str:
     return "/" + cleaned.strip("/")
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start and stop the app's background pieces.
+
+    Replaces the deprecated ``@app.on_event`` handlers. The helpers referenced here
+    are defined further down the module; they are only called at run time.
+    """
+
+    if admin_console_enabled():
+        logger.info("Admin console enabled", extra={"event": "admin.enabled"})
+    else:
+        logger.warning(
+            "Admin console disabled: set LIVEON_ADMIN_PASSWORD to enable content management",
+            extra={"event": "admin.disabled"},
+        )
+
+    scheduler = create_pipeline_scheduler()
+    if scheduler is None:
+        logger.info("Pipeline scheduler disabled", extra={"event": "pipeline_scheduler.disabled"})
+    else:
+        app.state.pipeline_scheduler = scheduler
+        await scheduler.start()
+
+    try:
+        yield
+    finally:
+        if scheduler is not None:
+            await scheduler.stop()
+
+        # The repository now lives for the process, so close it explicitly.
+        repository = getattr(app.state, "content_repository", None)
+        closer = getattr(repository, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:  # noqa: BLE001 - shutdown must not raise
+                logger.exception("Failed to close the content repository")
+        app.state.content_repository = None
+
+
 ROOT_PATH = _normalize_root_path(os.getenv("LIVEON_ROOT_PATH", ""))
-app = FastAPI(title="Live On Longevity Coach", root_path=ROOT_PATH)
+app = FastAPI(title="Live On Longevity Coach", root_path=ROOT_PATH, lifespan=lifespan)
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
@@ -360,34 +401,6 @@ async def _unhandled_exception_handler(request: Request, exc: Exception):
     return _render_error_page(request, 500, detail)
 
 
-@app.on_event("startup")
-async def _log_admin_console_state() -> None:
-    if admin_console_enabled():
-        logger.info("Admin console enabled", extra={"event": "admin.enabled"})
-    else:
-        logger.warning(
-            "Admin console disabled: set LIVEON_ADMIN_PASSWORD to enable content management",
-            extra={"event": "admin.disabled"},
-        )
-
-
-@app.on_event("startup")
-async def _start_pipeline_scheduler() -> None:
-    scheduler = create_pipeline_scheduler()
-    if scheduler is None:
-        logger.info("Pipeline scheduler disabled", extra={"event": "pipeline_scheduler.disabled"})
-        return
-    app.state.pipeline_scheduler = scheduler
-    await scheduler.start()
-
-
-@app.on_event("shutdown")
-async def _stop_pipeline_scheduler() -> None:
-    scheduler = getattr(app.state, "pipeline_scheduler", None)
-    if scheduler is None:
-        return
-    await scheduler.stop()
-
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
@@ -674,21 +687,51 @@ def _browse_params(
     }
 
 
-def get_repository() -> ContentRepository:
-    """Resolve the content repository (SQLite only)."""
+def build_repository() -> ContentRepository:
+    """Construct the configured content repository.
+
+    ``memory`` is a supported choice rather than an unrecognised value that happens to
+    land on the fallback path.
+    """
+
     storage = (os.getenv("LIVEON_STORAGE") or "sqlite").strip().lower()
 
-    if storage == "sqlite":
-        try:
-            db_path = os.getenv("LIVEON_DB_PATH")
-            return LocalSQLiteContentRepository(db_path=db_path)
-        except Exception as exc:
-            logger.exception("SQLite repository init failed; falling back to in-memory.")
-            return _InMemoryContentRepository()
+    if storage in {"memory", "in-memory", "inmemory"}:
+        logger.info("Using the in-memory content repository", extra={"event": "storage.memory"})
+        return _InMemoryContentRepository()
 
-    # Fallback for any other storage type
-    logger.warning("Unsupported storage type '%s'; falling back to in-memory.", storage)
-    return _InMemoryContentRepository()
+    if storage != "sqlite":
+        logger.warning(
+            "Unsupported storage type %r; falling back to in-memory.",
+            storage,
+            extra={"event": "storage.unsupported"},
+        )
+        return _InMemoryContentRepository()
+
+    try:
+        return LocalSQLiteContentRepository(db_path=os.getenv("LIVEON_DB_PATH"))
+    except Exception:  # noqa: BLE001 - the site still serves seed content
+        logger.exception(
+            "SQLite repository init failed; falling back to in-memory.",
+            extra={"event": "storage.sqlite_failed"},
+        )
+        return _InMemoryContentRepository()
+
+
+def get_repository() -> ContentRepository:
+    """FastAPI dependency returning the process-wide content repository.
+
+    This used to build a repository per request, which meant a ``mkdir``, a fresh
+    connection, two PRAGMAs and six ``CREATE TABLE IF NOT EXISTS`` statements on every
+    page view — around 100× the cost of reusing one. The instance is created lazily so
+    importing the module never touches the filesystem.
+    """
+
+    repository = getattr(app.state, "content_repository", None)
+    if repository is None:
+        repository = build_repository()
+        app.state.content_repository = repository
+    return repository
 
 
 
@@ -713,6 +756,56 @@ async def home(
             "recent_tips": recent_tips,
         },
     )
+
+
+def _article_payload(article: Article) -> dict[str, object]:
+    return {
+        "id": article.id,
+        "title": article.title,
+        "summary": article.summary,
+        "content_body": article.content_body,
+        "published_date": article.published_date.isoformat(),
+        "source_urls": list(article.source_urls),
+        "tags": list(article.tags),
+    }
+
+
+@app.get("/api/articles", response_class=JSONResponse)
+async def fetch_articles(
+    q: str | None = None,
+    tag: str | None = None,
+    page: int = 1,
+    repository: ContentRepository = Depends(get_repository),
+) -> JSONResponse:
+    """Return a page of articles as JSON.
+
+    Mirrors the browsing available on the HTML listing; the public API previously
+    exposed tips but not articles.
+    """
+
+    results = repository.browse_articles(**_browse_params(q, tag, page))
+    return JSONResponse(
+        {
+            "items": [_article_payload(article) for article in results.items],
+            "total": results.total,
+            "page": results.page,
+            "per_page": results.per_page,
+            "total_pages": results.total_pages,
+        }
+    )
+
+
+@app.get("/api/articles/{article_id}", response_class=JSONResponse)
+async def fetch_article(
+    article_id: str,
+    repository: ContentRepository = Depends(get_repository),
+) -> JSONResponse:
+    """Return a single article as JSON."""
+
+    article = repository.get_article(article_id)
+    if article is None:
+        return JSONResponse({"detail": "Article not found"}, status_code=404)
+    return JSONResponse(_article_payload(article))
 
 
 @app.get("/api/tips/latest", response_class=JSONResponse)

@@ -27,10 +27,12 @@ python -m pip install --upgrade pip
 python -m pip install -r app/requirements.txt
 ```
 
-The coach agent can use LangChain’s wrappers when available:
+`app/requirements.txt` holds the runtime dependencies, including the LangChain and
+Ollama clients. To run the tests as well, install the development set instead — it
+pulls in the runtime requirements and adds `pytest`:
 
 ```powershell
-python -m pip install --upgrade langchain-core langchain-community langchain-ollama
+python -m pip install -r requirements-dev.txt
 ```
 
 ## Running the Web App
@@ -46,26 +48,77 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 
 ### Environment Variables
 
+**Storage**
+
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `LIVEON_STORAGE` | Storage backend (`sqlite`, `memory`) | `sqlite` |
-| `LIVEON_DB_PATH` | Custom SQLite file path | `~/liveon/data/content.db` |
-| `LIVEON_LLM_PROVIDER` | `ollama` or a future provider | `ollama` |
+| `LIVEON_STORAGE` | `sqlite` or `memory` (in-memory seed content, nothing persisted) | `sqlite` |
+| `LIVEON_DB_PATH` | SQLite file path | `~/liveon/data/content.db` |
+
+**Language model**
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `LIVEON_LLM_PROVIDER` | `ollama`, `openai`, or `local` | `ollama` |
 | `LIVEON_OLLAMA_MODEL` | Ollama model name | `phi3:14b-medium-4k-instruct-q4_K_M` |
-| `LIVEON_OLLAMA_URL` | Ollama base URL | `http://127.0.0.1:11434` |
-| `LIVEON_LLM_TIMEOUT` | Seconds a single coach answer may take before the request is abandoned with a `504` | `180` |
-| `LIVEON_ADMIN_USER` | Admin console username | `admin` |
-| `LIVEON_ADMIN_PASSWORD` | Admin console password. **The console stays disabled until this is set.** | _(unset)_ |
-| `LIVEON_DEBUG_ERRORS` | Include exception type/message in API error responses. Development only. | `0` |
-| `LIVEON_COACH_HISTORY_TURNS` | Earlier conversation turns replayed into each coach prompt (0 disables memory) | `6` |
-| `LIVEON_ARTICLE_INTERVAL_DAYS` | Days between scheduled article runs | `1` |
-| `LIVEON_TIP_INTERVAL_DAYS` | Days between scheduled tip runs | `1` |
+| `LIVEON_OLLAMA_URL` | Ollama base URL (`OLLAMA_HOST` is also honoured) | `http://127.0.0.1:11434` |
+| `LIVEON_OLLAMA_FORMAT` | Structured-output format for pipeline agents | `json` |
+| `LIVEON_MODEL_TEMPERATURE` | Sampling temperature for pipeline agents | `0.2` |
+| `LIVEON_LLM_TIMEOUT` | Seconds one coach answer may take before a `504` | `180` |
+| `OPENAI_MODEL` | Model id when the provider is `openai` | `gpt-4o-mini` |
+
+Each agent can override the shared choice with `LIVEON_<AGENT>_MODEL`,
+`LIVEON_<AGENT>_OLLAMA_MODEL`, or `LIVEON_<AGENT>_OPENAI_MODEL`, where `<AGENT>` is
+`SUMMARIZER`, `EDITOR`, or `TIP`.
+
+**Coach**
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `LIVEON_COACH_HISTORY_TURNS` | Earlier turns replayed into each prompt (0 disables memory) | `6` |
+| `LIVEON_COACH_PROMPTS` | JSON list of conversation starters shown on `/coach` | built-in set |
+| `LIVEON_ASK_RATE_LIMIT` | Questions allowed per client per minute (0 disables) | `30` |
+
+**Admin console**
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `LIVEON_ADMIN_USER` | Admin username | `admin` |
+| `LIVEON_ADMIN_PASSWORD` | Admin password. **The console stays disabled until this is set.** | _(unset)_ |
+
+**Scheduling and pipelines**
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
 | `LIVEON_ENABLE_SCHEDULER` | Run the pipelines inside the web process | `1` |
 | `LIVEON_DISABLE_SCHEDULER` | Set to any value to turn the scheduler off | _(unset)_ |
-| `LIVEON_TIP_USE_PRESETS` | Force the offline tip presets instead of live news | `0` |
+| `LIVEON_ARTICLE_INTERVAL_DAYS` | Days between article runs | `1` |
+| `LIVEON_TIP_INTERVAL_DAYS` | Days between tip runs | `1` |
+| `LIVEON_TIP_INTERVAL_MONTHS` | Months between tip runs; overrides the daily setting when > 0 | `0` |
+| `LIVEON_PIPELINE_CHECK_INTERVAL_SEC` | How often the scheduler checks for due jobs | `3600` |
+| `LIVEON_MAX_ARTICLES` | Articles published per article run | `1` |
+| `LIVEON_ALLOW_LOCAL_LLM` | Permit the deterministic tip stub to publish | `0` |
+| `LIVEON_TIP_USE_PRESETS` | Force offline tip presets instead of live news | `0` |
+| `LIVEON_TIP_CONTEXT_PRESETS` | JSON list replacing the built-in offline tip presets | built-in set |
+| `LIVEON_TIP_MODEL_NAME` | Model id for the tip agents (OpenAI) | _(unset)_ |
+| `LIVEON_TIP_PUBLISHED_AT` | ISO-8601 override for a tip's publication time | _(unset)_ |
+
+**Feeds**
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `LIVEON_FEED_SOURCES` | JSON list of `{name, url, topic}` replacing the default feeds | Google News searches |
 | `LIVEON_FEED_LIMIT` | Items fetched per feed | `5` |
-| `LIVEON_MODEL_TEMPERATURE` | Sampling temperature for pipeline agents | `0.2` |
-| `LIVEON_ASK_RATE_LIMIT` | Coach questions allowed per client per minute (0 disables) | `30` |
+| `LIVEON_FEED_HEADERS` | JSON object of extra HTTP headers for feed requests | _(unset)_ |
+| `LIVEON_FEED_TIMEOUT` | Feed request timeout in seconds | `10` |
+
+**Serving and diagnostics**
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `LIVEON_ROOT_PATH` | Mount the app under a path prefix (e.g. `/liveon` behind a proxy) | _(none)_ |
+| `LIVEON_LOG_LEVEL` | Log level for the CLI entry points | `INFO` |
+| `LIVEON_DEBUG_ERRORS` | Include exception type/message in API errors. Development only. | `0` |
 
 When the Ollama daemon is bound to `0.0.0.0`, still point `LIVEON_OLLAMA_URL` (or the pipeline command's environment) at a reachable host such as `http://127.0.0.1:11434` so local clients can connect successfully.
 
@@ -135,6 +188,17 @@ copy and clear controls on the page.
 
 Error payloads carry a `message` and a short `reference` id. The full exception and traceback are written to the server log against that same reference, keeping internal details out of the browser. Set `LIVEON_DEBUG_ERRORS=1` while developing to inline them in the response instead.
 
+## JSON API
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /api/articles` | A page of articles; accepts the same `q`, `tag`, and `page` parameters as the HTML listing |
+| `GET /api/articles/{id}` | One article |
+| `GET /api/tips/latest` | The most recent tip |
+| `POST /api/ask` | A coach answer as JSON |
+| `POST /api/ask/stream` | A coach answer as server-sent events |
+| `GET /healthz` | Liveness probe |
+
 ## Browsing the Content
 
 `/articles` and `/tips` support the same query parameters:
@@ -192,6 +256,13 @@ The article pipeline CLI (`app/scripts/run_pipeline.py`) can be executed to aggr
 python -m app.scripts.run_pipeline --feed-limit 5
 ```
 
+`--feed-limit` controls how many items are *fetched* per feed, which only widens the
+candidate pool; `--max-articles` (default 1) decides how many are actually published:
+
+```powershell
+python -m app.scripts.run_pipeline --feed-limit 10 --max-articles 3
+```
+
 This command respects the same storage environment variables, so ensure `LIVEON_DB_PATH` points to the SQLite file you want to populate. The project also ships with a Git publisher for writing Markdown into a repository, making it easy to sync finished articles elsewhere.
 
 ### Running the Tip Pipeline
@@ -232,7 +303,7 @@ pwsh ./deploy.ps1
 
 Ensure Minikube (Docker driver) and kubectl are available. The script forwards proxy environment variables automatically and sets custom DNS entries to avoid registry resolution issues.
 
-The Kubernetes deployment mounts a PVC (`liveon-data`) at `/root/liveon/data` so the SQLite DB persists across pod restarts. An init container runs `app.scripts.seed_content` to seed the database if it is empty.
+The Kubernetes deployment mounts a PVC (`liveon-data`) at `/home/appuser/liveon/data` — matching the non-root user the image runs as — so the SQLite DB persists across pod restarts. An init container runs `app.scripts.seed_content` to seed the database if it is empty.
 
 ## Testing
 

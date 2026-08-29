@@ -1,0 +1,6 @@
+# Development and test dependencies. Install with:
+#   python -m pip install -r requirements-dev.txt
+-r app/requirements.txt
+
+pyflakes==3.2.0
+pytest==8.3.3
