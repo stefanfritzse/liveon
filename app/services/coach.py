@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 import os
+from urllib.parse import urlparse
 
 import httpx
 
@@ -158,7 +159,8 @@ class OllamaHTTPChat:
 
     def __init__(self, model: str, *, base_url: str | None = None, timeout: float = 30.0) -> None:
         self.model = model
-        self.base_url = (base_url or os.getenv("LIVEON_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/")
+        resolved_base_url = base_url or _resolve_ollama_base_url()
+        self.base_url = resolved_base_url.rstrip("/")
         self.timeout = timeout
 
     def invoke(self, messages: Any) -> Any:
@@ -206,15 +208,37 @@ class OllamaHTTPChat:
         return normalized
 
 
+def _resolve_ollama_base_url() -> str:
+    """Return a client-safe Ollama base URL, defaulting to localhost."""
+
+    raw = (os.getenv("LIVEON_OLLAMA_URL") or os.getenv("OLLAMA_HOST") or "").strip()
+    if not raw:
+        raw = "http://127.0.0.1:11434"
+
+    if "://" not in raw:
+        raw = f"http://{raw}"
+
+    parsed = urlparse(raw)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or "127.0.0.1"
+
+    if host in {"0.0.0.0", "::", "", "[::]"}:
+        host = "127.0.0.1"
+
+    port = parsed.port or 11434
+    return f"{scheme}://{host}:{port}"
+
+
 def create_coach_llm() -> Any:
     """Construct a chat client for the coach agent."""
     provider = (os.getenv("LIVEON_LLM_PROVIDER") or "ollama").strip().lower()
 
     if provider == "ollama":
         model = os.getenv("LIVEON_OLLAMA_MODEL") or 'phi3:14b-medium-4k-instruct-q4_K_M'
+        base_url = _resolve_ollama_base_url()
         if ChatOllama is not None:
-            return ChatOllama(model=model)
-        return OllamaHTTPChat(model=model)
+            return ChatOllama(model=model, base_url=base_url)
+        return OllamaHTTPChat(model=model, base_url=base_url)
 
     # Fallback for local dev and testing
     return LocalCoachResponder()

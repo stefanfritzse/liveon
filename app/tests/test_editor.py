@@ -69,8 +69,12 @@ def test_revise_returns_polished_article() -> None:
     assert edited.summary.startswith("Research-backed")
     assert "Refined Highlights" in edited.body
     assert edited.disclaimer == "Always consult a healthcare professional before changing your routine."
+    # Source URLs are provenance, not prose: the feed's are kept and anything
+    # the model supplies that was not in the feed is dropped rather than merged.
+    # The editor agent invents plausible-looking URLs that do not resolve.
     assert "https://example.com/articles/strength-training" in edited.sources
-    assert "https://journal.example.com/strength-training" in edited.sources
+    assert "https://journal.example.com/strength-training" not in edited.sources
+    assert edited.sources == sample_draft().sources
     assert edited.tags == ["nutrition", "exercise", "longevity"]
 
     article = edited.to_article()

@@ -13,12 +13,12 @@ from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, Sequence
+from urllib.parse import urlparse
 
-from app.models.aggregator import FeedSource
-from app.services.aggregator import LongevityNewsAggregator
 from app.services.pipeline import TipPipeline
 from app.services.tip_generator import TipGenerator
 from app.services.tip_editor import TipEditorAgent
+from app.services.tip_context import DailyTipContextProvider
 from app.services.tip_publisher import TipPublisher
 from app.services.sqlite_repo import LocalSQLiteContentRepository
 from app.utils.langchain_compat import AIMessage, BaseMessage
@@ -31,25 +31,6 @@ if not LOGGER.handlers:  # avoid duplicates on re-import
     LOGGER.addHandler(handler)
     LOGGER.setLevel(logging.INFO)
     LOGGER.propagate = False
-
-
-DEFAULT_FEEDS: Sequence[FeedSource] = (
-    FeedSource(
-        name="Google News: Longevity Research",
-        url="https://news.google.com/rss/search?q=longevity+research&hl=en-US&gl=US&ceid=US:en",
-        topic="research",
-    ),
-    FeedSource(
-        name="Google News: Healthy Aging",
-        url="https://news.google.com/rss/search?q=%22healthy+aging%22&hl=en-US&gl=US&ceid=US:en",
-        topic="aging",
-    ),
-    FeedSource(
-        name="Google News: Longevity Nutrition",
-        url="https://news.google.com/rss/search?q=longevity+nutrition&hl=en-US&gl=US&ceid=US:en",
-        topic="lifestyle",
-    ),
-)
 
 
 class SupportsInvoke(Protocol):
@@ -82,45 +63,11 @@ def _configure_logging() -> None:
     logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 
-def _load_feeds() -> list[FeedSource]:
-    """Return the feed configuration, allowing overrides via environment variables."""
-    raw_sources = os.getenv("LIVEON_FEED_SOURCES")
-    if not raw_sources:
-        return [*DEFAULT_FEEDS]
-
-    try:
-        payload = json.loads(raw_sources)
-    except json.JSONDecodeError as exc:  # pragma: no cover - user configuration
-        raise SystemExit("LIVEON_FEED_SOURCES must contain valid JSON") from exc
-
-    feeds: list[FeedSource] = []
-    for entry in payload:
-        try:
-            feeds.append(
-                FeedSource(
-                    name=entry["name"],
-                    url=entry["url"],
-                    topic=entry.get("topic"),
-                )
-            )
-        except KeyError as exc:  # pragma: no cover - user configuration
-            raise SystemExit(f"Feed configuration missing key: {exc}") from exc
-    return feeds
-
-
 def _env_bool(variable: str, default: bool = False) -> bool:
     value = os.getenv(variable)
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
-
-
-def _default_feed_limit() -> int:
-    for key in ("LIVEON_TIP_FEED_LIMIT", "LIVEON_FEED_LIMIT"):
-        value = os.getenv(key)
-        if value and value.isdigit():
-            return int(value)
-    return 5
 
 
 def _default_model_provider() -> str:
@@ -130,12 +77,6 @@ def _default_model_provider() -> str:
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Execute the Live On tip pipeline")
-    parser.add_argument(
-        "--limit-per-feed",
-        type=int,
-        default=_default_feed_limit(),
-        help="Maximum number of items to pull from each feed (default: env or 5)",
-    )
     parser.add_argument(
         "--model-provider",
         choices=["local", "openai", "gpt"],
@@ -183,7 +124,13 @@ def _create_tip_llm(provider: str, *, model_name: str | None, allow_local_stub: 
 
     if provider_key == "ollama":
         from langchain_community.chat_models import ChatOllama
-        return ChatOllama(model='phi3:14b-medium-4k-instruct-q4_K_M')
+        model = (
+            os.getenv("LIVEON_TIP_OLLAMA_MODEL")
+            or os.getenv("LIVEON_OLLAMA_MODEL")
+            or 'phi3:14b-medium-4k-instruct-q4_K_M'
+        )
+        base_url = _resolve_ollama_base_url()
+        return ChatOllama(model=model, base_url=base_url)
 
     if provider_key in {"openai", "gpt"}:  # pragma: no cover - optional dependency
         try:
@@ -200,6 +147,27 @@ def _create_tip_llm(provider: str, *, model_name: str | None, allow_local_stub: 
     return TipLocalJSONResponder()
 
 
+def _resolve_ollama_base_url() -> str:
+    """Return a client-safe Ollama base URL, defaulting to localhost."""
+
+    raw = (os.getenv("LIVEON_OLLAMA_URL") or os.getenv("OLLAMA_HOST") or "").strip()
+    if not raw:
+        raw = "http://127.0.0.1:11434"
+
+    if "://" not in raw:
+        raw = f"http://{raw}"
+
+    parsed = urlparse(raw)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or "127.0.0.1"
+
+    if host in {"0.0.0.0", "::", "", "[::]"}:
+        host = "127.0.0.1"
+
+    port = parsed.port or 11434
+    return f"{scheme}://{host}:{port}"
+
+
 class TipLocalJSONResponder:
     """Deterministic responder that fabricates tip JSON payloads for testing."""
 
@@ -210,12 +178,18 @@ class TipLocalJSONResponder:
         else:
             content = str(input)
 
+        normalized_content = content.lower()
+        if "is_approved" in normalized_content or "rubric" in normalized_content:
+            # Mimic editor feedback so the pipeline can complete locally.
+            payload = {"is_approved": True, "feedback": "Looks good.", "revised_draft": None}
+            return AIMessage(content=json.dumps(payload, ensure_ascii=False))
+
         payload = self._build_payload(content)
         return AIMessage(content=json.dumps(payload, default=_json_default, ensure_ascii=False))
 
     @staticmethod
     def _build_payload(prompt: str) -> dict[str, Any]:
-        notes = TipLocalJSONResponder._extract_block(prompt, "Notes:", "Current date:")
+        notes = TipLocalJSONResponder._extract_block(prompt, "Research notes:", "Key sources:")
         sources = TipLocalJSONResponder._extract_block(prompt, "Key sources:", "Current date:")
 
         def _clean_line(raw: str) -> str:
@@ -266,15 +240,14 @@ class TipLocalJSONResponder:
 
 
 def _build_pipeline(llm: SupportsInvoke) -> TipPipeline:
-    feeds = _load_feeds()
-    aggregator = LongevityNewsAggregator(feeds)
+    context_provider = DailyTipContextProvider()
     generator = TipGenerator(llm=llm)
     repository = LocalSQLiteContentRepository()
     publisher = TipPublisher(repository)
     editor = TipEditorAgent(llm=llm)
 
     return TipPipeline(
-        aggregator=aggregator,
+        context_provider=context_provider,
         generator=generator,
         editor=editor,
         publisher=publisher,
@@ -285,9 +258,7 @@ def _build_pipeline(llm: SupportsInvoke) -> TipPipeline:
 def main(argv: Sequence[str] | None = None) -> int:
     _configure_logging()
     args = _parse_args(argv)
-    LOGGER.info(
-        "TIP_PIPELINE_START limit_per_feed=%s provider=%s", args.limit_per_feed, args.model_provider
-    )
+    LOGGER.info("TIP_PIPELINE_START provider=%s", args.model_provider)
 
     try:
         llm = _create_tip_llm(
@@ -303,7 +274,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     published_at = _parse_datetime(args.published_at)
 
     try:
-        result = pipeline.run(limit_per_feed=max(0, args.limit_per_feed), published_at=published_at)
+        result = pipeline.run(published_at=published_at)
     except Exception:  # pragma: no cover - defensive fallback
         LOGGER.exception("Tip pipeline encountered an unexpected error")
         return 1
@@ -314,7 +285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         LOGGER.error("TIP_PIPELINE_ERROR %s", error)
 
     payload = {
-        "aggregation": asdict(result.aggregation),
+        "context": asdict(result.context) if result.context else None,
         "draft": asdict(result.draft) if result.draft else None,
         "tip": asdict(result.tip) if result.tip else None,
         "publication": asdict(result.publication) if result.publication else None,
@@ -325,7 +296,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "generation_attempts": getattr(result, "generation_attempts", 1),
         "editor_feedback": getattr(result, "editor_feedback", []),
     }
-    LOGGER.debug("TIP_PIPELINE_RESULT %s", json.dumps(payload, default=_json_default, ensure_ascii=False))
+    serialized = json.dumps(payload, default=_json_default, ensure_ascii=False)
+    LOGGER.debug("TIP_PIPELINE_RESULT %s", serialized)
+    print(serialized)
 
     if not result.succeeded:
         LOGGER.error("Tip pipeline failed to produce a tip")

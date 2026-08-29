@@ -154,7 +154,13 @@ def _create_llm(agent_label: str) -> "SupportsInvoke":
         )
         format_hint = (os.getenv("LIVEON_OLLAMA_FORMAT") or "json").strip().lower()
         base_url = _resolve_ollama_base_url()
-        kwargs: dict[str, object] = {"model": model_name, "base_url": base_url}
+        # Ollama defaults to temperature 0.8, which invents dates and URLs on a
+        # summarisation task. Apply the same low temperature the OpenAI branch uses.
+        kwargs: dict[str, object] = {
+            "model": model_name,
+            "base_url": base_url,
+            "temperature": _model_temperature(),
+        }
         if format_hint:
             kwargs["format"] = format_hint
         return ChatOllama(**kwargs)
@@ -167,10 +173,22 @@ def _create_llm(agent_label: str) -> "SupportsInvoke":
 
         return ChatOpenAI(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            temperature=float(os.getenv("LIVEON_MODEL_TEMPERATURE", "0.2")),
+            temperature=_model_temperature(),
         )
 
     return LocalJSONResponder(agent_label)
+
+
+def _model_temperature(default: float = 0.2) -> float:
+    """Sampling temperature for every provider; falls back on a bad value."""
+
+    raw = (os.getenv("LIVEON_MODEL_TEMPERATURE") or "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
 
 
 def _resolve_chat_ollama():

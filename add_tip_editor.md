@@ -1,6 +1,6 @@
 Integrating an AI Editor Agent into the Live On Tip Pipeline: Analysis and Implementation Plan
 1. Executive Summary
-This report outlines a strategic plan to enhance the liveon application's content pipeline. The user's request is to integrate an AI-powered "Editor Agent" into the existing TipPipeline. The current pipeline (Aggregator -> Generator -> Publisher) lacks a critical quality assurance step, leading to the potential publication of tips that may be uninteresting, repetitive, or of low quality.   
+This report outlines a strategic plan to enhance the liveon application's content pipeline. The user's request is to integrate an AI-powered "Editor Agent" into the existing TipPipeline. The original pipeline (Aggregator -> Generator -> Publisher) lacked a critical quality assurance step, leading to the potential publication of tips that may be uninteresting, repetitive, or of low quality. The modernised implementation replaces the aggregator with a `DailyTipContextProvider`, keeping the "Generate → Review → Publish" loop entirely local for development.   
 
 The proposed solution introduces a new TipEditorAgent and a "Generate-Review-Refine" loop. This agent will act as an automated quality gate, programmatically evaluating each generated tip against predefined criteria (e.g., conciseness, "interestingness," actionability, novelty). Tips that fail this review will be sent back to the TipGenerator with specific feedback for regeneration, up to a configurable limit.
 
@@ -237,17 +237,17 @@ class TipPipeline:
 3.4. Architectural Data Flow Comparison
 This new architecture fundamentally changes the data flow from a simple pipe to a process with a decision gate and a feedback loop, enhancing robustness.
 
-Current Flow: run_tip_pipeline.py -> TipPipeline.run() -> Aggregator.gather() -> TipGenerator.generate() -> TipPublisher.publish() -> SQLiteRepo.save_tip()
+Current Flow: run_tip_pipeline.py -> TipPipeline.run() -> DailyTipContextProvider.build() -> TipGenerator.generate() -> TipEditorAgent.review() -> TipPublisher.publish() -> SQLiteRepo.save_tip()
 
 Proposed Flow: run_tip_pipeline.py -> TipPipeline.run()
 
-TipPipeline calls Aggregator.gather()
+TipPipeline calls DailyTipContextProvider.build()
 
 TipPipeline calls Repository.get_latest_tips()
 
 Loop (starts):
 
-TipPipeline calls TipGenerator.generate(items, feedback?) -> returns TipDraft
+TipPipeline calls TipGenerator.generate(context, feedback?) -> returns TipDraft
 
 TipPipeline calls TipEditorAgent.review(draft, existing_tips) -> returns TipReviewResult
 

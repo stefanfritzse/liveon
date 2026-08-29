@@ -12,6 +12,7 @@ from app.models.editor import EditedArticle
 from app.models.publisher import PublicationResult
 from app.models.summarizer import ArticleDraft
 from app.models.tip import TipDraft
+from app.models.tip_context import TipGenerationContext
 from app.models.tip_editor import TipReviewResult
 from app.services.aggregator import AggregationResult
 from app.services.publisher import _slugify
@@ -158,12 +159,15 @@ class ContentPipeline:
                 warnings=warnings,
             )
         slug_to_use = slug or _slugify(selected_item.title or selected_item.url or "")
+        # Without this the publisher stamps "now", so a write-up of an older
+        # story claims to have been published the moment it was scraped.
+        effective_published_at = published_at or getattr(selected_item, "published_at", None)
         try:
             publication = self.publisher.publish(
                 edited,
                 slug=slug_to_use,
                 commit_message=commit_message,
-                published_at=published_at,
+                published_at=effective_published_at,
             )
         except Exception as exc:  # pragma: no cover - defensive fallback
             #errors.append(f"Publisher failed: {exc}")
@@ -223,11 +227,18 @@ class SupportsTipLookup(Protocol):
         """Optional compatibility hook shared with the article repository."""
 
 
+class SupportsTipContext(Protocol):
+    """Provider capable of producing a daily tip generation context."""
+
+    def build(self) -> TipGenerationContext:
+        """Return the context used to guide the tip generator."""
+
+
 @dataclass(slots=True)
 class TipPipelineResult:
     """Structured summary of a tip pipeline execution."""
 
-    aggregation: AggregationResult
+    context: TipGenerationContext | None
     draft: TipDraft | None = None
     tip: Tip | None = None
     publication: TipPublicationResult | None = None
@@ -251,9 +262,9 @@ class TipPipelineResult:
 
 @dataclass(slots=True)
 class TipPipeline:
-    """Coordinate the workflow from aggregation through tip publication."""
+    """Coordinate the workflow from context creation through tip publication."""
 
-    aggregator: SupportsAggregation
+    context_provider: SupportsTipContext
     generator: SupportsTipGeneration
     editor: SupportsTipEditing
     publisher: SupportsTipPublishing
@@ -263,19 +274,19 @@ class TipPipeline:
     def run(
         self,
         *,
-        limit_per_feed: int = 5,
         published_at: datetime | None = None,
     ) -> TipPipelineResult:
         """Execute the tip pipeline with an editor-in-the-loop review cycle."""
 
-        aggregation = self.aggregator.gather(limit_per_feed=limit_per_feed)
-        warnings = list(aggregation.errors)
+        warnings: list[str] = []
         errors: list[str] = []
 
-        if not aggregation.items:
-            warnings.append("No aggregated content available to generate tips.")
+        try:
+            context = self.context_provider.build()
+        except Exception as exc:
+            errors.append(f"Tip context provider failed: {exc}")
             return TipPipelineResult(
-                aggregation=aggregation,
+                context=None,
                 draft=None,
                 tip=None,
                 publication=None,
@@ -300,7 +311,7 @@ class TipPipeline:
         while attempt < self.MAX_GENERATION_ATTEMPTS:
             attempt += 1
             try:
-                draft = self.generator.generate(aggregation.items, feedback=feedback)
+                draft = self.generator.generate(context=context, feedback=feedback)
             except Exception as exc:
                 error_msg = f"Tip generator failed on attempt {attempt}: {exc}"
                 errors.append(error_msg)
@@ -364,7 +375,7 @@ class TipPipeline:
                 f"Failed to generate an approved tip after {self.MAX_GENERATION_ATTEMPTS} attempts."
             )
             return TipPipelineResult(
-                aggregation=aggregation,
+                context=context,
                 draft=draft,
                 tip=None,
                 publication=None,
@@ -378,7 +389,7 @@ class TipPipeline:
         if final_draft is None:
             errors.append("Editor approved review result but no draft was available.")
             return TipPipelineResult(
-                aggregation=aggregation,
+                context=context,
                 draft=draft,
                 tip=None,
                 publication=None,
@@ -393,7 +404,7 @@ class TipPipeline:
         except Exception as exc:
             errors.append(f"Tip publisher failed: {exc}")
             return TipPipelineResult(
-                aggregation=aggregation,
+                context=context,
                 draft=final_draft,
                 tip=None,
                 publication=None,
@@ -408,7 +419,7 @@ class TipPipeline:
             warnings.append("Tip already exists; skipped creating a duplicate.")
 
         return TipPipelineResult(
-            aggregation=aggregation,
+            context=context,
             draft=final_draft,
             tip=tip,
             publication=publication,

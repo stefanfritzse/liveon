@@ -12,19 +12,69 @@ spec:
       labels:
         app: longevity-coach
     spec:
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      initContainers:
+      - name: seed-content
+        image: longevity-coach:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: LIVEON_STORAGE
+          value: "sqlite"
+        - name: LIVEON_DB_PATH
+          value: "/home/appuser/liveon/data/content.db"
+        - name: LIVEON_ROOT_PATH
+          value: "/liveon"
+        command: ["python", "-m", "app.scripts.seed_content"]
+        volumeMounts:
+        - name: liveon-data
+          mountPath: /home/appuser/liveon/data
+        resources:
+          requests:
+            cpu: "5m"
+            memory: "64Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
       containers:
       - name: longevity-coach
         image: longevity-coach:latest
         env:
+        - name: LIVEON_STORAGE
+          value: "sqlite"
+        - name: LIVEON_DB_PATH
+          value: "/home/appuser/liveon/data/content.db"
+        - name: LIVEON_ROOT_PATH
+          value: "/liveon"
         - name: LIVEON_LLM_PROVIDER
           value: "ollama"
+        - name: LIVEON_OLLAMA_URL
+          value: "http://host.minikube.internal:11434"
+        # 32k context (phi3-medium-4k truncated multi-item feed input) and
+        # markedly better structured-JSON adherence.
+        - name: LIVEON_OLLAMA_MODEL
+          value: "qwen2.5:14b-instruct"
+        - name: LIVEON_MODEL_TEMPERATURE
+          value: "0.2"
         - name: OLLAMA_HOST
-          value: "host.minikube.internal"
+          value: "host.minikube.internal:11434"
         - name: OLLAMA_BASE_URL
-          value: "http://ollama-external.default.svc.cluster.local:11434"          
+          value: "http://host.minikube.internal:11434"
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8080
+        volumeMounts:
+        - name: liveon-data
+          mountPath: /home/appuser/liveon/data
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
         livenessProbe:
           httpGet:
             path: /healthz
@@ -37,3 +87,7 @@ spec:
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 10
+      volumes:
+      - name: liveon-data
+        persistentVolumeClaim:
+          claimName: liveon-data

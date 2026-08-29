@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 $ImageName        = 'longevity-coach:latest'
 $DeploymentFile   = Join-Path $PSScriptRoot 'deployment.yaml'
 $ServiceFile      = Join-Path $PSScriptRoot 'service.yaml'
+$PvcFile          = Join-Path $PSScriptRoot 'pvc.yaml'
 $DeploymentName   = 'longevity-coach-deployment'
 $ServiceName      = 'longevity-coach-service'
 $LocalForwardPort = 8080        # lokal port på Windows
@@ -49,6 +50,9 @@ Write-Host "Building Docker image $ImageName ..."
 docker build -t $ImageName .
 
 Write-Host "Applying Kubernetes manifests..."
+if (Test-Path $PvcFile) {
+  kubectl apply -f $PvcFile
+}
 kubectl apply -f $DeploymentFile
 kubectl apply -f $ServiceFile
 

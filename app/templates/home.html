@@ -9,8 +9,8 @@
         featured articles, actionable tips, and soon chat with an AI longevity coach.
       </p>
       <div class="grid">
-        <a role="button" href="/articles">Browse Articles</a>
-        <a role="button" class="secondary" href="/tips">See Past Tips</a>
+        <a role="button" href="{{ request.scope.get('root_path', '') }}/articles">Browse Articles</a>
+        <a role="button" class="secondary" href="{{ request.scope.get('root_path', '') }}/tips">See Past Tips</a>
       </div>
     </div>
     <div>
@@ -33,7 +33,7 @@
           {% endif %}
         </div>
         <footer>
-          <a href="/tips">Browse the tips archive</a>
+          <a href="{{ request.scope.get('root_path', '') }}/tips">Browse the tips archive</a>
         </footer>
       </article>
     </div>
@@ -55,7 +55,7 @@
             {% set summary_text = summary_source | markdown_to_text %}
             <p>{{ summary_text[:200] }}{% if summary_text|length > 200 %}…{% endif %}</p>
             {% if article.id %}
-              <footer><a href="/articles/{{ article.id }}">Read full article</a></footer>
+              <footer><a href="{{ request.scope.get('root_path', '') }}/articles/{{ article.id }}">Read full article</a></footer>
             {% endif %}
           </article>
         {% endfor %}

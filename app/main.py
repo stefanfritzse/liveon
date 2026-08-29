@@ -1,7 +1,6 @@
 """FastAPI web application for the Live On Longevity Coach platform"""
 
 from __future__ import annotations
-
 from collections.abc import Callable
 from functools import lru_cache
 from dataclasses import dataclass
@@ -11,24 +10,37 @@ import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
-
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.content import Article, Tip
 from app.services.coach import CoachAgent, create_coach_llm
+from app.services.pipeline_scheduler import create_pipeline_scheduler
 from app.utils.text import markdown_to_plain_text, markdown_to_html
 from app.services.sqlite_repo import LocalSQLiteContentRepository
 
-app = FastAPI(title="Live On Longevity Coach")
+def _normalize_root_path(value: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned or cleaned == "/":
+        return ""
+    return "/" + cleaned.strip("/")
+
+
+ROOT_PATH = _normalize_root_path(os.getenv("LIVEON_ROOT_PATH", ""))
+app = FastAPI(title="Live On Longevity Coach", root_path=ROOT_PATH)
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 templates.env.globals.update(now=lambda: datetime.now(timezone.utc))
 templates.env.filters["markdown_to_text"] = markdown_to_plain_text
 templates.env.filters["markdown_to_html"] = markdown_to_html
+
+STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +109,24 @@ def _build_debug_detail(exc: Exception) -> dict[str, str]:
         "type": type(exc).__name__,
         "message": message or "No exception message provided.",
     }
+
+
+@app.on_event("startup")
+async def _start_pipeline_scheduler() -> None:
+    scheduler = create_pipeline_scheduler()
+    if scheduler is None:
+        logger.info("Pipeline scheduler disabled", extra={"event": "pipeline_scheduler.disabled"})
+        return
+    app.state.pipeline_scheduler = scheduler
+    await scheduler.start()
+
+
+@app.on_event("shutdown")
+async def _stop_pipeline_scheduler() -> None:
+    scheduler = getattr(app.state, "pipeline_scheduler", None)
+    if scheduler is None:
+        return
+    await scheduler.stop()
 
 @app.get("/healthz")
 def healthz():

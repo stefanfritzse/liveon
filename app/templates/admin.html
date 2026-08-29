@@ -37,7 +37,7 @@
               <td>{{ article.title }}</td>
               <td>{{ article.published_date.strftime("%B %d, %Y") if article.published_date else "—" }}</td>
               <td class="admin-table-actions">
-                <form method="post" action="/admin/articles/{{ article.id }}/delete">
+                <form method="post" action="{{ request.scope.get('root_path', '') }}/admin/articles/{{ article.id }}/delete">
                   <button type="submit">Delete</button>
                 </form>
               </td>
@@ -70,7 +70,7 @@
               <td>{{ tip.title }}</td>
               <td>{{ tip.published_date.strftime("%B %d, %Y") if tip.published_date else "—" }}</td>
               <td class="admin-table-actions">
-                <form method="post" action="/admin/tips/{{ tip.id }}/delete">
+                <form method="post" action="{{ request.scope.get('root_path', '') }}/admin/tips/{{ tip.id }}/delete">
                   <button type="submit">Delete</button>
                 </form>
               </td>

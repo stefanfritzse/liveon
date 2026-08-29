@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import ast
@@ -9,12 +10,14 @@ from typing import Any
 
 from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
 
-from app.models.editor import EditedArticle
+from app.models.editor import EditedArticle, rejected_sources
 from app.models.summarizer import ArticleDraft
 from app.services.summarizer import SupportsInvoke
 from dataclasses import is_dataclass, asdict
 from datetime import datetime, date, timezone
 from pathlib import Path
+
+logger = logging.getLogger("liveon.editor")
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are the editorial agent for Live On, an AI longevity coach. "
@@ -103,6 +106,14 @@ class EditorAgent:
             tags=list(data.get("tags", []) or []),
             disclaimer=data.get("disclaimer"),
         )
+        invented = rejected_sources(draft.sources, edited.sources)
+        if invented:
+            logger.warning(
+                "Editor returned %d source URL(s) not present in the feed; dropping them: %s",
+                len(invented),
+                ", ".join(invented),
+                extra={"event": "editor.sources_rejected", "urls": invented},
+            )
         return edited.normalised(draft)
 
     @staticmethod

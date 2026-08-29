@@ -305,6 +305,7 @@
         return;
       }
 
+      const basePath = "{{ request.scope.get('root_path', '') }}";
       const form = app.querySelector('#coach-form');
       const textarea = app.querySelector('#coach-question');
       const transcript = app.querySelector('#coach-transcript');
@@ -524,7 +525,7 @@
         toggleLoading(true);
 
         try {
-          const response = await fetch('/api/ask', {
+          const response = await fetch(`${basePath}/api/ask`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ question }),

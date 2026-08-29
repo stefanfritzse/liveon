@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from langchain_core.messages import AIMessage
 
-from app.models.aggregator import AggregatedContent, FeedSource
+from app.models.tip_context import TipGenerationContext
 from app.services.tip_generator import TipGenerator
 
 
@@ -21,21 +20,15 @@ class DummyLLM:
         return AIMessage(content=self._response)
 
 
-def sample_aggregated(summary_suffix: str = "") -> list[AggregatedContent]:
-    feed = FeedSource(name="Longevity Digest", url="https://example.com/rss", topic="research")
-    return [
-        AggregatedContent(
-            title="Intermittent fasting study shows promising biomarkers",
-            url="https://example.com/articles/intermittent-fasting",
-            summary=(
-                "Longitudinal study tracks biomarker improvements in fasting cohorts." + summary_suffix
-            ),
-            published_at=datetime(2024, 1, 2, 9, tzinfo=timezone.utc),
-            source="Example News",
-            topic=feed.topic,
-            raw={},
-        ),
-    ]
+def sample_context(note_suffix: str = "") -> TipGenerationContext:
+    base_note = "Longitudinal study tracks biomarker improvements in fasting cohorts."
+    if note_suffix:
+        base_note = f"{base_note} {note_suffix}".strip()
+    return TipGenerationContext(
+        notes=[base_note],
+        sources=["https://example.com/articles/intermittent-fasting"],
+        guidance="Coach readers to structure their fasting window and recovery meals.",
+    )
 
 
 def test_generate_returns_tip_draft() -> None:
@@ -52,7 +45,7 @@ def test_generate_returns_tip_draft() -> None:
     """.strip()
     agent = TipGenerator(llm=DummyLLM(fake_response))
 
-    draft = agent.generate(sample_aggregated())
+    draft = agent.generate(context=sample_context())
 
     assert draft.title == "Intermittent Fasting for Metabolic Health"
     assert draft.body.startswith("Stay hydrated")
@@ -66,23 +59,17 @@ def test_generate_handles_malformed_json() -> None:
     agent = TipGenerator(llm=DummyLLM("not-json"))
 
     try:
-        agent.generate(sample_aggregated())
+        agent.generate(context=sample_context())
     except ValueError as exc:
         assert "valid JSON" in str(exc)
     else:  # pragma: no cover - ensure failure visible
         raise AssertionError("Expected ValueError for invalid JSON response")
 
 
-def test_generate_truncates_notes_for_prompt() -> None:
-    long_suffix = " " + "impactful insights " * 30
+def test_generate_includes_guidance_in_prompt() -> None:
     agent = TipGenerator(llm=DummyLLM("{}"))
 
-    agent.generate(sample_aggregated(summary_suffix=long_suffix))
+    agent.generate(context=sample_context())
 
-    # Last call contains the formatted messages (system + human)
     _, human_message = agent.llm.calls[-1]
-    assert "…" in human_message.content
-
-    notes_section = human_message.content.split("Notes:\n", 1)[1].split("\n\nKey sources:", 1)[0]
-    for line in notes_section.splitlines():
-        assert len(line) <= 221  # truncated with ellipsis
+    assert "Today's focus: Coach readers to structure their fasting window" in human_message.content

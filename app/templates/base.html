@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title or "Live On Longevity Coach" }}</title>
     <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="{{ request.url_for('static', path='heart.png') }}"
+    />
+    <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css"
     />
@@ -18,6 +24,22 @@
         padding: 2rem 0;
         margin-bottom: 2rem;
       }
+      header h1,
+      header p,
+      header a:not([role="button"]) {
+        color: #ffffff !important;
+        --pico-color: #ffffff;
+      }
+      header a[role="button"].secondary {
+        background-color: #ffffff;
+        border-color: rgba(255, 255, 255, 0.9);
+        color: #1c64f2;
+      }
+      header a[role="button"].secondary:hover {
+        background-color: #f8fafc;
+        border-color: #ffffff;
+        color: #1c64f2;
+      }
       header nav ul {
         align-items: center;
       }
@@ -27,15 +49,20 @@
         border-radius: 0.75rem;
         padding: 1.5rem;
       }
+      header .tip-of-day h3,
+      header .tip-of-day p,
+      header .tip-of-day .article-meta {
+        color: #0f172a !important;
+        --pico-color: #0f172a;
+      }
       header .tip-of-day a {
-        color: #1c64f2;
+        color: #1c64f2 !important;
+        --pico-color: #1c64f2;
         font-weight: 600;
       }
       header .tip-of-day a:hover {
-        color: #0b4fd4;
-      }
-      header a {
-        color: white;
+        color: #0b4fd4 !important;
+        --pico-color: #0b4fd4;
       }
       header .brand {
         font-weight: 600;
@@ -50,6 +77,10 @@
         padding: 1.5rem 0;
         margin-top: 4rem;
       }
+      footer small {
+        color: #f8fafc;
+        font-size: 0.9rem;
+      }
       .card-grid {
         display: grid;
         gap: 1.5rem;
@@ -61,15 +92,15 @@
       }
       .article-meta {
         font-size: 0.875rem;
-        color: #334155;
+        color: #1e293b;
       }
       .admin-link {
-        opacity: 0.65;
+        opacity: 0.9;
         font-size: 0.9rem;
-        font-weight: 500;
+        font-weight: 600;
       }
       .admin-link:hover {
-        opacity: 0.85;
+        opacity: 1;
       }
     </style>
   </head>
@@ -77,13 +108,13 @@
     <header>
       <nav class="container">
         <ul>
-          <li class="brand"><a href="/">Live On</a></li>
+          <li class="brand"><a href="{{ request.scope.get('root_path', '') }}/">Live On</a></li>
         </ul>
         <ul>
-          <li><a href="/articles">Articles</a></li>
-          <li><a href="/tips">Tips</a></li>
-          <li><a href="/coach">Ask the Coach</a></li>
-          <li><a href="/admin" class="admin-link">Admin</a></li>
+          <li><a href="{{ request.scope.get('root_path', '') }}/articles">Articles</a></li>
+          <li><a href="{{ request.scope.get('root_path', '') }}/tips">Tips</a></li>
+          <li><a href="{{ request.scope.get('root_path', '') }}/coach">Ask the Coach</a></li>
+          <li><a href="{{ request.scope.get('root_path', '') }}/admin" class="admin-link">Admin</a></li>
         </ul>
       </nav>
       <div class="container">

@@ -4,156 +4,168 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Iterable, Sequence
 
-from app.models.aggregator import AggregatedContent, FeedSource
 from app.models.content import Tip
 from app.models.tip import TipDraft
-from app.services.aggregator import AggregationResult
+from app.models.tip_context import TipGenerationContext
+from app.models.tip_editor import TipReviewResult
 from app.services.pipeline import TipPipeline
 from app.services.tip_publisher import TipPublisher
 
 
 @dataclass(slots=True)
-class StubAggregator:
-    items: list[AggregatedContent]
-    errors: list[str] | None = None
-    called_with: dict[str, int] = field(default_factory=dict, init=False)
+class StubContextProvider:
+    context: TipGenerationContext
+    calls: int = 0
 
-    def gather(self, *, limit_per_feed: int = 5) -> AggregationResult:
-        self.called_with["limit_per_feed"] = limit_per_feed
-        return AggregationResult(items=list(self.items), errors=list(self.errors or []))
+    def build(self) -> TipGenerationContext:
+        self.calls += 1
+        return self.context
 
 
 @dataclass(slots=True)
 class StubTipGenerator:
     draft: TipDraft
-    calls: list[list[AggregatedContent]] = field(default_factory=list, init=False)
+    fail_on_attempts: set[int] = field(default_factory=set)
+    calls: int = 0
 
-    def generate(self, items: Sequence[AggregatedContent]) -> TipDraft:
-        self.calls.append(list(items))
+    def generate(
+        self,
+        *,
+        context: TipGenerationContext,
+        feedback: str | None = None,
+    ) -> TipDraft:
+        self.calls += 1
+        if self.calls in self.fail_on_attempts:
+            raise RuntimeError("model offline")
         return self.draft
+
+
+@dataclass(slots=True)
+class StubTipEditor:
+    responses: Sequence[TipReviewResult]
+    calls: int = 0
+
+    def review(self, draft: TipDraft, existing_tips: Sequence[Tip]) -> TipReviewResult:
+        response = self.responses[self.calls] if self.calls < len(self.responses) else self.responses[-1]
+        self.calls += 1
+        return response
 
 
 @dataclass(slots=True)
 class StubTipRepository:
     stored: list[Tip] = field(default_factory=list)
-    existing_title: dict[str, Tip] = field(default_factory=dict)
-    existing_tags: dict[tuple[str, ...], Tip] = field(default_factory=dict)
-    find_title_calls: list[str] = field(default_factory=list, init=False)
-    find_tags_calls: list[tuple[str, ...]] = field(default_factory=list, init=False)
+    existing_by_title: dict[str, Tip] = field(default_factory=dict)
+    existing_by_tags: dict[tuple[str, ...], Tip] = field(default_factory=dict)
 
     def save_tip(self, tip: Tip) -> Tip:
-        stored_tip = Tip(
+        saved = Tip(
             title=tip.title,
             content_body=tip.content_body,
             published_date=tip.published_date,
             tags=list(tip.tags),
             id=tip.id or f"tip-{len(self.stored) + 1}",
         )
-        self.stored.append(stored_tip)
-        self.existing_title[stored_tip.title] = stored_tip
-        self.existing_tags[tuple(sorted(stored_tip.tags))] = stored_tip
-        return stored_tip
+        self.stored.append(saved)
+        self.existing_by_title[saved.title] = saved
+        self.existing_by_tags[tuple(sorted(saved.tags))] = saved
+        return saved
 
     def find_tip_by_title(self, title: str) -> Tip | None:
-        self.find_title_calls.append(title)
-        return self.existing_title.get(title)
+        return self.existing_by_title.get(title)
 
     def find_tip_by_tags(self, tags: Iterable[str]) -> Tip | None:
-        tag_list = sorted(tag.strip() for tag in tags if isinstance(tag, str) and tag.strip())
-        self.find_tags_calls.append(tuple(tag_list))
-        return self.existing_tags.get(tuple(tag_list))
+        normalized = tuple(sorted(tag.strip() for tag in tags if isinstance(tag, str) and tag.strip()))
+        return self.existing_by_tags.get(normalized)
+
+    def get_latest_tips(self, *, limit: int = 5) -> list[Tip]:
+        combined = list(self.stored) + list(self.existing_by_title.values())
+        return combined[:limit]
+
+    def find_article_by_source_url(self, url: str) -> Tip | None:  # pragma: no cover - compatibility
+        return None
 
 
-def sample_aggregated() -> list[AggregatedContent]:
-    feed = FeedSource(name="Daily Longevity", url="https://example.com/rss", topic="tips")
-    return [
-        AggregatedContent(
-            title="Move a little more", 
-            url="https://example.com/articles/move-more",
-            summary="Light movement supports cardiovascular health.",
-            published_at=datetime(2024, 2, 1, 8, tzinfo=timezone.utc),
-            source="Example News",
-            topic=feed.topic,
-            raw={},
-        )
-    ]
+def sample_context() -> TipGenerationContext:
+    return TipGenerationContext(
+        notes=["Encourage a brisk 10-minute walk to spark circulation."],
+        sources=["https://example.com/walk"],
+        guidance="Prompt a short walk before lunch to stabilise glucose.",
+    )
+
+
+def sample_draft() -> TipDraft:
+    return TipDraft(
+        title="Power Walk Pulse",
+        body="Schedule a 10-minute brisk walk before lunch to stabilise glucose and sharpen focus.",
+        tags=["movement", "metabolism"],
+        metadata={"sources": ["https://example.com/walk"]},
+    )
 
 
 def test_tip_pipeline_publishes_new_tip() -> None:
-    aggregator = StubAggregator(items=sample_aggregated(), errors=["Feed timeout"])
-    draft = TipDraft(title="Daily Movement", body="Take a brisk 10-minute walk today.", tags=["movement", "cardio"])
-    generator = StubTipGenerator(draft=draft)
     repository = StubTipRepository()
-    publisher = TipPublisher(repository)
-
-    pipeline = TipPipeline(aggregator=aggregator, generator=generator, publisher=publisher)
+    pipeline = TipPipeline(
+        context_provider=StubContextProvider(context=sample_context()),
+        generator=StubTipGenerator(draft=sample_draft()),
+        editor=StubTipEditor(
+            responses=[TipReviewResult(is_approved=True, feedback="Looks good", revised_draft=None)]
+        ),
+        publisher=TipPublisher(repository),
+        repository=repository,
+    )
 
     published_at = datetime(2024, 2, 2, tzinfo=timezone.utc)
-    result = pipeline.run(limit_per_feed=4, published_at=published_at)
+    result = pipeline.run(published_at=published_at)
 
     assert result.succeeded
     assert result.created
     assert result.tip is not None
-    assert result.tip.title == "Daily Movement"
-    assert result.tip.content_body.startswith("Take a brisk")
-    assert result.tip.tags == ["movement", "cardio"]
-    assert result.publication is not None
-    assert result.publication.created
-    assert result.warnings == ["Feed timeout"]
-    assert aggregator.called_with["limit_per_feed"] == 4
-    assert generator.calls and generator.calls[0][0].title == "Move a little more"
-    assert len(repository.stored) == 1
+    assert result.tip.title == "Power Walk Pulse"
+    assert repository.stored and repository.stored[0].published_date == published_at
+    assert pipeline.context_provider.calls == 1
+    assert pipeline.generator.calls == 1
+    assert pipeline.editor.calls == 1
 
 
-def test_tip_pipeline_suppresses_duplicates() -> None:
-    existing_tip = Tip(
-        title="Daily Movement",
-        content_body="Take a brisk 10-minute walk today.",
-        tags=["movement", "cardio"],
-        published_date=datetime(2024, 1, 30, tzinfo=timezone.utc),
-        id="existing-tip",
+def test_tip_pipeline_retries_after_rejection() -> None:
+    repository = StubTipRepository()
+    review_responses = [
+        TipReviewResult(is_approved=False, feedback="Too generic", revised_draft=None),
+        TipReviewResult(is_approved=True, feedback="Better", revised_draft=None),
+    ]
+    pipeline = TipPipeline(
+        context_provider=StubContextProvider(context=sample_context()),
+        generator=StubTipGenerator(draft=sample_draft()),
+        editor=StubTipEditor(responses=review_responses),
+        publisher=TipPublisher(repository),
+        repository=repository,
     )
-
-    repository = StubTipRepository(
-        existing_title={existing_tip.title: existing_tip},
-        existing_tags={tuple(sorted(existing_tip.tags)): existing_tip},
-    )
-
-    aggregator = StubAggregator(items=sample_aggregated())
-    draft = TipDraft(title="Daily Movement", body="Take a brisk 10-minute walk today.", tags=["movement", "cardio"])
-    generator = StubTipGenerator(draft=draft)
-    publisher = TipPublisher(repository)
-    pipeline = TipPipeline(aggregator=aggregator, generator=generator, publisher=publisher)
 
     result = pipeline.run()
 
     assert result.succeeded
-    assert not result.created
-    assert result.tip == existing_tip
-    assert result.publication is not None and not result.publication.created
-    assert "Tip already exists" in result.warnings[0]
-    assert len(repository.stored) == 0
-    assert repository.find_title_calls == ["Daily Movement"]
-    if repository.find_tags_calls:
-        assert repository.find_tags_calls == [tuple(sorted(existing_tip.tags))]
+    assert result.generation_attempts == 2
+    assert any("Tip draft rejected" in warning for warning in result.warnings)
+    assert "Too generic" in "\n".join(result.editor_feedback)
 
 
-def test_tip_pipeline_handles_generator_failure() -> None:
-    class FailingGenerator(StubTipGenerator):
-        def generate(self, items: Sequence[AggregatedContent]) -> TipDraft:  # type: ignore[override]
-            raise RuntimeError("model offline")
-
-    aggregator = StubAggregator(items=sample_aggregated())
-    generator = FailingGenerator(draft=TipDraft(title="", body="", tags=[]))
+def test_tip_pipeline_stops_when_generator_keeps_failing() -> None:
     repository = StubTipRepository()
-    publisher = TipPublisher(repository)
-    pipeline = TipPipeline(aggregator=aggregator, generator=generator, publisher=publisher)
+    generator = StubTipGenerator(draft=sample_draft(), fail_on_attempts={1, 2, 3})
+    pipeline = TipPipeline(
+        context_provider=StubContextProvider(context=sample_context()),
+        generator=generator,
+        editor=StubTipEditor(
+            responses=[TipReviewResult(is_approved=True, feedback=None, revised_draft=None)]
+        ),
+        publisher=TipPublisher(repository),
+        repository=repository,
+    )
 
     result = pipeline.run()
 
     assert not result.succeeded
-    assert result.errors and "Tip generator failed: model offline" in result.errors[0]
-    assert result.draft is None
     assert result.tip is None
-    assert result.publication is None
+    assert result.errors
+    assert any("Tip generator failed" in error for error in result.errors)
     assert repository.stored == []

@@ -78,7 +78,7 @@ class EditedArticle:
             title=(self.title or draft.title).strip(),
             summary=(self.summary or draft.summary).strip(),
             body=(self.body or draft.body).strip(),
-            sources=_merge_unique(draft.sources, self.sources),
+            sources=allowlisted_sources(draft.sources, self.sources),
             tags=_merge_unique(draft.tags, self.tags),
             takeaways=_merge_unique(draft.takeaways, self.takeaways),
             disclaimer=(self.disclaimer or "").strip() or None,
@@ -104,3 +104,55 @@ def _merge_unique(primary: Sequence[str], secondary: Sequence[str]) -> list[str]
             seen.add(normalised)
             merged.append(normalised)
     return merged
+
+
+def _source_key(value: str) -> str:
+    """Normalise a URL for allowlist comparison (whitespace, trailing slash)."""
+
+    return value.strip().rstrip("/")
+
+
+def allowlisted_sources(
+    feed_sources: Sequence[str],
+    model_sources: Sequence[str],
+) -> list[str]:
+    """Return only sources that actually came from the aggregated feed.
+
+    The editor agent routinely returns plausible-looking URLs that do not
+    exist (invented publisher pages, mangled copies of the real link). Source
+    URLs are provenance, not prose, so the model gets no say in them: anything
+    it supplies is kept only when it matches a feed URL, and the feed URLs are
+    always preserved.
+    """
+
+    allowed = {_source_key(value) for value in feed_sources if value.strip()}
+    seen: set[str] = set()
+    kept: list[str] = []
+    # Feed first, so the feed's spelling of a URL wins over the model's.
+    for value in list(feed_sources) + list(model_sources):
+        cleaned = value.strip()
+        key = _source_key(cleaned)
+        if not cleaned or key not in allowed or key in seen:
+            continue
+        seen.add(key)
+        kept.append(cleaned)
+    return kept
+
+
+def rejected_sources(
+    feed_sources: Sequence[str],
+    model_sources: Sequence[str],
+) -> list[str]:
+    """Return the model-supplied sources dropped by :func:`allowlisted_sources`."""
+
+    allowed = {_source_key(value) for value in feed_sources if value.strip()}
+    seen: set[str] = set()
+    dropped: list[str] = []
+    for value in model_sources:
+        cleaned = value.strip()
+        key = _source_key(cleaned)
+        if not cleaned or key in allowed or key in seen:
+            continue
+        seen.add(key)
+        dropped.append(cleaned)
+    return dropped

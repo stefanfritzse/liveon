@@ -61,7 +61,7 @@ When the Ollama daemon is bound to `0.0.0.0`, still point `LIVEON_OLLAMA_URL` (o
 Live On ships with two parallel content flows that share the same aggregation pool but optimise for different outputs:
 
 - **Articles:** `LongevityNewsAggregator` → `SummarizerAgent` → `EditorAgent` → `Publisher`. The summariser drafts an article, the editor polishes tone / citations, and the publisher writes to either SQLite or a Git repo depending on configuration.
-- **Tips:** `LongevityNewsAggregator` → `TipGenerator` → `TipEditorAgent` → `TipPublisher`. The new TipEditor acts as a strict QA gate. Each generated `TipDraft` is reviewed against novelty, conciseness, and actionability. If the editor rejects the draft, it sends structured `TipReviewResult` feedback into the generator so it can iterate up to `MAX_GENERATION_ATTEMPTS`. The final `TipPipelineResult` now records both `generation_attempts` and the cumulative `editor_feedback`, giving you clear telemetry on how many refinement cycles were required.
+- **Tips:** `DailyTipContextProvider` → `TipGenerator` → `TipEditorAgent` → `TipPublisher`. The context provider supplies deterministic research notes/themes for local development so no RSS access is required. Each generated `TipDraft` is reviewed against novelty, conciseness, and actionability. If the editor rejects the draft, it sends structured `TipReviewResult` feedback into the generator so it can iterate up to `MAX_GENERATION_ATTEMPTS`. The final `TipPipelineResult` now records the execution context as well as `generation_attempts` and cumulative `editor_feedback`, giving you clear telemetry on how many refinement cycles were required.
 
 Both pipelines log warnings for soft failures (e.g., duplicate publications) and surface fatal errors so you can tune prompts or feeds as needed.
 
@@ -79,20 +79,20 @@ This command respects the same storage environment variables, so ensure `LIVEON_
 
 ### Running the Tip Pipeline
 
-The dedicated tip runner adds the editor-in-the-loop review cycle described above:
+The tip runner now uses the `DailyTipContextProvider` plus the editor-in-the-loop review cycle described above. No RSS feeds are required for local development:
 
 ```powershell
-python -m app.scripts.run_tip_pipeline --limit-per-feed 5
+python -m app.scripts.run_tip_pipeline --model-provider local --allow-local-llm
 ```
 
-It accepts the same environment overrides for feeds, storage, and model providers (plus `LIVEON_TIP_MODEL*` for tip-specific settings). The CLI logs additional telemetry including `generation_attempts`, `editor_feedback`, and all editor rejection reasons so you can monitor prompt quality. The JSON blob emitted at `TIP_PIPELINE_RESULT` now also contains these fields, making it easy to persist analytics or debug CI runs.
+You can still select OpenAI/Ollama providers via `LIVEON_TIP_MODEL*` env vars. The CLI logs telemetry such as `generation_attempts`, `editor_feedback`, and rejection reasons, and it prints the final JSON payload so you can inspect the generated tip or feed analytics jobs.
 
 ## Deployment (Minikube)
 
 `deploy.ps1` automates the local Kubernetes workflow:
 
 1. Builds the Docker image using Minikube’s Docker daemon.
-2. Applies `deployment.yaml` and `service.yaml`.
+2. Applies `pvc.yaml`, `deployment.yaml`, and `service.yaml`.
 3. Waits for rollout, cleans old port-forward jobs, and establishes a new `kubectl port-forward` to `http://127.0.0.1:8080`.
 
 Run it from PowerShell:
@@ -102,6 +102,8 @@ pwsh ./deploy.ps1
 ```
 
 Ensure Minikube (Docker driver) and kubectl are available. The script forwards proxy environment variables automatically and sets custom DNS entries to avoid registry resolution issues.
+
+The Kubernetes deployment mounts a PVC (`liveon-data`) at `/root/liveon/data` so the SQLite DB persists across pod restarts. An init container runs `app.scripts.seed_content` to seed the database if it is empty.
 
 ## Testing
 

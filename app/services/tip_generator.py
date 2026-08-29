@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import re
 from typing import Any, Protocol, Sequence
 from urllib.parse import urlparse
@@ -13,9 +13,8 @@ from jinja2 import Template
 
 from app.utils.langchain_compat import AIMessage, BaseMessage, ChatPromptTemplate
 
-from app.models.aggregator import AggregatedContent
-from app.models.summarizer import SummarizerContext
 from app.models.tip import TipDraft
+from app.models.tip_context import TipGenerationContext
 
 
 class SupportsInvoke(Protocol):
@@ -39,6 +38,10 @@ Editor feedback:
 {{ feedback }}
 {% else %}
 Using the research notes below, craft ONE concise longevity tip (2-3 sentences or a short intro plus up to 2 bullets). Make it sound like advice a health coach would give for today.
+{% endif %}
+
+{% if guidance %}
+Today's focus: {{ guidance }}
 {% endif %}
 
 Rules you MUST follow:
@@ -82,31 +85,29 @@ def _default_prompt() -> ChatPromptTemplate:
 
 @dataclass(slots=True)
 class TipGenerator:
-    """Generate tip drafts from aggregated longevity updates using LangChain."""
+    """Generate tip drafts using structured context and LangChain prompts."""
 
     llm: SupportsInvoke
     prompt: ChatPromptTemplate = field(default_factory=_default_prompt)
 
     def generate(
         self,
-        items: Sequence[AggregatedContent],
+        *,
+        context: TipGenerationContext,
         feedback: str | None = None,
     ) -> TipDraft:
-        """Produce a tip draft from aggregated content with optional feedback to guide revisions."""
+        """Produce a tip draft from structured context with optional feedback to guide revisions."""
 
-        if not items:
-            raise ValueError("At least one aggregated content item is required")
-
-        context = SummarizerContext.from_aggregated(items)
-        tip_notes = context.to_tip_notes()
-        notes_block = "\n".join(tip_notes) if tip_notes else "No concise notes available."
-        sources_block = "\n".join(context.source_urls) if context.source_urls else "Not provided"
-        current_date = datetime.now(timezone.utc).date().isoformat()
+        notes_block = context.notes_block()
+        sources_block = context.sources_block()
+        current_date = self._format_date(context.current_date)
+        guidance = context.guidance or context.theme
 
         tip_prompt = self._render_tip_prompt(
             notes=notes_block,
             sources=sources_block,
             current_date=current_date,
+            guidance=guidance,
             feedback=feedback,
         )
         messages = self.prompt.format_messages(
@@ -114,6 +115,7 @@ class TipGenerator:
             notes=notes_block,
             sources=sources_block,
             current_date=current_date,
+            guidance=guidance,
             feedback=feedback,
         )
 
@@ -123,7 +125,7 @@ class TipGenerator:
         tags = self._coerce_tags(payload.get("tags"))
         metadata = self._coerce_metadata(payload.get("metadata"))
 
-        merged_sources = self._merge_sources(context.source_urls, metadata.get("sources", []))
+        merged_sources = self._merge_sources(context.sources, metadata.get("sources", []))
         if merged_sources:
             metadata["sources"] = merged_sources
 
@@ -138,21 +140,33 @@ class TipGenerator:
         return draft.with_defaults()
 
     @staticmethod
+    def _format_date(value: date | datetime | None) -> str:
+        if value is None:
+            return datetime.now(timezone.utc).date().isoformat()
+        if isinstance(value, datetime):
+            return value.astimezone(timezone.utc).date().isoformat()
+        return value.isoformat()
+
+    @staticmethod
     def _render_tip_prompt(
         *,
         notes: str,
         sources: str,
         current_date: str,
+        guidance: str | None,
         feedback: str | None,
     ) -> str:
         """Render the human prompt via Jinja to conditionally include feedback guidance."""
 
-        return TIP_HUMAN_PROMPT.render(
-            notes=notes,
-            sources=sources,
-            current_date=current_date,
-            feedback=feedback,
-        ).strip()
+        return (
+            TIP_HUMAN_PROMPT.render(
+                notes=notes,
+                sources=sources,
+                current_date=current_date,
+                guidance=guidance,
+                feedback=feedback,
+            ).strip()
+        )
 
     @staticmethod
     def _extract_content(response: BaseMessage | str) -> str:
