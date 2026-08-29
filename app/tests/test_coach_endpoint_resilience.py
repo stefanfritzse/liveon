@@ -245,7 +245,11 @@ def test_successful_answer_is_unaffected(coach_client) -> None:
     response = client.post("/api/ask", json={"question": "Glucose tips?"})
 
     assert response.status_code == 200
-    assert response.json() == {"answer": "Walk after meals.", "disclaimer": "Educational only."}
+    payload = response.json()
+    assert payload["answer"] == "Walk after meals."
+    assert payload["disclaimer"] == "Educational only."
+    # The server renders the Markdown so the browser never needs a second renderer.
+    assert payload["answer_html"] == "<p>Walk after meals.</p>"
 
 
 # ----------------------------------------------------------------------

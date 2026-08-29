@@ -65,6 +65,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 | `LIVEON_TIP_USE_PRESETS` | Force the offline tip presets instead of live news | `0` |
 | `LIVEON_FEED_LIMIT` | Items fetched per feed | `5` |
 | `LIVEON_MODEL_TEMPERATURE` | Sampling temperature for pipeline agents | `0.2` |
+| `LIVEON_ASK_RATE_LIMIT` | Coach questions allowed per client per minute (0 disables) | `30` |
 
 When the Ollama daemon is bound to `0.0.0.0`, still point `LIVEON_OLLAMA_URL` (or the pipeline command's environment) at a reachable host such as `http://127.0.0.1:11434` so local clients can connect successfully.
 
@@ -111,9 +112,16 @@ resolve against what was already discussed — the coach itself holds no session
 ```
 
 History is bounded server-side (`LIVEON_COACH_HISTORY_TURNS`, plus character budgets),
-so a client cannot grow the prompt without limit. Every answer carries a safety
-disclaimer; if the model supplies its own trailing `Disclaimer:` line it replaces the
-default.
+so a client cannot grow the prompt without limit. Questions are capped at 2000 characters
+and each client gets `LIVEON_ASK_RATE_LIMIT` questions per minute. Every answer carries a
+safety disclaimer; if the model supplies its own trailing `Disclaimer:` line it replaces
+the default.
+
+Responses include both the raw Markdown (`answer`) and rendered, sanitised HTML
+(`answer_html`). The browser displays the HTML, which keeps the server as the single
+authoritative renderer — the small client-side renderer only previews tokens as they
+stream in. The transcript is kept in `sessionStorage` for the life of the tab, with
+copy and clear controls on the page.
 
 ### Coach Error Responses
 
@@ -126,6 +134,33 @@ default.
 | `500` | An unexpected server-side error. |
 
 Error payloads carry a `message` and a short `reference` id. The full exception and traceback are written to the server log against that same reference, keeping internal details out of the browser. Set `LIVEON_DEBUG_ERRORS=1` while developing to inline them in the response instead.
+
+## Browsing the Content
+
+`/articles` and `/tips` support the same query parameters:
+
+| Parameter | Effect |
+| --- | --- |
+| `q` | Free-text search across title, summary, body, and tags |
+| `tag` | Exact (case-insensitive) tag match; tags are clickable throughout the site |
+| `page` | 1-based page number, 10 items per page |
+
+They combine: `/articles?q=sleep&tag=longevity&page=2`.
+
+## Presentation
+
+- **Offline first.** Pico CSS is vendored at `app/static/vendor/pico.min.css` rather than
+  loaded from a CDN, so the site is styled on a plane or an air-gapped host. Refresh it by
+  downloading the same version over that file.
+- **Dark mode.** The palette is a set of `--liveon-*` custom properties in
+  `base.html`, flipped by `prefers-color-scheme`. New components should use those tokens
+  rather than literal colours, or they will not follow the theme.
+- **Error pages.** Browsers get a styled page with navigation; `/api/*` and `/healthz`
+  keep returning JSON. Content negotiation is handled by `_wants_json`.
+- **Sanitised rendering.** Articles, tips, and coach answers all pass through
+  `sanitize_html`, an allowlist over the Markdown output. Feed items and model output are
+  untrusted, and python-markdown passes raw HTML through, so scripts, event handlers, and
+  `javascript:` URLs are stripped before anything reaches a page.
 
 ## Scheduled Content Generation
 

@@ -1,13 +1,19 @@
 {% extends "base.html" %}
 
 {% block hero %}
+  <p><a href="{{ request.scope.get('root_path', '') }}/articles">← All articles</a></p>
   <h1>{{ article.title }}</h1>
   <p class="article-meta">Published {{ article.published_date.strftime("%B %d, %Y") }}</p>
 {% endblock %}
 
 {% block content %}
   <article class="article-body">
+    {% if article.summary %}
+      <p class="article-summary">{{ article.summary | markdown_to_text }}</p>
+    {% endif %}
+
     {{ article.content_body | markdown_to_html }}
+
     {% if article.source_urls %}
       <h4>Sources</h4>
       <ul>
@@ -16,8 +22,40 @@
         {% endfor %}
       </ul>
     {% endif %}
+
     {% if article.tags %}
-      <p><strong>Tags:</strong> {{ article.tags | join(', ') }}</p>
+      <h4>Tags</h4>
+      <ul class="tag-list">
+        {% for tag in article.tags %}
+          <li>
+            <a class="tag-chip" href="{{ request.scope.get('root_path', '') }}/articles?tag={{ tag | urlencode }}">{{ tag }}</a>
+          </li>
+        {% endfor %}
+      </ul>
     {% endif %}
+
+    <p class="article-back">
+      <a href="{{ request.scope.get('root_path', '') }}/articles">← Back to all articles</a>
+    </p>
   </article>
+
+  <style>
+    .article-summary {
+      border-left: 3px solid var(--liveon-accent);
+      color: var(--liveon-muted);
+      font-size: 1.05rem;
+      margin: 0 0 1.5rem;
+      padding-left: 1rem;
+    }
+
+    .article-body h4 {
+      margin-top: 2rem;
+    }
+
+    .article-back {
+      border-top: 1px solid var(--liveon-border);
+      margin-top: 2.5rem;
+      padding-top: 1.5rem;
+    }
+  </style>
 {% endblock %}

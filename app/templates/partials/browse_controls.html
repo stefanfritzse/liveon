@@ -1,0 +1,43 @@
+{# Search box, tag chips, and result summary shared by the article and tip listings. #}
+<form class="browse-controls" method="get" action="{{ base_path }}" role="search">
+  <input
+    type="search"
+    name="q"
+    value="{{ query }}"
+    placeholder="{{ search_placeholder }}"
+    aria-label="{{ search_placeholder }}"
+  />
+  {% if active_tag %}
+    <input type="hidden" name="tag" value="{{ active_tag }}" />
+  {% endif %}
+  <button type="submit">Search</button>
+  {% if query or active_tag %}
+    <a role="button" class="secondary" href="{{ base_path }}">Clear</a>
+  {% endif %}
+</form>
+
+{% if results.available_tags %}
+  <ul class="tag-list" aria-label="Filter by tag">
+    {% for tag in results.available_tags %}
+      <li>
+        <a
+          class="tag-chip"
+          href="{{ base_path }}?tag={{ tag | urlencode }}{% if query %}&q={{ query | urlencode }}{% endif %}"
+          {% if active_tag and tag | lower == active_tag | lower %}aria-current="true"{% endif %}
+        >{{ tag }}</a>
+      </li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+<p class="browse-summary">
+  {% if results.total %}
+    Showing {{ results.first_index }}–{{ results.last_index }} of {{ results.total }}
+    {% if query %}for “{{ query }}”{% endif %}
+    {% if active_tag %}tagged “{{ active_tag }}”{% endif %}
+  {% else %}
+    No matches
+    {% if query %}for “{{ query }}”{% endif %}
+    {% if active_tag %}tagged “{{ active_tag }}”{% endif %}
+  {% endif %}
+</p>

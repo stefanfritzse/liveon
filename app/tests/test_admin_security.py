@@ -13,7 +13,7 @@ from typing import Iterable
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import ContentRepository, app, get_repository
+from app.main import ContentRepository, _paginate_in_memory, app, get_repository
 from app.models.content import Article, Tip
 
 ADMIN_USER = "curator"
@@ -54,6 +54,12 @@ class RecordingRepository(ContentRepository):
         self.deleted_tips.append(tip_id)
         return True
 
+    def browse_articles(self, **kwargs: object):
+        return _paginate_in_memory(list(self._articles), **kwargs)
+
+    def browse_tips(self, **kwargs: object):
+        return _paginate_in_memory(list(self._tips), **kwargs)
+
 
 @pytest.fixture()
 def repository() -> RecordingRepository:
@@ -91,7 +97,9 @@ def test_console_is_disabled_when_no_password_is_set(client: TestClient, unconfi
     response = client.get("/admin")
 
     assert response.status_code == 503
-    assert "LIVEON_ADMIN_PASSWORD" in response.json()["detail"]
+    # A browser request gets the styled page, with the operator hint intact.
+    assert response.headers["content-type"].startswith("text/html")
+    assert "LIVEON_ADMIN_PASSWORD" in response.text
 
 
 def test_delete_is_disabled_when_no_password_is_set(

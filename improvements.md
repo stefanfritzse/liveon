@@ -43,7 +43,16 @@ was seen to be judging correctly, the real defect surfaced: the editor knew the
 publication history and the generator did not, so the review loop could never converge —
 the generator kept re-mining a story it had already covered and could not see why.
 
-P2–P3 remain open and unchanged.
+**P2 (items 14–21): implemented and verified — 2026-08-29.** The suite went from 216 to 288
+passing, plus 38 live checks against a running server and a 14-check Node harness that
+exercises the browser-side transcript behaviour rather than merely asserting it is wired.
+
+One P3 item came forward out of necessity: #24 (unsanitised rendering). Item 16 asks for the
+server to be the single renderer, which meant sending server-rendered HTML to the browser —
+widening a vector that already existed. `sanitize_html` now runs over every rendered
+Markdown output, so #24 is closed too.
+
+P3 otherwise remains open.
 
 ---
 
@@ -333,7 +342,7 @@ downstream on `.strip()`.
 
 ## P2 — User friendliness and UX design
 
-### 14. Broken links show raw JSON to the user *(measured)*
+### 14. Broken links show raw JSON to the user *(measured)* — ✅ FIXED
 
 `GET /articles/does-not-exist` returns `application/json` `{"detail":"Article not found"}`, and
 any unknown path returns `{"detail":"Not Found"}` — no header, no nav, no way back.
@@ -341,13 +350,22 @@ any unknown path returns `{"detail":"Not Found"}` — no header, no nav, no way 
 **Fix:** an `HTTPException` handler that renders a styled 404/500 template for HTML requests and
 keeps JSON for `/api/*`.
 
-### 15. Stale copy contradicting shipped features
+**Fixed.** A `StarletteHTTPException` handler renders `errors/error.html` — with the site
+header, navigation, and suggested destinations — for browser requests, while `/api/*` and
+`/healthz` keep returning JSON. Response headers survive the switch, so a `401` still
+carries `WWW-Authenticate` and the browser still prompts.
+
+### 15. Stale copy contradicting shipped features — ✅ FIXED
 
 - Home hero: "and **soon** chat with an AI longevity coach" ([home.html:9](app/templates/home.html#L9)) — it shipped.
 - Admin: "Removal actions will be available soon" ([admin.html:6](app/templates/admin.html#L6)) sits directly above working Delete buttons.
 - `/coach` route docstring: "placeholder page for the future interactive coach experience" ([main.py:434](app/main.py#L434)).
 
-### 16. Chat rendering emits invalid HTML and duplicates the server's markdown
+**Fixed.** The home hero no longer calls the coach future work, the `/coach` docstring
+describes what it is, and the admin console's "removal actions will be available soon"
+went with the P0 lockdown.
+
+### 16. Chat rendering emits invalid HTML and duplicates the server's markdown — ✅ FIXED
 
 [coach.html:478](app/templates/coach.html#L478) assigns block-level markup (`<p>`, `<ul>`, `<ol>`)
 into `body.innerHTML` where `body` is a `<p>` element — browsers silently close the paragraph and
@@ -358,7 +376,13 @@ will drift from the server's `markdown_to_html` filter.
 **Fix:** render into a `<div class="coach-message-body">`; consider having the API return
 pre-rendered, sanitized HTML so there is one renderer.
 
-### 17. The conversation is disposable
+**Fixed.** The invalid `<p>` nesting went with the P1 streaming rewrite. For the duplicate
+renderer, `/api/ask` and the stream's `done` event now return `answer_html` alongside the
+raw Markdown, and the browser displays that — so the server is the single authoritative
+renderer and the small client-side one is demoted to a streaming preview. Sending server
+HTML to the page meant sanitising it first, which closes #24 as well.
+
+### 17. The conversation is disposable — ✅ FIXED
 
 Reload and the transcript is gone. There is no Clear, no Copy, no Retry, no way to keep a useful
 answer. For a coach whose answers take a minute to produce, losing them to an accidental refresh
@@ -367,7 +391,14 @@ is a genuine frustration.
 **Fix:** `sessionStorage` for the transcript, plus copy/clear controls. (Named sessions are the
 natural follow-on once #6 lands.)
 
-### 18. Offline-first claim broken by a CDN stylesheet
+**Fixed.** The transcript is kept in `sessionStorage` for the life of the tab and restored
+on reload (with a note saying so), alongside a per-answer Copy button, a Copy conversation
+button, and a Clear control. Storage access is wrapped so private-browsing quota errors
+degrade to "not kept" rather than breaking the page, and an oversized transcript is trimmed
+to the most recent exchanges. Verified by running the page script against a stub DOM in
+Node: ask → persist → reload → restore → copy → clear → reload.
+
+### 18. Offline-first claim broken by a CDN stylesheet — ✅ FIXED
 
 [base.html:14-17](app/templates/base.html#L14-L17) loads Pico CSS from jsdelivr. The README's
 whole pitch is "iterate offline while keeping sensitive data on the developer machine" — on a
@@ -376,7 +407,12 @@ supporting it and the audience (evening sleep questions) wanting it.
 
 **Fix:** vendor Pico into `app/static/`, add a `prefers-color-scheme` palette.
 
-### 19. Content browsing has no depth
+**Fixed.** Pico is vendored at `app/static/vendor/pico.min.css`, so the site is styled
+offline. The palette became a set of `--liveon-*` tokens defined once in `base.html` and
+flipped by `prefers-color-scheme`; the coach page's literal colours were converted to those
+tokens, since hard-coded values are exactly what breaks a theme.
+
+### 19. Content browsing has no depth — ✅ FIXED
 
 `/articles` and `/tips` are hard-capped at 20 with no pagination, no tag filter, and no search
 ([main.py:381](app/main.py#L381), [main.py:414](app/main.py#L414)) — item 21 is unreachable
@@ -384,16 +420,34 @@ forever. Tags are stored and displayed but not clickable. The article detail pag
 ([articles/detail.html](app/templates/articles/detail.html)) shows no summary, no key-takeaways
 block, and no link back to the list.
 
-### 20. Deleting content takes one click, with no confirmation and no undo
+**Fixed.** `browse_articles`/`browse_tips` on the repository return a `ContentPage` with
+search, exact tag filtering, and pagination (10 per page). SQL does a coarse `LIKE`
+pre-filter and the exact tag comparison happens in Python, because tags live inside the
+stored JSON where `LIKE` alone would match unrelated substrings. The listings gained a
+search box, clickable tag chips, a result summary, and previous/next links that preserve
+the active filters; the tip page drops its featured slot once the reader is filtering. The
+article detail page now leads with the summary, shows clickable tags, and links back.
+
+### 20. Deleting content takes one click, with no confirmation and no undo — ✅ FIXED
 
 See #3. Even after auth is added, this needs a confirm step.
 
-### 21. Question length is unbounded
+**Fixed** as part of #3. Deletion requires authentication, a same-origin submission, and a
+confirmation dialog, and is logged with the acting user. Undo would need soft-delete and is
+not implemented.
+
+### 21. Question length is unbounded — ✅ FIXED
 
 `question: str = Field(...)` ([main.py:163](app/main.py#L163)) has no `max_length`. A pasted
 novel becomes a multi-minute generation that (per #1) freezes the site for everyone. Add
 `max_length` (~2000) with a live character counter on the textarea, plus simple per-IP rate
 limiting on `/api/ask`.
+
+**Fixed.** `max_length=2000` on the question, a live character counter on the textarea
+(turning red near the limit), and a per-client sliding-window rate limit
+(`LIVEON_ASK_RATE_LIMIT`, default 30/minute) on both coach endpoints, answering `429` with
+a `Retry-After`. The limiter is deliberately in-process: it exists to stop one tab or a
+stuck retry loop from monopolising a single local model, not to defend a public API.
 
 ---
 
@@ -419,7 +473,7 @@ a shared connection** (1.08 ms vs 0.010 ms per query locally; worse on the Kuber
 **Fix:** build one repository at startup, store it on `app.state`, and have the dependency return
 it.
 
-### 24. Rendered markdown is never sanitized
+### 24. Rendered markdown is never sanitized — ✅ FIXED (with #16)
 
 `markdown_to_html` returns `Markup(...)` unescaped
 ([utils/text.py:57-64](app/utils/text.py#L57-L64)) over content whose two upstreams are RSS feeds
@@ -427,6 +481,11 @@ and an LLM. The `markdown` library passes raw HTML through by default, so a `<sc
 item or a hallucinated `<img onerror=…>` becomes stored XSS on the article page.
 
 **Fix:** a `bleach`/`nh3` allowlist pass before `Markup`.
+
+**Fixed.** `sanitize_html` in `app/utils/text.py` rebuilds rendered Markdown from an
+allowlist of tags, attributes, and URL schemes, dropping script/style/iframe bodies
+entirely and hardening outbound links. It is stdlib-only (`html.parser`), so no new
+dependency. Closed early because #16 required sending server-rendered HTML to the browser.
 
 ### 25. Deprecated APIs that will break on the next upgrade
 
@@ -495,5 +554,8 @@ copy) are P2 and remain open.
 **Week 3 — make the content real. ✅ Done** for #10–#13. #23 (shared repository) is P3 and
 remains open.
 
-Then P2/P3 as capacity allows. #24 (sanitization) should jump the queue if the site is ever
-exposed beyond localhost.
+**P2 (#14–#21): ✅ Done.** #24 (sanitisation) was pulled forward with it, since #16 required
+sending server-rendered HTML to the browser.
+
+**Remaining: P3**, of which #22 (silent pipeline failures) is still the cheapest win — a
+one-line change that stops a broken publisher from reporting success.

@@ -1,0 +1,23 @@
+{# Previous/next controls preserving the active search and tag filter. #}
+{% if results.total_pages > 1 %}
+  {% set suffix %}{% if query %}&q={{ query | urlencode }}{% endif %}{% if active_tag %}&tag={{ active_tag | urlencode }}{% endif %}{% endset %}
+  <nav class="pagination" aria-label="Pagination">
+    {% if results.has_previous %}
+      <a role="button" class="secondary" href="{{ base_path }}?page={{ results.page - 1 }}{{ suffix }}">
+        ← Newer
+      </a>
+    {% else %}
+      <span></span>
+    {% endif %}
+
+    <span class="pagination-position">Page {{ results.page }} of {{ results.total_pages }}</span>
+
+    {% if results.has_next %}
+      <a role="button" class="secondary" href="{{ base_path }}?page={{ results.page + 1 }}{{ suffix }}">
+        Older →
+      </a>
+    {% else %}
+      <span></span>
+    {% endif %}
+  </nav>
+{% endif %}

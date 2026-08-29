@@ -12,7 +12,13 @@ from types import ModuleType
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import ContentRepository, app, get_coach_agent, get_repository
+from app.main import (
+    ContentRepository,
+    _paginate_in_memory,
+    app,
+    get_coach_agent,
+    get_repository,
+)
 from app.models.coach import CoachAnswer
 from app.models.content import Article, Tip
 from app.services.coach import CoachUnavailableError
@@ -42,6 +48,12 @@ class StubContentRepository(ContentRepository):
     def get_latest_tip(self) -> Tip | None:
         ordered = self.get_latest_tips(limit=1)
         return ordered[0] if ordered else None
+
+    def browse_articles(self, **kwargs: object):
+        return _paginate_in_memory(self.get_latest_articles(limit=1000), **kwargs)
+
+    def browse_tips(self, **kwargs: object):
+        return _paginate_in_memory(self.get_latest_tips(limit=1000), **kwargs)
 
 
 @pytest.fixture()

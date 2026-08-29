@@ -17,6 +17,18 @@
   <section id="coach-app" class="coach-container" aria-label="Longevity coach conversation">
     <div class="coach-widget">
       <section class="coach-conversation" aria-label="Conversation history and input">
+        <div class="coach-toolbar">
+          <p class="coach-toolbar-note" id="coach-restored" hidden>
+            Restored from this browser tab.
+          </p>
+          <button type="button" id="coach-copy" class="secondary coach-tool">
+            Copy conversation
+          </button>
+          <button type="button" id="coach-clear" class="secondary coach-tool">
+            Clear
+          </button>
+        </div>
+
         <section
           id="coach-transcript"
           class="coach-transcript"
@@ -41,9 +53,14 @@
             id="coach-question"
             name="question"
             rows="4"
+            maxlength="{{ max_question_chars }}"
             placeholder="E.g. How can I improve my sleep quality as I age?"
+            aria-describedby="coach-charcount"
             required
           ></textarea>
+          <p id="coach-charcount" class="coach-charcount" aria-live="polite">
+            0 / {{ max_question_chars }}
+          </p>
           <div class="coach-form-actions">
             <span id="coach-status" class="coach-status" role="status" aria-live="polite"></span>
             <button type="button" id="coach-cancel" class="secondary coach-cancel" hidden>
@@ -91,26 +108,26 @@
     }
 
     .coach-widget {
-      background: white;
+      background: var(--liveon-surface);
       border-radius: 1rem;
       padding: 2rem;
-      box-shadow: 0 20px 45px -20px rgba(15, 23, 42, 0.25);
+      box-shadow: var(--liveon-shadow);
       display: grid;
       gap: 2rem;
     }
 
     .coach-header p {
-      color: #334155;
+      color: var(--liveon-muted);
       max-width: 60ch;
     }
 
     .coach-conversation {
       display: grid;
       gap: 1.25rem;
-      background: #f8fafc;
+      background: var(--liveon-surface-alt);
       border-radius: 1rem;
       padding: 1.25rem;
-      border: 1px solid rgba(148, 163, 184, 0.35);
+      border: 1px solid var(--liveon-border);
     }
 
     .coach-form {
@@ -118,11 +135,52 @@
       gap: 1rem;
     }
 
+    .coach-toolbar {
+      align-items: center;
+      display: flex;
+      gap: 0.5rem;
+      justify-content: flex-end;
+    }
+
+    .coach-toolbar-note {
+      color: var(--liveon-muted);
+      font-size: 0.85rem;
+      margin: 0 auto 0 0;
+    }
+
+    .coach-tool {
+      font-size: 0.85rem;
+      margin: 0;
+      padding: 0.35rem 0.8rem;
+      width: auto;
+    }
+
+    .coach-message-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .coach-copy-one {
+      background: none;
+      border: none;
+      color: var(--liveon-muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      margin: 0;
+      padding: 0.15rem 0.35rem;
+      width: auto;
+    }
+
+    .coach-copy-one:hover,
+    .coach-copy-one:focus {
+      color: var(--liveon-accent);
+    }
+
     .coach-suggestions {
       display: grid;
       gap: 0.75rem;
       padding: 1.5rem;
-      background: #f8fafc;
+      background: var(--liveon-surface-alt);
       border-radius: 1rem;
     }
 
@@ -133,7 +191,7 @@
 
     .coach-suggestions-copy {
       margin: 0;
-      color: #475569;
+      color: var(--liveon-muted);
     }
 
     .coach-suggestion-list {
@@ -144,9 +202,9 @@
 
     .coach-suggestion {
       align-items: flex-start;
-      background: white;
+      background: var(--liveon-surface);
       border-radius: 0.85rem;
-      border: 1px solid rgba(148, 163, 184, 0.45);
+      border: 1px solid var(--liveon-border);
       cursor: pointer;
       display: grid;
       gap: 0.35rem;
@@ -158,7 +216,7 @@
 
     .coach-suggestion:focus,
     .coach-suggestion:hover {
-      border-color: #2563eb;
+      border-color: var(--liveon-accent);
       box-shadow: 0 12px 25px -18px rgba(37, 99, 235, 0.45);
       transform: translateY(-1px);
       outline: none;
@@ -166,11 +224,11 @@
 
     .coach-suggestion-label {
       font-weight: 600;
-      color: #111827;
+      color: var(--liveon-text);
     }
 
     .coach-suggestion-description {
-      color: #475569;
+      color: var(--liveon-muted);
       font-size: 0.9rem;
       line-height: 1.4;
       display: block;
@@ -180,16 +238,29 @@
       font-weight: 600;
     }
 
+    .coach-charcount {
+      color: var(--liveon-muted);
+      font-size: 0.8rem;
+      font-variant-numeric: tabular-nums;
+      margin: -0.5rem 0 0;
+      text-align: right;
+    }
+
+    .coach-charcount[data-state="near-limit"] {
+      color: var(--liveon-danger);
+      font-weight: 600;
+    }
+
     .coach-form textarea {
       resize: vertical;
       border-radius: 0.75rem;
-      border: 1px solid rgba(148, 163, 184, 0.5);
+      border: 1px solid var(--liveon-border);
       padding: 1rem;
       font-size: 1rem;
     }
 
     .coach-form textarea:focus {
-      border-color: #1c64f2;
+      border-color: var(--liveon-accent);
       box-shadow: 0 0 0 3px rgba(28, 100, 242, 0.15);
       outline: none;
     }
@@ -202,7 +273,7 @@
     }
 
     .coach-status {
-      color: #475569;
+      color: var(--liveon-muted);
       font-size: 0.9rem;
       font-variant-numeric: tabular-nums;
       margin-right: auto;
@@ -221,7 +292,7 @@
 
     .coach-typing span {
       animation: coach-blink 1.2s infinite ease-in-out both;
-      background: #94a3b8;
+      background: var(--liveon-muted);
       border-radius: 50%;
       display: block;
       height: 0.5rem;
@@ -265,13 +336,13 @@
     }
 
     .coach-error {
-      color: #b91c1c;
+      color: var(--liveon-danger);
       font-weight: 600;
       margin: 0;
     }
 
     .coach-transcript {
-      background: #f1f5f9;
+      background: var(--liveon-surface-sunken);
       border-radius: 1rem;
       padding: 1.5rem;
       display: grid;
@@ -281,16 +352,16 @@
     }
 
     .coach-message {
-      background: white;
+      background: var(--liveon-surface);
       border-radius: 0.85rem;
       padding: 1.25rem;
-      box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
+      box-shadow: inset 0 0 0 1px var(--liveon-border);
       display: grid;
       gap: 0.5rem;
     }
 
     .coach-message--user {
-      background: #1e3a8a;
+      background: var(--liveon-accent);
       color: white;
       margin-left: auto;
       box-shadow: none;
@@ -304,7 +375,7 @@
       font-size: 0.85rem;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: #1f2937;
+      color: var(--liveon-muted);
     }
 
     .coach-message--user .coach-message-meta {
@@ -318,8 +389,8 @@
 
     .coach-message-disclaimer {
       font-size: 0.85rem;
-      color: #1c1917;
-      background: rgba(252, 211, 77, 0.25);
+      color: var(--liveon-notice-text);
+      background: var(--liveon-notice-bg);
       border-radius: 0.65rem;
       padding: 0.75rem;
     }
@@ -382,6 +453,11 @@
       const submitButton = form?.querySelector('button[type="submit"]');
       const cancelButton = app.querySelector('#coach-cancel');
       const statusLabel = app.querySelector('#coach-status');
+      const copyAllButton = app.querySelector('#coach-copy');
+      const clearButton = app.querySelector('#coach-clear');
+      const restoredNote = app.querySelector('#coach-restored');
+      const charCount = app.querySelector('#coach-charcount');
+      const MAX_QUESTION_CHARS = {{ max_question_chars }};
       const defaultButtonLabel = submitButton?.dataset.defaultLabel ?? 'Send question';
       const suggestionButtons = app.querySelectorAll('.coach-suggestion');
 
@@ -560,6 +636,25 @@
         body.className = 'coach-message-body';
         message.appendChild(body);
 
+        let copyText = '';
+        if (role === 'assistant') {
+          const actions = document.createElement('div');
+          actions.className = 'coach-message-actions';
+          const copyButton = document.createElement('button');
+          copyButton.type = 'button';
+          copyButton.className = 'coach-copy-one';
+          copyButton.textContent = 'Copy';
+          copyButton.addEventListener('click', async () => {
+            const copied = await copyToClipboard(copyText);
+            copyButton.textContent = copied ? 'Copied' : 'Copy failed';
+            window.setTimeout(() => {
+              copyButton.textContent = 'Copy';
+            }, 1500);
+          });
+          actions.appendChild(copyButton);
+          message.appendChild(actions);
+        }
+
         transcript.appendChild(message);
         if (focus) {
           message.focus();
@@ -577,19 +672,29 @@
             scrollToLatest();
           },
           setText(text) {
+            copyText = text;
             body.innerHTML = renderMarkdown(text);
             scrollToLatest();
           },
-          setDisclaimer(text) {
-            if (!text) {
+          // The server is the authoritative renderer; renderMarkdown above is only a
+          // preview while tokens are still arriving.
+          setHtml(html, text) {
+            if (text !== undefined) {
+              copyText = text;
+            }
+            body.innerHTML = html;
+            scrollToLatest();
+          },
+          setDisclaimer(text, html) {
+            if (!text && !html) {
               return;
             }
             if (!disclaimerBlock) {
-              disclaimerBlock = document.createElement('p');
+              disclaimerBlock = document.createElement('div');
               disclaimerBlock.className = 'coach-message-disclaimer';
               message.appendChild(disclaimerBlock);
             }
-            disclaimerBlock.innerHTML = renderMarkdown(text);
+            disclaimerBlock.innerHTML = html || renderMarkdown(text);
             scrollToLatest();
           },
         };
@@ -614,6 +719,7 @@
         textarea.value = value;
         textarea.focus();
         textarea.setSelectionRange(value.length, value.length);
+        updateCharCount();
         clearError();
       };
 
@@ -632,6 +738,102 @@
       // The coach is stateless per request, so the transcript is the memory: each
       // question ships the earlier turns and the server applies its own budget.
       const conversation = [];
+
+      // ------------------------------------------------------------------
+      // Persistence
+      // ------------------------------------------------------------------
+      // An answer can take a minute to produce, so losing the transcript to an
+      // accidental refresh is a real cost. sessionStorage keeps it for the life of
+      // the tab without persisting health questions beyond it.
+      const STORAGE_KEY = 'liveon.coach.transcript';
+      const STORAGE_LIMIT = 100000;
+
+      const saveConversation = () => {
+        try {
+          const payload = JSON.stringify(conversation);
+          if (payload.length > STORAGE_LIMIT) {
+            // Keep the most recent exchanges rather than failing outright.
+            const trimmed = conversation.slice(-6);
+            window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+            return;
+          }
+          window.sessionStorage.setItem(STORAGE_KEY, payload);
+        } catch (storageError) {
+          // Private browsing or a full quota: the conversation simply is not kept.
+        }
+      };
+
+      const loadConversation = () => {
+        try {
+          const raw = window.sessionStorage.getItem(STORAGE_KEY);
+          if (!raw) {
+            return [];
+          }
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (storageError) {
+          return [];
+        }
+      };
+
+      const clearConversation = () => {
+        conversation.length = 0;
+        try {
+          window.sessionStorage.removeItem(STORAGE_KEY);
+        } catch (storageError) {
+          // Nothing to clean up.
+        }
+        transcript?.querySelectorAll('.coach-message--restored').forEach((node) => node.remove());
+        while (transcript && transcript.children.length > 1) {
+          transcript.removeChild(transcript.lastElementChild);
+        }
+        if (restoredNote) {
+          restoredNote.hidden = true;
+        }
+        clearError();
+      };
+
+      const copyToClipboard = async (text) => {
+        if (!text) {
+          return false;
+        }
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (clipboardError) {
+          return false;
+        }
+      };
+
+      const conversationAsText = () =>
+        conversation
+          .map((turn) => `${turn.role === 'user' ? 'You' : 'Coach'}: ${turn.text}`)
+          .join('\n\n');
+
+      const restoreConversation = () => {
+        const saved = loadConversation();
+        if (!saved.length) {
+          return;
+        }
+        saved.forEach((turn) => {
+          conversation.push(turn);
+          const handle = createMessage(turn.role === 'user' ? 'user' : 'assistant', {
+            focus: false,
+          });
+          handle?.element.classList.add('coach-message--restored');
+          if (turn.html) {
+            handle?.setHtml(turn.html, turn.text);
+          } else {
+            handle?.setText(turn.text);
+          }
+          if (turn.disclaimer || turn.disclaimerHtml) {
+            handle?.setDisclaimer(turn.disclaimer, turn.disclaimerHtml);
+          }
+        });
+        if (restoredNote) {
+          restoredNote.hidden = false;
+        }
+      };
 
       let activeController = null;
       let elapsedTimer = null;
@@ -744,6 +946,8 @@
                 result = {
                   answer: parsed.data.answer ?? text,
                   disclaimer: parsed.data.disclaimer ?? '',
+                  answerHtml: parsed.data.answer_html ?? '',
+                  disclaimerHtml: parsed.data.disclaimer_html ?? '',
                 };
               } else if (parsed.event === 'error') {
                 const failure = new Error(
@@ -796,7 +1000,12 @@
           failure.detail = typeof detail === 'object' ? detail : null;
           throw failure;
         }
-        return { answer: payload?.answer ?? '', disclaimer: payload?.disclaimer ?? '' };
+        return {
+          answer: payload?.answer ?? '',
+          disclaimer: payload?.disclaimer ?? '',
+          answerHtml: payload?.answer_html ?? '',
+          disclaimerHtml: payload?.disclaimer_html ?? '',
+        };
       };
 
       // ------------------------------------------------------------------
@@ -831,7 +1040,7 @@
         }
 
         appendMessage('user', question);
-        const history = conversation.slice();
+        const history = conversation.map(({ role, text }) => ({ role, text }));
         const answerHandle = createMessage('assistant', { focus: false });
         answerHandle?.showTyping();
 
@@ -842,19 +1051,31 @@
 
         if (textarea) {
           textarea.value = '';
+          updateCharCount();
         }
 
         try {
-          const { answer, disclaimer } = await requestAnswer(
+          const { answer, disclaimer, answerHtml, disclaimerHtml } = await requestAnswer(
             question,
             history,
             controller.signal,
             (partial) => answerHandle?.setText(partial),
           );
-          answerHandle?.setText(answer);
-          answerHandle?.setDisclaimer(disclaimer);
+          if (answerHtml) {
+            answerHandle?.setHtml(answerHtml, answer);
+          } else {
+            answerHandle?.setText(answer);
+          }
+          answerHandle?.setDisclaimer(disclaimer, disclaimerHtml);
           conversation.push({ role: 'user', text: question });
-          conversation.push({ role: 'coach', text: answer });
+          conversation.push({
+            role: 'coach',
+            text: answer,
+            html: answerHtml,
+            disclaimer,
+            disclaimerHtml,
+          });
+          saveConversation();
         } catch (error) {
           if (error.name === 'AbortError') {
             answerHandle?.setText('_Stopped before the coach finished answering._');
@@ -873,6 +1094,7 @@
           // Restore the question so a failed or stopped attempt does not lose it.
           if (textarea && !textarea.value) {
             textarea.value = question;
+            updateCharCount();
           }
         } finally {
           window.clearTimeout(clientTimeout);
@@ -881,6 +1103,37 @@
           textarea?.focus();
         }
       };
+
+      copyAllButton?.addEventListener('click', async () => {
+        const copied = await copyToClipboard(conversationAsText());
+        const original = copyAllButton.textContent;
+        copyAllButton.textContent = copied ? 'Copied' : 'Nothing to copy';
+        window.setTimeout(() => {
+          copyAllButton.textContent = original;
+        }, 1500);
+      });
+
+      clearButton?.addEventListener('click', () => {
+        if (conversation.length && !window.confirm('Clear this conversation?')) {
+          return;
+        }
+        clearConversation();
+        textarea?.focus();
+      });
+
+      const updateCharCount = () => {
+        if (!charCount || !textarea) {
+          return;
+        }
+        const used = textarea.value.length;
+        charCount.textContent = `${used} / ${MAX_QUESTION_CHARS}`;
+        charCount.dataset.state = used > MAX_QUESTION_CHARS * 0.9 ? 'near-limit' : '';
+      };
+
+      textarea?.addEventListener('input', updateCharCount);
+      updateCharCount();
+
+      restoreConversation();
 
       form?.addEventListener('submit', handleSubmit);
       form?.addEventListener('keydown', (event) => {

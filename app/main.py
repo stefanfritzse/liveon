@@ -1,12 +1,14 @@
 """FastAPI web application for the Live On Longevity Coach platform"""
 
 from __future__ import annotations
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable
 from functools import lru_cache
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import asyncio
 import json
+import time
 import logging
 import os
 import secrets
@@ -22,12 +24,13 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.coach import COACH_ROLE, USER_ROLE, CoachQuestion, CoachTurn
-from app.models.content import Article, Tip
+from app.models.content import Article, ContentPage, Tip
 from app.services.coach import (
     CoachAgent,
     CoachError,
@@ -157,6 +160,82 @@ async def _run_with_deadline(func: Callable[..., object], *args: object, timeout
     return task.result()
 
 
+class _SlidingWindowRateLimiter:
+    """Per-client request budget over a rolling window.
+
+    Deliberately in-process and in-memory: it exists to stop one browser tab (or a
+    stuck retry loop) from monopolising a single local model, not to defend a public
+    API. Multiple workers each get their own budget.
+    """
+
+    def __init__(self, *, limit: int, window_seconds: float) -> None:
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self._hits: dict[str, deque[float]] = defaultdict(deque)
+
+    def check(self, key: str, *, now: float | None = None) -> float | None:
+        """Record a request; return seconds to wait when the budget is exhausted."""
+
+        if self.limit <= 0:
+            return None
+
+        moment = time.monotonic() if now is None else now
+        hits = self._hits[key]
+        cutoff = moment - self.window_seconds
+        while hits and hits[0] <= cutoff:
+            hits.popleft()
+
+        if len(hits) >= self.limit:
+            return max(0.0, hits[0] + self.window_seconds - moment)
+
+        hits.append(moment)
+        return None
+
+    def reset(self) -> None:
+        self._hits.clear()
+
+
+def _resolve_rate_limit() -> int:
+    raw = (os.getenv("LIVEON_ASK_RATE_LIMIT") or "").strip()
+    if not raw:
+        return 30
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 30
+
+
+coach_rate_limiter = _SlidingWindowRateLimiter(limit=_resolve_rate_limit(), window_seconds=60.0)
+
+
+def _client_key(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def enforce_coach_rate_limit(request: Request) -> None:
+    """Reject a client that is asking faster than the budget allows."""
+
+    retry_after = coach_rate_limiter.check(_client_key(request))
+    if retry_after is None:
+        return
+
+    logger.warning(
+        "Coach rate limit exceeded",
+        extra={"event": "coach.rate_limited", "client": _client_key(request)},
+    )
+    raise HTTPException(
+        status_code=429,
+        detail={
+            "message": (
+                "You're asking faster than the coach can answer. "
+                "Give it a moment and try again."
+            ),
+            "retry_after": int(retry_after) + 1,
+        },
+        headers={"Retry-After": str(int(retry_after) + 1)},
+    )
+
+
 def _debug_errors_enabled() -> bool:
     """Return ``True`` when exception details may be sent to the client."""
 
@@ -184,6 +263,101 @@ def _error_detail(message: str, exc: Exception, *, event: str) -> dict[str, obje
     if _debug_errors_enabled():
         detail["debug"] = _build_debug_detail(exc)
     return detail
+
+
+# ----------------------------------------------------------------------
+# Error presentation
+# ----------------------------------------------------------------------
+# A visitor who mistypes an article URL used to get raw JSON with no header, no
+# navigation, and no way back. Browsers get a styled page; API clients keep JSON.
+
+_ERROR_HEADINGS: dict[int, tuple[str, str]] = {
+    400: ("That request didn't look right", "Something about that request was malformed."),
+    401: ("Sign in to continue", "This area needs credentials."),
+    403: ("Not allowed", "You don't have access to that."),
+    404: ("Page not found", "We couldn't find what you were looking for."),
+    429: ("Slow down a moment", "You're sending requests faster than we can answer them."),
+    500: ("Something went wrong", "An unexpected error occurred on our side."),
+    503: ("Temporarily unavailable", "This part of the site isn't available right now."),
+    504: ("That took too long", "The request timed out before it completed."),
+}
+
+
+def _wants_json(request: Request) -> bool:
+    """Return ``True`` when the caller is an API client rather than a browser."""
+
+    path = request.url.path
+    if path.startswith("/api/") or path == "/healthz":
+        return True
+
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return False
+    # An explicit JSON preference, or a non-browser client that stated nothing useful.
+    return "application/json" in accept or not accept
+
+
+def _describe_error(status_code: int, detail: object) -> tuple[str, str, str | None]:
+    """Return the heading, message, and reference id to show for an error."""
+
+    heading, fallback = _ERROR_HEADINGS.get(
+        status_code, ("Something went wrong", "An unexpected error occurred.")
+    )
+
+    reference: str | None = None
+    message = fallback
+    if isinstance(detail, dict):
+        message = str(detail.get("message") or fallback)
+        raw_reference = detail.get("reference")
+        reference = str(raw_reference) if raw_reference else None
+    elif isinstance(detail, str) and detail.strip():
+        message = detail.strip()
+
+    return heading, message, reference
+
+
+def _render_error_page(
+    request: Request,
+    status_code: int,
+    detail: object,
+    headers: dict[str, str] | None = None,
+) -> HTMLResponse:
+    heading, message, reference = _describe_error(status_code, detail)
+    return templates.TemplateResponse(
+        request,
+        "errors/error.html",
+        {
+            "title": heading,
+            "heading": heading,
+            "message": message,
+            "status_code": status_code,
+            "reference": reference,
+        },
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    headers = getattr(exc, "headers", None)
+    if _wants_json(request):
+        return JSONResponse(
+            {"detail": exc.detail}, status_code=exc.status_code, headers=headers
+        )
+    # Headers are preserved so, for example, a 401 still triggers the browser's
+    # credential prompt rather than just showing a page about it.
+    return _render_error_page(request, exc.status_code, exc.detail, headers)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    detail = _error_detail(
+        "An unexpected error occurred.", exc, event="app.unhandled_error"
+    )
+    if _wants_json(request):
+        return JSONResponse({"detail": detail}, status_code=500)
+    return _render_error_page(request, 500, detail)
 
 
 @app.on_event("startup")
@@ -247,6 +421,10 @@ def get_coach_agent() -> CoachAgent:
 _MAX_HISTORY_TURN_CHARS = 4000
 _MAX_HISTORY_TURNS_ACCEPTED = 40
 
+#: Ceiling on a single question. A pasted novel becomes a multi-minute generation that
+#: occupies a worker and the model for everyone else.
+MAX_QUESTION_CHARS = 2000
+
 
 class CoachHistoryTurn(BaseModel):
     """One earlier message in the conversation, as supplied by the client."""
@@ -268,7 +446,11 @@ class CoachHistoryTurn(BaseModel):
 class AskCoachRequest(BaseModel):
     """API payload submitted by clients requesting coach guidance."""
 
-    question: str = Field(..., description="The longevity-related question to ask the coach.")
+    question: str = Field(
+        ...,
+        max_length=MAX_QUESTION_CHARS,
+        description="The longevity-related question to ask the coach.",
+    )
     history: list[CoachHistoryTurn] = Field(
         default_factory=list,
         max_length=_MAX_HISTORY_TURNS_ACCEPTED,
@@ -299,16 +481,25 @@ class AskCoachRequest(BaseModel):
 
 
 class AskCoachResponse(BaseModel):
-    """Structured response returned by the coach endpoint."""
+    """Structured response returned by the coach endpoint.
+
+    Both the raw Markdown and the rendered HTML are returned. The browser displays
+    the HTML, which keeps the server as the single authoritative renderer; the
+    lightweight client-side renderer is only a preview while tokens stream in.
+    """
 
     answer: str = Field(..., description="The coach's guidance for the submitted question.")
     disclaimer: str = Field(..., description="Safety disclaimer appended to every response.")
+    answer_html: str = Field("", description="``answer`` rendered to sanitised HTML.")
+    disclaimer_html: str = Field("", description="``disclaimer`` rendered to sanitised HTML.")
 
     @classmethod
     def from_coach_answer(cls, answer: "CoachAnswer") -> "AskCoachResponse":
         return cls(
             answer=answer.message,
             disclaimer=answer.disclaimer,
+            answer_html=str(markdown_to_html(answer.message)),
+            disclaimer_html=str(markdown_to_html(answer.disclaimer)),
         )
 
 
@@ -332,6 +523,26 @@ class ContentRepository(Protocol):
 
     def delete_tip(self, tip_id: str) -> bool:
         """Remove a tip, returning ``True`` when a row was deleted."""
+
+    def browse_articles(
+        self,
+        *,
+        query: str | None = None,
+        tag: str | None = None,
+        page: int = 1,
+        per_page: int = 10,
+    ) -> ContentPage:
+        """Return a filtered, paginated page of articles."""
+
+    def browse_tips(
+        self,
+        *,
+        query: str | None = None,
+        tag: str | None = None,
+        page: int = 1,
+        per_page: int = 10,
+    ) -> ContentPage:
+        """Return a filtered, paginated page of tips."""
 
 
 @dataclass(slots=True)
@@ -389,6 +600,79 @@ class _InMemoryContentRepository:
         before = len(self._tips)
         self._tips = [tip for tip in self._tips if tip.id != tip_id]
         return len(self._tips) != before
+
+    def browse_articles(self, **kwargs: object) -> ContentPage:
+        return _paginate_in_memory(self.get_latest_articles(limit=1000), **kwargs)
+
+    def browse_tips(self, **kwargs: object) -> ContentPage:
+        return _paginate_in_memory(self.get_latest_tips(limit=1000), **kwargs)
+
+def _paginate_in_memory(
+    items: list,
+    *,
+    query: str | None = None,
+    tag: str | None = None,
+    page: int = 1,
+    per_page: int = 10,
+) -> ContentPage:
+    """Filter and slice an in-memory list the same way the SQLite repository does."""
+
+    page = max(1, int(page))
+    per_page = max(1, int(per_page))
+
+    cleaned_query = (query or "").strip().casefold()
+    cleaned_tag = (tag or "").strip().casefold()
+
+    matches = []
+    tags: list[str] = []
+    for item in items:
+        for value in getattr(item, "tags", []) or []:
+            if value not in tags:
+                tags.append(value)
+        if cleaned_tag and not any(
+            value.casefold() == cleaned_tag for value in getattr(item, "tags", []) or []
+        ):
+            continue
+        if cleaned_query:
+            haystack = " ".join(
+                str(part or "")
+                for part in (
+                    item.title,
+                    getattr(item, "summary", ""),
+                    item.content_body,
+                    " ".join(getattr(item, "tags", []) or []),
+                )
+            ).casefold()
+            if cleaned_query not in haystack:
+                continue
+        matches.append(item)
+
+    start = (page - 1) * per_page
+    return ContentPage(
+        items=matches[start : start + per_page],
+        total=len(matches),
+        page=page,
+        per_page=per_page,
+        available_tags=tags,
+    )
+
+
+#: Items shown per page on the article and tip listings.
+ITEMS_PER_PAGE = 10
+
+
+def _browse_params(
+    q: str | None, tag: str | None, page: int
+) -> dict[str, object]:
+    """Normalise the shared listing query parameters."""
+
+    return {
+        "query": (q or "").strip() or None,
+        "tag": (tag or "").strip() or None,
+        "page": max(1, page),
+        "per_page": ITEMS_PER_PAGE,
+    }
+
 
 def get_repository() -> ContentRepository:
     """Resolve the content repository (SQLite only)."""
@@ -456,6 +740,7 @@ async def fetch_latest_tip(
 async def ask_coach_endpoint(
     payload: AskCoachRequest,
     agent: CoachAgent = Depends(get_coach_agent),
+    _rate_limit: None = Depends(enforce_coach_rate_limit),
 ) -> AskCoachResponse:
     """Handle Ask the Coach API queries and return structured guidance."""
 
@@ -565,6 +850,7 @@ def _coach_error_event(exc: Exception) -> str:
 async def ask_coach_stream_endpoint(
     payload: AskCoachRequest,
     agent: CoachAgent = Depends(get_coach_agent),
+    _rate_limit: None = Depends(enforce_coach_rate_limit),
 ) -> StreamingResponse:
     """Stream the coach's answer as server-sent events.
 
@@ -628,7 +914,15 @@ async def ask_coach_stream_endpoint(
             message, disclaimer = separate_disclaimer(
                 "".join(collected), default=agent.default_disclaimer
             )
-            yield _sse("done", {"answer": message, "disclaimer": disclaimer})
+            yield _sse(
+                "done",
+                {
+                    "answer": message,
+                    "disclaimer": disclaimer,
+                    "answer_html": str(markdown_to_html(message)),
+                    "disclaimer_html": str(markdown_to_html(disclaimer)),
+                },
+            )
         finally:
             # The worker cannot be interrupted; abandon it rather than block shutdown.
             if not worker.done():
@@ -645,17 +939,25 @@ async def ask_coach_stream_endpoint(
 @app.get("/articles", response_class=HTMLResponse)
 async def list_articles(
     request: Request,
+    q: str | None = None,
+    tag: str | None = None,
+    page: int = 1,
     repository: ContentRepository = Depends(get_repository),
 ) -> HTMLResponse:
-    """Render a page containing the latest longevity articles."""
+    """Render the article listing, filtered and paginated."""
 
-    articles = repository.get_latest_articles(limit=20)
+    params = _browse_params(q, tag, page)
+    results = repository.browse_articles(**params)
     return templates.TemplateResponse(
         request,
         "articles/list.html",
         {
             "title": "Longevity Articles",
-            "articles": articles,
+            "articles": results.items,
+            "results": results,
+            "query": params["query"] or "",
+            "active_tag": params["tag"],
+            "base_path": f"{request.scope.get('root_path', '')}/articles",
         },
     )
 
@@ -685,13 +987,24 @@ async def article_detail(
 @app.get("/tips", response_class=HTMLResponse)
 async def list_tips(
     request: Request,
+    q: str | None = None,
+    tag: str | None = None,
+    page: int = 1,
     repository: ContentRepository = Depends(get_repository),
 ) -> HTMLResponse:
-    """Render a page containing the latest coaching tips."""
+    """Render the tip listing, filtered and paginated."""
 
-    tips = repository.get_latest_tips(limit=20)
-    featured_tip = tips[0] if tips else None
-    recent_tips = tips[1:] if len(tips) > 1 else []
+    params = _browse_params(q, tag, page)
+    results = repository.browse_tips(**params)
+
+    # The featured slot only makes sense on an unfiltered first page; once the reader
+    # is searching, every match should be presented the same way.
+    is_default_view = (
+        params["page"] == 1 and not params["query"] and not params["tag"]
+    )
+    featured_tip = results.items[0] if (is_default_view and results.items) else None
+    recent_tips = results.items[1:] if featured_tip else results.items
+
     return templates.TemplateResponse(
         request,
         "tips/list.html",
@@ -699,13 +1012,17 @@ async def list_tips(
             "title": "Longevity Tips",
             "featured_tip": featured_tip,
             "recent_tips": recent_tips,
+            "results": results,
+            "query": params["query"] or "",
+            "active_tag": params["tag"],
+            "base_path": f"{request.scope.get('root_path', '')}/tips",
         },
     )
 
 
 @app.get("/coach", response_class=HTMLResponse)
 async def ask_the_coach(request: Request) -> HTMLResponse:
-    """Render the placeholder page for the future interactive coach experience."""
+    """Render the conversational coach page."""
 
     return templates.TemplateResponse(
         request,
@@ -716,6 +1033,7 @@ async def ask_the_coach(request: Request) -> HTMLResponse:
             # Give the server's own deadline a chance to answer first, so the user
             # sees the explanatory 504 rather than a bare client-side abort.
             "coach_timeout_ms": int(resolve_llm_timeout() * 1000) + 15_000,
+            "max_question_chars": MAX_QUESTION_CHARS,
         },
     )
 

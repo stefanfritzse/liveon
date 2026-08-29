@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block hero %}
+  <h1>{{ heading }}</h1>
+  <p>{{ message }}</p>
+{% endblock %}
+
+{% block content %}
+  <section class="error-page">
+    <p class="error-code" aria-hidden="true">{{ status_code }}</p>
+
+    <p>Here are some places to pick up from:</p>
+    <ul class="error-links">
+      <li><a href="{{ request.scope.get('root_path', '') }}/">Homepage</a></li>
+      <li><a href="{{ request.scope.get('root_path', '') }}/articles">Longevity articles</a></li>
+      <li><a href="{{ request.scope.get('root_path', '') }}/tips">Coaching tips</a></li>
+      <li><a href="{{ request.scope.get('root_path', '') }}/coach">Ask the coach</a></li>
+    </ul>
+
+    {% if reference %}
+      <p class="article-meta">
+        If you report this, quote reference <code>{{ reference }}</code>.
+      </p>
+    {% endif %}
+  </section>
+
+  <style>
+    .error-page {
+      background: var(--liveon-surface, #ffffff);
+      border-radius: 1rem;
+      padding: 2rem;
+      box-shadow: 0 20px 45px -30px rgba(15, 23, 42, 0.35);
+    }
+
+    .error-code {
+      font-size: 3rem;
+      font-weight: 700;
+      line-height: 1;
+      margin: 0 0 1rem;
+      color: var(--liveon-muted, #64748b);
+    }
+
+    .error-links {
+      margin: 0 0 1rem;
+      padding-left: 1.25rem;
+      display: grid;
+      gap: 0.35rem;
+    }
+  </style>
+{% endblock %}

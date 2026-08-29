@@ -6,6 +6,10 @@
 {% endblock %}
 
 {% block content %}
+  {% with search_placeholder = "Search tips" %}
+    {% include "partials/browse_controls.html" %}
+  {% endwith %}
+
   {% if featured_tip %}
     <section class="tip-feature">
       <article>
@@ -18,16 +22,20 @@
           {{ featured_tip.content_body | markdown_to_html }}
         </div>
         {% if featured_tip.tags %}
-          <footer><strong>Tags:</strong> {{ featured_tip.tags | join(', ') }}</footer>
+          <footer>
+            <ul class="tag-list">
+              {% for tag in featured_tip.tags %}
+                <li><a class="tag-chip" href="{{ base_path }}?tag={{ tag | urlencode }}">{{ tag }}</a></li>
+              {% endfor %}
+            </ul>
+          </footer>
         {% endif %}
       </article>
     </section>
-  {% else %}
-    <p class="empty-state">No tips have been published yet. Check back soon or return to the <a href="{{ request.scope.get('root_path', '') }}/">homepage</a> for platform updates.</p>
   {% endif %}
 
   {% if recent_tips %}
-    <h2>Earlier tips</h2>
+    {% if featured_tip %}<h2>Earlier tips</h2>{% endif %}
     <div class="card-grid">
       {% for tip in recent_tips %}
         <article>
@@ -44,20 +52,28 @@
             <summary>Expand full guidance</summary>
             {{ tip.content_body | markdown_to_html }}
           </details>
-          {% else %}
-          <div class="tip-body">
-            {{ tip.content_body | markdown_to_html }}
-          </div>
           {% endif %}
           {% if tip.tags %}
-            <footer><strong>Tags:</strong> {{ tip.tags | join(', ') }}</footer>
+            <footer>
+              <ul class="tag-list">
+                {% for tag in tip.tags %}
+                  <li><a class="tag-chip" href="{{ base_path }}?tag={{ tag | urlencode }}">{{ tag }}</a></li>
+                {% endfor %}
+              </ul>
+            </footer>
           {% endif %}
         </article>
       {% endfor %}
     </div>
-  {% elif featured_tip %}
-    <p class="empty-state">You're all caught up—more coaching tips will appear here as they are published.</p>
+  {% elif not featured_tip %}
+    {% if query or active_tag %}
+      <p class="empty-state">
+        Nothing matched that search. <a href="{{ base_path }}">Show all tips</a>.
+      </p>
+    {% else %}
+      <p class="empty-state">No tips have been published yet. Check back soon or return to the <a href="{{ request.scope.get('root_path', '') }}/">homepage</a> for platform updates.</p>
+    {% endif %}
   {% endif %}
 
-  <p><a href="{{ request.scope.get('root_path', '') }}/">Back to homepage</a></p>
+  {% include "partials/pagination.html" %}
 {% endblock %}

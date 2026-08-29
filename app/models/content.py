@@ -182,3 +182,38 @@ class Tip:
 
 
 ContentItem = Article | Tip
+
+
+@dataclass(slots=True)
+class ContentPage:
+    """One page of browsable content, plus what the filter UI needs to render."""
+
+    items: list[Any]
+    total: int
+    page: int
+    per_page: int
+    available_tags: list[str] = field(default_factory=list)
+
+    @property
+    def total_pages(self) -> int:
+        if self.per_page <= 0:
+            return 1
+        return max(1, -(-self.total // self.per_page))
+
+    @property
+    def has_previous(self) -> bool:
+        return self.page > 1
+
+    @property
+    def has_next(self) -> bool:
+        return self.page < self.total_pages
+
+    @property
+    def first_index(self) -> int:
+        """1-based index of the first item on this page (0 when empty)."""
+
+        return 0 if not self.items else (self.page - 1) * self.per_page + 1
+
+    @property
+    def last_index(self) -> int:
+        return 0 if not self.items else self.first_index + len(self.items) - 1

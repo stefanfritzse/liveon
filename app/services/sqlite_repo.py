@@ -22,6 +22,7 @@ Default location (if not provided):  ~/liveon/data/content.db
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,7 +35,7 @@ from datetime import datetime, date, timezone
 from pathlib import Path
 
 # Model types
-from app.models.content import Article, Tip
+from app.models.content import Article, ContentPage, Tip
 
 # Try to reuse the aggregator’s normalization if available
 try:
@@ -443,6 +444,114 @@ class LocalSQLiteContentRepository:
                 (tip_id,),
             )
         return cursor.rowcount > 0
+
+    # --- Browsing ---------------------------------------------------------------
+
+    def browse_articles(
+        self,
+        *,
+        query: str | None = None,
+        tag: str | None = None,
+        page: int = 1,
+        per_page: int = 10,
+    ) -> ContentPage:
+        """Return a filtered, paginated page of articles."""
+
+        return self._browse(
+            self._article_table, self._row_to_article, query=query, tag=tag,
+            page=page, per_page=per_page,
+        )
+
+    def browse_tips(
+        self,
+        *,
+        query: str | None = None,
+        tag: str | None = None,
+        page: int = 1,
+        per_page: int = 10,
+    ) -> ContentPage:
+        """Return a filtered, paginated page of tips."""
+
+        return self._browse(
+            self._tip_table, self._row_to_tip, query=query, tag=tag,
+            page=page, per_page=per_page,
+        )
+
+    def _browse(
+        self,
+        table: str,
+        to_model: Any,
+        *,
+        query: str | None,
+        tag: str | None,
+        page: int,
+        per_page: int,
+    ) -> ContentPage:
+        """Filter, count, and slice one content table.
+
+        SQL narrows the candidates with a cheap ``LIKE`` over the stored document;
+        the exact tag match then happens in Python, because tags live inside the JSON
+        blob where ``LIKE`` alone would match substrings of unrelated fields.
+        """
+
+        page = max(1, int(page))
+        per_page = max(1, int(per_page))
+
+        sql = f"""
+            SELECT id, data FROM {table}
+            {{where}}
+            ORDER BY
+              CASE WHEN published_date IS NULL THEN 1 ELSE 0 END,
+              published_date DESC,
+              created_at DESC;
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        cleaned_query = (query or "").strip()
+        if cleaned_query:
+            clauses.append("data LIKE ?")
+            params.append(f"%{cleaned_query}%")
+
+        cleaned_tag = (tag or "").strip()
+        if cleaned_tag:
+            # Coarse pre-filter; the exact comparison happens below.
+            clauses.append("data LIKE ?")
+            params.append(f"%{cleaned_tag}%")
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(sql.format(where=where), params).fetchall()
+
+        matches = []
+        for row in rows:
+            model = to_model(row)
+            if cleaned_tag and not any(
+                existing.casefold() == cleaned_tag.casefold() for existing in model.tags
+            ):
+                continue
+            matches.append(model)
+
+        total = len(matches)
+        start = (page - 1) * per_page
+        return ContentPage(
+            items=matches[start : start + per_page],
+            total=total,
+            page=page,
+            per_page=per_page,
+            available_tags=self._collect_tags(table),
+        )
+
+    def _collect_tags(self, table: str, *, limit: int = 30) -> list[str]:
+        """Return the most common tags in ``table``, for the filter chips."""
+
+        counter: Counter[str] = Counter()
+        rows = self._conn.execute(f"SELECT data FROM {table};").fetchall()
+        for row in rows:
+            data = _json_or_none(row["data"]) or {}
+            for value in data.get("tags") or []:
+                if isinstance(value, str) and value.strip():
+                    counter[value.strip()] += 1
+        return [tag for tag, _count in counter.most_common(limit)]
 
     # --- Seed utility -----------------------------------------------------------
 
