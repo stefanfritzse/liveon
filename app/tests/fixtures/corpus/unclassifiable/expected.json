@@ -1,0 +1,8 @@
+{
+  "description": "Nothing indexed. G10 blocks it: unknown is a blocking answer.",
+  "source_key": "doi:10.1001/corpus.unindexed",
+  "design": "unknown",
+  "subject": "unknown",
+  "retraction_state": "none",
+  "publishable": false
+}

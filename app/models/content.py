@@ -110,6 +110,9 @@ class Article:
     evidence_keys: list[str] = field(default_factory=list)
     evidence_grade: str | None = None
     evidence_summary: str | None = None
+    #: The limitations the reviewed claims carried. Shown to readers, because a grade
+    #: without its caveats is a score rather than an explanation.
+    evidence_limitations: list[str] = field(default_factory=list)
     id: str | None = None
 
     @property
@@ -134,6 +137,7 @@ class Article:
             "evidence_keys": list(self.evidence_keys),
             "evidence_grade": self.evidence_grade,
             "evidence_summary": self.evidence_summary,
+            "evidence_limitations": list(self.evidence_limitations),
         }
         if self.id:
             payload["id"] = self.id
@@ -162,6 +166,7 @@ class Article:
             evidence_keys=_listify_strings(data.get("evidence_keys")),
             evidence_grade=_optional_str(data.get("evidence_grade")),
             evidence_summary=_optional_str(data.get("evidence_summary")),
+            evidence_limitations=_listify_strings(data.get("evidence_limitations")),
             id=doc_id,
         )
 
@@ -182,6 +187,7 @@ class Tip:
     evidence_keys: list[str] = field(default_factory=list)
     evidence_grade: str | None = None
     evidence_summary: str | None = None
+    evidence_limitations: list[str] = field(default_factory=list)
     id: str | None = None
 
     @property
@@ -199,6 +205,7 @@ class Tip:
             "evidence_keys": list(self.evidence_keys),
             "evidence_grade": self.evidence_grade,
             "evidence_summary": self.evidence_summary,
+            "evidence_limitations": list(self.evidence_limitations),
         }
         if self.id:
             payload["id"] = self.id
@@ -224,6 +231,7 @@ class Tip:
             evidence_keys=_listify_strings(data.get("evidence_keys")),
             evidence_grade=_optional_str(data.get("evidence_grade")),
             evidence_summary=_optional_str(data.get("evidence_summary")),
+            evidence_limitations=_listify_strings(data.get("evidence_limitations")),
             id=doc_id,
         )
 

@@ -12,10 +12,12 @@
       <p class="article-summary">{{ article.summary | markdown_to_text }}</p>
     {% endif %}
 
+    {% with item = article %}{% include "partials/evidence_panel.html" %}{% endwith %}
+
     {{ article.content_body | markdown_to_html }}
 
     {% if article.source_urls %}
-      <h4>Sources</h4>
+      <h4>{% if article.evidence_assessed %}Studies cited{% else %}Sources{% endif %}</h4>
       <ul>
         {% for url in article.source_urls %}
           <li><a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></li>
@@ -40,6 +42,42 @@
   </article>
 
   <style>
+    .evidence-panel {
+      background: var(--liveon-surface, rgba(127, 127, 127, 0.06));
+      border: 1px solid var(--liveon-border);
+      border-radius: 6px;
+      margin: 0 0 1.75rem;
+      padding: 0.9rem 1.1rem;
+    }
+
+    .evidence-heading {
+      font-size: 0.8rem;
+      letter-spacing: 0.08em;
+      margin: 0 0 0.35rem;
+      text-transform: uppercase;
+    }
+
+    .evidence-summary {
+      font-weight: 600;
+      margin: 0;
+    }
+
+    .evidence-caveat {
+      color: var(--liveon-muted);
+      margin: 0.75rem 0 0.25rem;
+    }
+
+    .evidence-limitations {
+      color: var(--liveon-muted);
+      margin: 0;
+      padding-left: 1.2rem;
+    }
+
+    .evidence-unassessed .evidence-summary {
+      color: var(--liveon-muted);
+      font-weight: 400;
+    }
+
     .article-summary {
       border-left: 3px solid var(--liveon-accent);
       color: var(--liveon-muted);

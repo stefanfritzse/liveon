@@ -18,6 +18,7 @@
           <h2>{{ featured_tip.title }}</h2>
           <p class="article-meta">Published {{ featured_tip.published_date.strftime("%B %d, %Y") }}</p>
         </header>
+        {% with item = featured_tip %}{% include "partials/evidence_panel.html" %}{% endwith %}
         <div class="tip-body">
           {{ featured_tip.content_body | markdown_to_html }}
         </div>
@@ -41,7 +42,10 @@
         <article>
           <header>
             <h3>{{ tip.title }}</h3>
-            <p class="article-meta">Published {{ tip.published_date.strftime("%B %d, %Y") }}</p>
+            <p class="article-meta">
+              Published {{ tip.published_date.strftime("%B %d, %Y") }}
+              {% with item = tip %}{% include "partials/evidence_badge.html" %}{% endwith %}
+            </p>
           </header>
           {% set snippet = tip.content_body | markdown_to_text %}
           <p>

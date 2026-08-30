@@ -1,0 +1,31 @@
+<?xml version="1.0" ?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">40000011</PMID>
+      <Article>
+        <Journal><Title>Journal of Longevity Research</Title>
+          <JournalIssue><PubDate><Year>2026</Year><Month>Jan</Month></PubDate></JournalIssue>
+        </Journal>
+        <ArticleTitle>A supplement reverses ageing in adults</ArticleTitle>
+        <Abstract>
+        <AbstractText>Treated adults gained 9 years of biological age reversal.</AbstractText>
+        </Abstract>
+        <PublicationTypeList>
+        <PublicationType>Journal Article</PublicationType>
+        </PublicationTypeList>
+        <ArticleDate DateType="Electronic"><Year>2026</Year><Month>01</Month><Day>15</Day></ArticleDate>
+      </Article>
+      <MeshHeadingList>
+      <MeshHeading><DescriptorName>Humans</DescriptorName></MeshHeading>
+      </MeshHeadingList>
+      <CommentsCorrectionsList>
+        <CommentsCorrections RefType="RetractionIn"><RefSource>J Longev Res. 2026;9(2):1</RefSource></CommentsCorrections>
+      </CommentsCorrectionsList>
+    </MedlineCitation>
+    <PubmedData><ArticleIdList>
+        <ArticleId IdType="pubmed">40000011</ArticleId>
+        <ArticleId IdType="doi">10.1001/corpus.retracted</ArticleId>
+    </ArticleIdList></PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>

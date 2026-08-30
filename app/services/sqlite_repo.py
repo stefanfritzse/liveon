@@ -25,14 +25,12 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 import json
 import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Final
 from datetime import datetime, date, timezone
-from pathlib import Path
 
 # Model types
 from app.models.content import Article, ContentPage, Tip
@@ -61,6 +59,17 @@ except Exception:  # pragma: no cover - defensive fallback
 
 
 DEFAULT_DB_PATH: Final[Path] = Path.home() / "liveon" / "data" / "content.db"
+
+
+def hide_legacy_content() -> bool:
+    """Whether to hide content published before the evidence layer existed.
+
+    The default is to keep it, badged as unassessed: hiding the archive loses real work,
+    and a reader who can see the badge can judge it. Operators who would rather show only
+    reviewed content set ``LIVEON_HIDE_LEGACY=1``.
+    """
+
+    return (os.getenv("LIVEON_HIDE_LEGACY") or "").strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_ARTICLES_TABLE: Final[str] = "articles"
 DEFAULT_TIPS_TABLE: Final[str] = "tips"
 DEFAULT_ARTICLES_COLLECTION: Final[str] = "articles"
@@ -528,12 +537,17 @@ class LocalSQLiteContentRepository:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._conn.execute(sql.format(where=where), params).fetchall()
 
+        skip_legacy = hide_legacy_content()
+
         matches = []
         for row in rows:
             model = to_model(row)
             if cleaned_tag and not any(
                 existing.casefold() == cleaned_tag.casefold() for existing in model.tags
             ):
+                continue
+            # Filtered before the count, so pagination stays honest.
+            if skip_legacy and not model.evidence_assessed:
                 continue
             matches.append(model)
 

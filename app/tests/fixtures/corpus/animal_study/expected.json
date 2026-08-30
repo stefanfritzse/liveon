@@ -1,0 +1,8 @@
+{
+  "description": "Preclinical. Must never be written up as a human benefit.",
+  "source_key": "doi:10.1001/corpus.mouse",
+  "design": "preclinical",
+  "subject": "animal",
+  "retraction_state": "none",
+  "publishable": true
+}

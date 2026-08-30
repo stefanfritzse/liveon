@@ -1,0 +1,8 @@
+{
+  "description": "An association. Causal language about it must be refused.",
+  "source_key": "doi:10.1001/corpus.cohort",
+  "design": "prospective_cohort",
+  "subject": "human",
+  "retraction_state": "none",
+  "publishable": true
+}

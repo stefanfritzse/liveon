@@ -405,7 +405,32 @@ class PipelineScheduler:
     async def start(self) -> None:
         if self._task is not None:
             return
+        self._prune_run_log()
         self._task = asyncio.create_task(self.run_forever())
+
+    def _prune_run_log(self) -> None:
+        """Drop run records past the retention window.
+
+        Done at start-up rather than on a timer: the log grows by a handful of rows a day,
+        so anything more eager would be machinery for its own sake.
+        """
+
+        try:
+            from app.services.evidence.runlog import RunLog
+
+            with RunLog(_resolve_db_path()) as log:
+                removed = log.prune()
+            if removed:
+                logger.info(
+                    "Pruned %s expired pipeline run(s)",
+                    removed,
+                    extra={"event": "pipeline_scheduler.runlog_pruned", "removed": removed},
+                )
+        except Exception:  # noqa: BLE001 - housekeeping must never stop the scheduler
+            logger.warning(
+                "Could not prune the pipeline run log",
+                extra={"event": "pipeline_scheduler.runlog_prune_failed"},
+            )
 
     async def stop(self) -> None:
         if self._task is None:

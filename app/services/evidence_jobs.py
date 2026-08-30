@@ -24,6 +24,7 @@ from app.models.summarizer import ArticleDraft
 from app.models.tip import TipDraft
 from app.services.evidence.extractor import ExtractorAgent
 from app.services.evidence.reviewer import EvidenceReviewer
+from app.services.evidence.runlog import RunLog
 from app.services.evidence.store import EvidenceStore
 from app.services.evidence.synthesizer import SynthesizerAgent
 from app.services.evidence.writers import ArticleWriter, TipWriter, evidence_fields
@@ -93,6 +94,7 @@ def build_evidence_pipeline(
 
     return EvidencePipeline(
         store=evidence_store,
+        runlog=RunLog(_db_path()),
         acquirer=build_pubmed_client(),
         extractor=ExtractorAgent(llm=extraction_llm, model_id=_model_id(extraction_llm)),
         synthesizer=SynthesizerAgent(llm=synthesis_llm, model_id=_model_id(synthesis_llm)),
@@ -135,6 +137,7 @@ def _publish_article(
     article.evidence_keys = list(fields["evidence_keys"])
     article.evidence_grade = fields["evidence_grade"]
     article.evidence_summary = fields["evidence_summary"]
+    article.evidence_limitations = list(fields["evidence_limitations"])
     article.source_urls = list(fields["source_urls"])
 
     return repository.save_article(article)

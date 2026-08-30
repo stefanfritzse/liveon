@@ -14,7 +14,6 @@ import yaml
 from app.models.content import Article
 from app.models.editor import EditedArticle
 from app.models.publisher import PublicationResult
-from datetime import datetime, timezone
 
 _SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 

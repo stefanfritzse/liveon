@@ -1,0 +1,31 @@
+<?xml version="1.0" ?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">40000007</PMID>
+      <Article>
+        <Journal><Title>Journal of Longevity Research</Title>
+          <JournalIssue><PubDate><Year>2026</Year><Month>Jan</Month></PubDate></JournalIssue>
+        </Journal>
+        <ArticleTitle>A pilot trial of cold exposure in healthy volunteers</ArticleTitle>
+        <Abstract>
+        <AbstractText Label="METHODS">We randomised 12 adults to daily cold exposure.</AbstractText>
+        <AbstractText Label="RESULTS">Brown fat activity rose by 22 percent.</AbstractText>
+        </Abstract>
+        <PublicationTypeList>
+        <PublicationType>Journal Article</PublicationType>
+        <PublicationType>Randomized Controlled Trial</PublicationType>
+        </PublicationTypeList>
+        <ArticleDate DateType="Electronic"><Year>2026</Year><Month>01</Month><Day>15</Day></ArticleDate>
+      </Article>
+      <MeshHeadingList>
+      <MeshHeading><DescriptorName>Humans</DescriptorName></MeshHeading>
+      <MeshHeading><DescriptorName>Cold Temperature</DescriptorName></MeshHeading>
+      </MeshHeadingList>
+    </MedlineCitation>
+    <PubmedData><ArticleIdList>
+        <ArticleId IdType="pubmed">40000007</ArticleId>
+        <ArticleId IdType="doi">10.1001/corpus.tiny</ArticleId>
+    </ArticleIdList></PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>

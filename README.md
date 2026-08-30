@@ -98,10 +98,30 @@ Each agent can override the shared choice with `LIVEON_<AGENT>_MODEL`,
 | `LIVEON_PIPELINE_CHECK_INTERVAL_SEC` | How often the scheduler checks for due jobs | `3600` |
 | `LIVEON_MAX_ARTICLES` | Articles published per article run | `1` |
 | `LIVEON_ALLOW_LOCAL_LLM` | Permit the deterministic tip stub to publish | `0` |
-| `LIVEON_TIP_USE_PRESETS` | Force offline tip presets instead of live news | `0` |
-| `LIVEON_TIP_CONTEXT_PRESETS` | JSON list replacing the built-in offline tip presets | built-in set |
 | `LIVEON_TIP_MODEL_NAME` | Model id for the tip agents (OpenAI) | _(unset)_ |
 | `LIVEON_TIP_PUBLISHED_AT` | ISO-8601 override for a tip's publication time | _(unset)_ |
+
+**Evidence layer**
+
+The evidence pipeline acquires research from PubMed, grades it in code, and publishes only
+what passes the gates. It is off by default; with the flag unset the original prose
+pipeline runs unchanged.
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `LIVEON_EVIDENCE_PIPELINE` | Use the evidence pipeline instead of the prose pipeline | `0` |
+| `LIVEON_RESEARCH_QUERIES` | JSON list of PubMed queries to discover with | built-in set |
+| `LIVEON_NCBI_API_KEY` | Raises the NCBI rate ceiling from 3 to 10 requests a second | _(unset)_ |
+| `LIVEON_NCBI_EMAIL` | Contact address sent with E-utilities requests | _(unset)_ |
+| `LIVEON_RESEARCH_CACHE_DIR` | Where research responses are cached | `cache/research` |
+| `LIVEON_RESEARCH_CACHE_TTL_HOURS` | How long a cached response stays fresh | `168` |
+| `LIVEON_MAX_CLUSTER_SOURCES` | Sources one bundle may carry | `5` |
+| `LIVEON_TOPIC_COOLDOWN_DAYS` | Days before a topic may be published again | `30` |
+| `LIVEON_RECENCY_HALFLIFE_DAYS` | Half-life of the recency score when ranking topics | `21` |
+| `LIVEON_TOPIC_PRIORITIES` | JSON object mapping a topic substring to a weight | _(unset)_ |
+| `LIVEON_MAX_REGENERATIONS` | Rewrites allowed before a draft is abandoned | `2` |
+| `LIVEON_RUN_RETENTION_DAYS` | How long pipeline run logs are kept | `365` |
+| `LIVEON_HIDE_LEGACY` | Hide content published before evidence review, rather than badging it | `0` |
 
 **Feeds**
 
@@ -285,9 +305,20 @@ is shown as a custom setting rather than silently rounded to the nearest option.
 Live On ships with two parallel content flows that share the same aggregation pool but optimise for different outputs:
 
 - **Articles:** `LongevityNewsAggregator` → `SummarizerAgent` → `EditorAgent` → `Publisher`. The summariser drafts an article, the editor polishes tone / citations, and the publisher writes to either SQLite or a Git repo depending on configuration.
-- **Tips:** `LongevityNewsAggregator` → `DailyTipContextProvider` → `TipGenerator` → `TipEditorAgent` → `TipPublisher`. The context provider distils the same aggregated news pool the article pipeline uses into research notes; a curated set of offline presets is the fallback when no feed is reachable (or when `LIVEON_TIP_USE_PRESETS=1`). Each generated `TipDraft` is reviewed against novelty, conciseness, and actionability. If the editor rejects the draft, its `TipReviewResult` feedback goes back to the generator, which also sees the recently published tips and leads the retry with a different source story so it does not re-derive the rejected tip. The final `TipPipelineResult` records the execution context, `generation_attempts`, and cumulative `editor_feedback`.
+- **Tips:** `LongevityNewsAggregator` → `DailyTipContextProvider` → `TipGenerator` → `TipEditorAgent` → `TipPublisher`. The context provider distils the same aggregated news pool the article pipeline uses into research notes. When no research is reachable it raises rather than falling back: a run that cannot see today's research publishes nothing. Each generated `TipDraft` is reviewed against novelty, conciseness, and actionability. If the editor rejects the draft, its `TipReviewResult` feedback goes back to the generator, which also sees the recently published tips and leads the retry with a different source story so it does not re-derive the rejected tip. The final `TipPipelineResult` records the execution context, `generation_attempts`, cumulative `editor_feedback`, and the `RunOutcome` the scheduler acts on.
 
-Both pipelines log warnings for soft failures (e.g., duplicate publications) and surface fatal errors so you can tune prompts or feeds as needed.
+- **Evidence (opt-in):** `PubMedClient` → `EvidenceStore` → `ExtractorAgent` →
+clustering → ranking → `SynthesizerAgent` → `EvidenceReviewer` → `ArticleWriter` /
+`TipWriter` → post-edit re-check → publisher. Set `LIVEON_EVIDENCE_PIPELINE=1` to use this
+instead of the two flows above. Research is acquired from PubMed rather than from news,
+every extracted value is anchored to a verbatim span in the source, ten deterministic
+gates and a grade rubric decide what may be published, and the model may lower a grade but
+never raise one. A run that cannot verify its evidence publishes nothing.
+
+Both prose pipelines log warnings for soft failures (e.g., duplicate publications) and
+surface fatal errors so you can tune prompts or feeds as needed. Every run reports a
+`RunOutcome`: the scheduler treats a quiet day as satisfying the cadence and backs off
+from a retrieval failure rather than retrying it every hour.
 
 ## Running the Content Pipelines
 

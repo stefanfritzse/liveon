@@ -1,0 +1,32 @@
+<?xml version="1.0" ?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">40000006</PMID>
+      <Article>
+        <Journal><Title>Journal of Longevity Research</Title>
+          <JournalIssue><PubDate><Year>2026</Year><Month>Jan</Month></PubDate></JournalIssue>
+        </Journal>
+        <ArticleTitle>Resistance training and mortality: a meta-analysis of randomised trials</ArticleTitle>
+        <Abstract>
+        <AbstractText Label="METHODS">We pooled 18 randomised trials including 21000 adults.</AbstractText>
+        <AbstractText Label="RESULTS">All-cause mortality was 12 percent lower with training.</AbstractText>
+        </Abstract>
+        <PublicationTypeList>
+        <PublicationType>Journal Article</PublicationType>
+        <PublicationType>Meta-Analysis</PublicationType>
+        <PublicationType>Randomized Controlled Trial</PublicationType>
+        </PublicationTypeList>
+        <ArticleDate DateType="Electronic"><Year>2026</Year><Month>01</Month><Day>15</Day></ArticleDate>
+      </Article>
+      <MeshHeadingList>
+      <MeshHeading><DescriptorName>Humans</DescriptorName></MeshHeading>
+      <MeshHeading><DescriptorName>Resistance Training</DescriptorName></MeshHeading>
+      </MeshHeadingList>
+    </MedlineCitation>
+    <PubmedData><ArticleIdList>
+        <ArticleId IdType="pubmed">40000006</ArticleId>
+        <ArticleId IdType="doi">10.1001/corpus.meta</ArticleId>
+    </ArticleIdList></PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>

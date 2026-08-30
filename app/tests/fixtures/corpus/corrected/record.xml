@@ -1,0 +1,33 @@
+<?xml version="1.0" ?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">40000012</PMID>
+      <Article>
+        <Journal><Title>Journal of Longevity Research</Title>
+          <JournalIssue><PubDate><Year>2026</Year><Month>Jan</Month></PubDate></JournalIssue>
+        </Journal>
+        <ArticleTitle>Sleep duration and cognition, with correction</ArticleTitle>
+        <Abstract>
+        <AbstractText Label="METHODS">We followed 5400 adults for eight years.</AbstractText>
+        <AbstractText Label="RESULTS">Seven hours of sleep was associated with better cognition.</AbstractText>
+        </Abstract>
+        <PublicationTypeList>
+        <PublicationType>Journal Article</PublicationType>
+        </PublicationTypeList>
+        <ArticleDate DateType="Electronic"><Year>2026</Year><Month>01</Month><Day>15</Day></ArticleDate>
+      </Article>
+      <MeshHeadingList>
+      <MeshHeading><DescriptorName>Humans</DescriptorName></MeshHeading>
+      <MeshHeading><DescriptorName>Cohort Studies</DescriptorName></MeshHeading>
+      </MeshHeadingList>
+      <CommentsCorrectionsList>
+        <CommentsCorrections RefType="ErratumIn"><RefSource>J Longev Res. 2026;9(3):4</RefSource></CommentsCorrections>
+      </CommentsCorrectionsList>
+    </MedlineCitation>
+    <PubmedData><ArticleIdList>
+        <ArticleId IdType="pubmed">40000012</ArticleId>
+        <ArticleId IdType="doi">10.1001/corpus.corrected</ArticleId>
+    </ArticleIdList></PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>

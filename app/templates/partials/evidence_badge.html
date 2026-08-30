@@ -1,0 +1,12 @@
+{# The compact form, for list views: "Evidence: Moderate".
+
+   Deliberately just the grade. A reader scanning a list needs to know whether a claim is
+   settled or preliminary; the study types and caveats belong on the page itself. #}
+
+{% if item.evidence_assessed %}
+  <span class="evidence-badge evidence-{{ item.evidence_grade or 'unknown' }}">
+    Evidence: {{ (item.evidence_grade or 'unknown') | capitalize }}
+  </span>
+{% else %}
+  <span class="evidence-badge evidence-unassessed">Evidence: not assessed</span>
+{% endif %}

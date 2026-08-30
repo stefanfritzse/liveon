@@ -1,0 +1,31 @@
+<?xml version="1.0" ?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">40000005</PMID>
+      <Article>
+        <Journal><Title>Journal of Longevity Research</Title>
+          <JournalIssue><PubDate><Year>2026</Year><Month>Jan</Month></PubDate></JournalIssue>
+        </Journal>
+        <ArticleTitle>Physical activity and healthspan: a systematic review</ArticleTitle>
+        <Abstract>
+        <AbstractText Label="METHODS">We reviewed 42 cohort studies covering 1200000 adults.</AbstractText>
+        <AbstractText Label="RESULTS">Activity was consistently associated with better outcomes.</AbstractText>
+        </Abstract>
+        <PublicationTypeList>
+        <PublicationType>Journal Article</PublicationType>
+        <PublicationType>Systematic Review</PublicationType>
+        </PublicationTypeList>
+        <ArticleDate DateType="Electronic"><Year>2026</Year><Month>01</Month><Day>15</Day></ArticleDate>
+      </Article>
+      <MeshHeadingList>
+      <MeshHeading><DescriptorName>Humans</DescriptorName></MeshHeading>
+      <MeshHeading><DescriptorName>Cohort Studies</DescriptorName></MeshHeading>
+      </MeshHeadingList>
+    </MedlineCitation>
+    <PubmedData><ArticleIdList>
+        <ArticleId IdType="pubmed">40000005</ArticleId>
+        <ArticleId IdType="doi">10.1001/corpus.sr</ArticleId>
+    </ArticleIdList></PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>

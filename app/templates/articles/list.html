@@ -16,7 +16,10 @@
         <article>
           <header>
             <h3>{{ article.title }}</h3>
-            <p class="article-meta">Published {{ article.published_date.strftime("%B %d, %Y") }}</p>
+            <p class="article-meta">
+              Published {{ article.published_date.strftime("%B %d, %Y") }}
+              {% with item = article %}{% include "partials/evidence_badge.html" %}{% endwith %}
+            </p>
           </header>
           {% set summary_source = article.summary if article.summary else article.content_body %}
           {% set summary_text = summary_source | markdown_to_text %}

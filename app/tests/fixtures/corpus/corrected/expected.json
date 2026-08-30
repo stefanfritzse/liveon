@@ -1,0 +1,8 @@
+{
+  "description": "Corrected work remains valid; the notice travels with it.",
+  "source_key": "doi:10.1001/corpus.corrected",
+  "design": "prospective_cohort",
+  "subject": "human",
+  "retraction_state": "corrected",
+  "publishable": true
+}

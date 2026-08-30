@@ -67,6 +67,7 @@ class TipPublisher:
             evidence_keys=list(normalised.evidence_keys),
             evidence_grade=normalised.evidence_grade,
             evidence_summary=normalised.evidence_summary,
+            evidence_limitations=list(normalised.evidence_limitations),
         )
         stored = self.repository.save_tip(tip)
         return TipPublicationResult(tip=stored, created=True)

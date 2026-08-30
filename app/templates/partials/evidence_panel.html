@@ -1,0 +1,28 @@
+{# Reader-facing evidence statement.
+
+   The wording comes from the stored record, not from this template: `evidence_summary`
+   was assembled in code from the sources that were actually cited (grading.describe_grade),
+   so what a reader sees cannot drift from what was reviewed.
+
+   Content published before the evidence layer existed is badged as unassessed rather than
+   retro-graded on no information. #}
+
+{% if item.evidence_assessed %}
+  <aside class="evidence-panel evidence-{{ item.evidence_grade or 'unknown' }}">
+    <h4 class="evidence-heading">Evidence</h4>
+    <p class="evidence-summary">{{ item.evidence_summary or (item.evidence_grade | capitalize) }}</p>
+
+    {% if item.evidence_limitations %}
+      <p class="evidence-caveat">What this does not show:</p>
+      <ul class="evidence-limitations">
+        {% for limitation in item.evidence_limitations %}
+          <li>{{ limitation }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </aside>
+{% else %}
+  <aside class="evidence-panel evidence-unassessed">
+    <p class="evidence-summary">Evidence: not assessed — published before evidence review.</p>
+  </aside>
+{% endif %}

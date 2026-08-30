@@ -1,0 +1,29 @@
+<?xml version="1.0" ?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">40000008</PMID>
+      <Article>
+        <Journal><Title>Journal of Longevity Research</Title>
+          <JournalIssue><PubDate><Year>2026</Year><Month>Jan</Month></PubDate></JournalIssue>
+        </Journal>
+        <ArticleTitle>NAD precursors and biological age: a preprint</ArticleTitle>
+        <Abstract>
+        <AbstractText Label="METHODS">We randomised 300 adults to supplementation.</AbstractText>
+        <AbstractText Label="RESULTS">Biological age scores fell by 1.1 years.</AbstractText>
+        </Abstract>
+        <PublicationTypeList>
+        <PublicationType>Preprint</PublicationType>
+        </PublicationTypeList>
+        <ArticleDate DateType="Electronic"><Year>2026</Year><Month>01</Month><Day>15</Day></ArticleDate>
+      </Article>
+      <MeshHeadingList>
+      <MeshHeading><DescriptorName>Humans</DescriptorName></MeshHeading>
+      </MeshHeadingList>
+    </MedlineCitation>
+    <PubmedData><ArticleIdList>
+        <ArticleId IdType="pubmed">40000008</ArticleId>
+        <ArticleId IdType="doi">10.1101/corpus.preprint</ArticleId>
+    </ArticleIdList></PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>

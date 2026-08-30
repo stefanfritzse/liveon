@@ -30,6 +30,7 @@ from app.models.tip import TipDraft
 from app.services.evidence.clustering import cluster_records
 from app.services.evidence.postedit import feedback_for, recheck_published_text
 from app.services.evidence.ranking import RankedCluster, rank_clusters
+from app.services.evidence.runlog import RunLog
 from app.services.evidence.reviewer import EvidenceReviewer, max_regenerations
 from app.services.evidence.store import EvidenceStore
 from app.services.evidence.synthesizer import SynthesizerAgent
@@ -69,6 +70,7 @@ class EvidencePipelineResult:
     """What one run did, and why it stopped where it did."""
 
     outcome: RunOutcome
+    run_id: str | None = None
     bundle: EvidenceBundle | None = None
     decision: ReviewDecision | None = None
     draft: Any = None
@@ -95,6 +97,9 @@ class EvidencePipeline:
     queries: Sequence[str] = ()
     max_results_per_query: int = 10
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+    #: Optional. Without one the pipeline behaves identically but leaves no diary.
+    runlog: RunLog | None = None
+    run_id: str | None = None
 
     # -- stages --------------------------------------------------------
 
@@ -185,6 +190,7 @@ class EvidencePipeline:
         """
 
         notes: list[str] = []
+        run_id = self._begin(content_type)
 
         try:
             acquired = self.acquire()
@@ -194,8 +200,10 @@ class EvidencePipeline:
                 exc,
                 extra={"event": "evidence_pipeline.acquire_failed"},
             )
-            return EvidencePipelineResult(
-                outcome=RunOutcome.RETRIEVAL_FAILED, notes=[str(exc)]
+            return self._finish(
+                EvidencePipelineResult(
+                    outcome=RunOutcome.RETRIEVAL_FAILED, run_id=run_id, notes=[str(exc)]
+                )
             )
 
         try:
@@ -204,16 +212,43 @@ class EvidencePipeline:
             LOGGER.exception(
                 "Extraction failed", extra={"event": "evidence_pipeline.extract_failed"}
             )
-            return EvidencePipelineResult(
-                outcome=RunOutcome.MODEL_FAILED, acquired=acquired, notes=[str(exc)]
+            return self._finish(
+                EvidencePipelineResult(
+                    outcome=RunOutcome.MODEL_FAILED,
+                    run_id=run_id,
+                    acquired=acquired,
+                    notes=[str(exc)],
+                )
             )
 
         ranked = self.candidates()
+        self._event(
+            "rank",
+            "candidates",
+            [
+                {
+                    "topic": candidate.cluster.key,
+                    "topic_key": candidate.topic_key,
+                    "grade": candidate.grade,
+                    "score": round(candidate.score, 3),
+                    "components": {
+                        name: round(value, 3)
+                        for name, value in candidate.components.items()
+                    },
+                    "sources": [record.source_key for record in candidate.cluster.records],
+                }
+                for candidate in ranked[:10]
+            ],
+        )
+
         if not ranked:
-            return EvidencePipelineResult(
-                outcome=RunOutcome.NO_NEW_EVIDENCE,
-                acquired=acquired,
-                notes=["No approved evidence to write about."],
+            return self._finish(
+                EvidencePipelineResult(
+                    outcome=RunOutcome.NO_NEW_EVIDENCE,
+                    run_id=run_id,
+                    acquired=acquired,
+                    notes=["No approved evidence to write about."],
+                )
             )
 
         last_result: EvidencePipelineResult | None = None
@@ -230,16 +265,20 @@ class EvidencePipeline:
             )
             result.acquired = acquired
             result.considered = len(ranked)
+            result.run_id = run_id
             result.notes = [*notes, *result.notes]
 
             if result.outcome is RunOutcome.PUBLISHED:
-                return result
+                return self._finish(result)
             if result.outcome in (RunOutcome.MODEL_FAILED, RunOutcome.SOURCE_UNAVAILABLE):
-                return result
+                return self._finish(result)
             last_result = result
 
-        return last_result or EvidencePipelineResult(
-            outcome=RunOutcome.NO_NEW_EVIDENCE, acquired=acquired
+        return self._finish(
+            last_result
+            or EvidencePipelineResult(
+                outcome=RunOutcome.NO_NEW_EVIDENCE, run_id=run_id, acquired=acquired
+            )
         )
 
     def _attempt(
@@ -273,6 +312,20 @@ class EvidencePipeline:
             bundle, records, last_used_at=self.store.last_used_at(cluster.topic_key)
         )
         self.store.save_bundle(bundle)
+        self._event(
+            "review",
+            "decision",
+            {
+                "bundle_id": bundle.bundle_id,
+                "topic_key": bundle.topic_key,
+                "status": decision.status,
+                "grade": decision.grade,
+                "rationale": decision.rationale,
+                "violations": [violation.to_document() for violation in decision.violations],
+                "model_id": decision.model_id,
+                "prompt_version": decision.prompt_version,
+            },
+        )
 
         if not decision.is_approved:
             return EvidencePipelineResult(
@@ -329,6 +382,15 @@ class EvidencePipeline:
                 )
 
             violations = recheck_published_text(body_of(draft), bundle, records)
+            self._event(
+                "write",
+                "recheck",
+                {
+                    "attempt": attempt,
+                    "passed": not violations,
+                    "violations": [violation.to_document() for violation in violations],
+                },
+            )
             if not violations:
                 break
 
@@ -379,6 +441,18 @@ class EvidencePipeline:
             used_at=self.now(),
         )
 
+        self._event(
+            "publish",
+            "stored",
+            {
+                "content_type": content_type,
+                "content_id": content_id,
+                "bundle_id": bundle.bundle_id,
+                "grade": bundle.grade,
+                "sources": bundle.source_keys(),
+            },
+        )
+
         LOGGER.info(
             "Published %s from bundle %s (%s)",
             content_type,
@@ -398,6 +472,47 @@ class EvidencePipeline:
             draft=draft,
             attempts=attempts,
         )
+
+
+    # -- run log -------------------------------------------------------
+
+    def _begin(self, job: str) -> str | None:
+        """Open a run in the log, if one is configured."""
+
+        if self.runlog is None:
+            return None
+        self.run_id = self.runlog.start(job, now=self.now())
+        self._event("acquire", "started", {"queries": list(self.queries)})
+        return self.run_id
+
+    def _event(self, stage: str, event: str, data: Any = None) -> None:
+        if self.runlog is not None and self.run_id:
+            self.runlog.event(self.run_id, stage, event, data, now=self.now())
+
+    def _finish(self, result: "EvidencePipelineResult") -> "EvidencePipelineResult":
+        """Close the run, recording what it concluded and what produced it."""
+
+        if self.runlog is not None and self.run_id:
+            self.runlog.finish(
+                self.run_id,
+                result.outcome.value,
+                model_id=self.reviewer.model_id,
+                prompt_versions={
+                    "extraction": getattr(self.extractor, "prompt_version", ""),
+                    "synthesis": getattr(self.synthesizer, "prompt_version", ""),
+                    "review": getattr(self.reviewer, "prompt_version", ""),
+                },
+                data={
+                    "acquired": result.acquired,
+                    "considered": result.considered,
+                    "attempts": result.attempts,
+                    "bundle_id": result.bundle.bundle_id if result.bundle else None,
+                    "grade": result.bundle.grade if result.bundle else None,
+                    "notes": result.notes,
+                },
+                now=self.now(),
+            )
+        return result
 
 
 # ----------------------------------------------------------------------

@@ -1,0 +1,32 @@
+<?xml version="1.0" ?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">40000001</PMID>
+      <Article>
+        <Journal><Title>Journal of Longevity Research</Title>
+          <JournalIssue><PubDate><Year>2026</Year><Month>Jan</Month></PubDate></JournalIssue>
+        </Journal>
+        <ArticleTitle>Time-restricted eating and ten-year mortality: a randomised trial</ArticleTitle>
+        <Abstract>
+        <AbstractText Label="METHODS">We randomised 1240 adults aged 45 to 70 to an eight-hour eating window or usual eating.</AbstractText>
+        <AbstractText Label="RESULTS">Ten-year mortality fell by 4.2 percent in the intervention group.</AbstractText>
+        </Abstract>
+        <PublicationTypeList>
+        <PublicationType>Journal Article</PublicationType>
+        <PublicationType>Randomized Controlled Trial</PublicationType>
+        </PublicationTypeList>
+        <ArticleDate DateType="Electronic"><Year>2026</Year><Month>01</Month><Day>15</Day></ArticleDate>
+      </Article>
+      <MeshHeadingList>
+      <MeshHeading><DescriptorName>Humans</DescriptorName></MeshHeading>
+      <MeshHeading><DescriptorName>Middle Aged</DescriptorName></MeshHeading>
+      <MeshHeading><DescriptorName>Fasting</DescriptorName></MeshHeading>
+      </MeshHeadingList>
+    </MedlineCitation>
+    <PubmedData><ArticleIdList>
+        <ArticleId IdType="pubmed">40000001</ArticleId>
+        <ArticleId IdType="doi">10.1001/corpus.rct</ArticleId>
+    </ArticleIdList></PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>

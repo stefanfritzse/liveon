@@ -21,6 +21,7 @@ class TipDraft:
     evidence_keys: list[str] = field(default_factory=list)
     evidence_grade: str | None = None
     evidence_summary: str | None = None
+    evidence_limitations: list[str] = field(default_factory=list)
 
     def with_defaults(self) -> "TipDraft":
         """Return a copy with trimmed fields and fallback defaults."""
@@ -52,4 +53,9 @@ class TipDraft:
             ],
             evidence_grade=(self.evidence_grade or "").strip() or None,
             evidence_summary=(self.evidence_summary or "").strip() or None,
+            evidence_limitations=[
+                limitation.strip()
+                for limitation in self.evidence_limitations
+                if isinstance(limitation, str) and limitation.strip()
+            ],
         )

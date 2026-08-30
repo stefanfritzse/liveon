@@ -327,7 +327,7 @@ def test_the_console_shows_the_saved_choice_as_selected(admin_client: TestClient
     )
 
 
-def test_an_unknown_cadence_is_refused(admin_client: TestClient) -> None:
+def test_an_unknown_cadence_is_refused_by_the_console(admin_client: TestClient) -> None:
     response = admin_client.post(
         "/admin/pipelines/articles/interval",
         data={"cadence": "hourly"},

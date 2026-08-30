@@ -155,6 +155,57 @@
         padding: 0;
         list-style: none;
       }
+      .evidence-badge {
+        border: 1px solid var(--liveon-border);
+        border-radius: 999px;
+        display: inline-block;
+        font-size: 0.75rem;
+        margin-left: 0.5rem;
+        padding: 0.1rem 0.55rem;
+        white-space: nowrap;
+      }
+
+      .evidence-badge.evidence-unassessed,
+      .evidence-badge.evidence-preliminary {
+        color: var(--liveon-muted);
+      }
+
+      .evidence-panel {
+        background: rgba(127, 127, 127, 0.06);
+        border: 1px solid var(--liveon-border);
+        border-radius: 6px;
+        margin: 0 0 1.5rem;
+        padding: 0.9rem 1.1rem;
+      }
+
+      .evidence-panel .evidence-heading {
+        font-size: 0.8rem;
+        letter-spacing: 0.08em;
+        margin: 0 0 0.35rem;
+        text-transform: uppercase;
+      }
+
+      .evidence-panel .evidence-summary {
+        font-weight: 600;
+        margin: 0;
+      }
+
+      .evidence-panel.evidence-unassessed .evidence-summary {
+        color: var(--liveon-muted);
+        font-weight: 400;
+      }
+
+      .evidence-panel .evidence-caveat {
+        color: var(--liveon-muted);
+        margin: 0.75rem 0 0.25rem;
+      }
+
+      .evidence-panel .evidence-limitations {
+        color: var(--liveon-muted);
+        margin: 0;
+        padding-left: 1.2rem;
+      }
+
       .tag-chip {
         background: var(--liveon-surface-alt);
         border: 1px solid var(--liveon-border);

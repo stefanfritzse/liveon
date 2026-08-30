@@ -51,11 +51,19 @@ def evidence_fields(
 
     keys = bundle.source_keys()
     cited = [records[key] for key in keys if key in records]
+
+    limitations: list[str] = []
+    for claim in bundle.claims:
+        for limitation in claim.limitations:
+            if limitation and limitation not in limitations:
+                limitations.append(limitation)
+
     return {
         "evidence_bundle_id": bundle.bundle_id,
         "evidence_keys": list(keys),
         "evidence_grade": bundle.grade,
         "evidence_summary": describe_grade(bundle.grade, cited),
+        "evidence_limitations": limitations,
         "source_urls": [url for url in (citation_url(key) for key in keys) if url],
     }
 
@@ -230,6 +238,7 @@ class TipWriter(_BundleWriter):
             evidence_keys=list(provenance["evidence_keys"]),
             evidence_grade=provenance["evidence_grade"],
             evidence_summary=provenance["evidence_summary"],
+            evidence_limitations=list(provenance["evidence_limitations"]),
         )
         return draft.with_defaults()
 

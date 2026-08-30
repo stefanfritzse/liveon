@@ -1,0 +1,8 @@
+{
+  "description": "Disagrees with strong_human_rct. Must be surfaced, not averaged.",
+  "source_key": "doi:10.1001/corpus.contradiction",
+  "design": "rct",
+  "subject": "human",
+  "retraction_state": "none",
+  "publishable": true
+}

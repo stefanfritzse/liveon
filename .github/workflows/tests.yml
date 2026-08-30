@@ -1,0 +1,44 @@
+name: Tests
+
+# The evidence benchmark is the release gate for scientific integrity: a prompt or model
+# change that lowers it should fail the build rather than reach readers (improvements.md
+# item 11). It runs offline against the checked-in corpus with stub models, so a failure
+# here always means the behaviour changed.
+
+on:
+  push:
+    branches: [main, no_google]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the runtime image in the Dockerfile.
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: python -m pyflakes app
+
+      - name: Evidence benchmark
+        # Run first and on its own, so an integrity regression is unmistakable in the log
+        # rather than one red line among hundreds.
+        run: python -m pytest app/tests/test_evidence_benchmark.py -v -m "not live"
+
+      - name: Test suite
+        # "not live" excludes the tests that need real network access; everything in CI
+        # runs against fixtures, and conftest fails any test that opens a socket.
+        run: python -m pytest -q -m "not live"
