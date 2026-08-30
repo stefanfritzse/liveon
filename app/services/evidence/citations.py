@@ -19,8 +19,10 @@ from typing import Callable, Iterable, Mapping, Sequence
 __all__ = [
     "EvidenceHandles",
     "allowlisted_evidence",
+    "citation_url",
     "handle_pattern",
     "rejected_evidence",
+    "strip_handles",
 ]
 
 _HANDLE_RE = re.compile(r"\[E(\d+)\]")
@@ -149,3 +151,52 @@ def rejected_evidence(
         seen.add(normalised)
         dropped.append(cleaned)
     return dropped
+
+
+def citation_url(source_key: str) -> str:
+    """Build the public URL for a source key, in code.
+
+    Item 4 of improvements.md: the model never writes a URL, a DOI, or a journal name into
+    a body. Links are derived from the canonical identifier at render time, so a citation
+    is only ever as wrong as the identifier the store holds — and that identifier came
+    from the API, not from a sentence.
+    """
+
+    from app.models.evidence import parse_source_key
+
+    try:
+        scheme, value = parse_source_key(source_key)
+    except ValueError:
+        return ""
+
+    if scheme == "doi":
+        return f"https://doi.org/{value}"
+    if scheme == "pmid":
+        return f"https://pubmed.ncbi.nlm.nih.gov/{value}/"
+    if scheme == "pmcid":
+        return f"https://www.ncbi.nlm.nih.gov/pmc/articles/{value}/"
+    if scheme == "nct":
+        return f"https://clinicaltrials.gov/study/{value}"
+    if scheme == "url":
+        return value
+    return ""
+
+
+#: Runs of spaces or tabs, but never a newline: removing a handle must not reflow a body.
+_RUN_OF_SPACES = re.compile(r"[^\S\n]{2,}")
+_SPACE_BEFORE_PUNCTUATION = re.compile(r"[^\S\n]+([.,;:!?])")
+
+
+def strip_handles(text: str) -> str:
+    """Remove ``[E1]`` markers from prose destined for a reader.
+
+    Handles are a machine device for tying a sentence to a source. The publisher
+    resolves them into a citation list; the marker itself does not belong in the body.
+    """
+
+    cleaned = _HANDLE_RE.sub("", text or "")
+    # Removal leaves double spaces, and spaces stranded before punctuation. Paragraph
+    # breaks survive: this tidies a line, it does not reflow a body.
+    cleaned = _RUN_OF_SPACES.sub(" ", cleaned)
+    cleaned = _SPACE_BEFORE_PUNCTUATION.sub(r"\1", cleaned)
+    return cleaned.strip()

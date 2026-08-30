@@ -35,7 +35,7 @@ from app.models.evidence import (
 )
 from app.services.evidence.gates import CAP_GRADES, INSUFFICIENT_GATES
 
-__all__ = ["compute_grade", "describe_grade"]
+__all__ = ["compute_grade", "describe_grade", "provisional_grade"]
 
 #: Designs that pool other studies rather than running one.
 _AGGREGATE_DESIGNS = frozenset({"meta_analysis", "systematic_review"})
@@ -78,6 +78,23 @@ def compute_grade(
             rationale.append(f"{gate} capped the grade at {CAP_GRADES[gate]}.")
             grade = capped
 
+    return grade, rationale
+
+
+def provisional_grade(records: Sequence[EvidenceRecord]) -> tuple[str, list[str]]:
+    """Grade a set of records before any claim has been written.
+
+    Ranking has to choose what to write about *before* synthesis, which means it needs a
+    strength estimate without a bundle. This runs the same rubric over the records alone,
+    so the ordering candidates are ranked in cannot disagree with the grade they later
+    receive — the only differences come from what the claims turn out to say.
+    """
+
+    if not records:
+        return "insufficient", ["No records."]
+
+    rationale: list[str] = []
+    grade = _base_grade(EvidenceBundle(bundle_id="provisional"), records, rationale)
     return grade, rationale
 
 

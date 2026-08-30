@@ -10,14 +10,14 @@ would otherwise have to rediscover.
 
 ## Current position
 
-**Slice 2 (judgement) — complete, 2026-08-30.** Test suite: 571 → 725 passing. Working tree clean,
-`no_google` in sync with origin, `pyflakes` clean on all new modules.
+**Slice 3 (one pipeline) — complete, 2026-08-30.** Test suite: 725 → 802 passing. Working tree
+clean, `no_google` in sync with origin, `pyflakes` clean on all new modules.
 
-Slice 1 (the spine) completed earlier the same day, minus the deferrals listed below.
+Slices 1 and 2 completed earlier the same day, minus the deferrals listed below.
 
-Slice 2 is done when a cluster of records becomes a graded, reviewed bundle, when every gate in
-improvements.md item 3 runs as code, and when a run that cannot verify its evidence publishes
-nothing. All three hold and are covered by tests.
+Slice 3 is done when articles and tips are generated from the same reviewed bundles and the ranking
+tests pass. Both hold: `EvidencePipeline` runs acquire → extract → cluster → rank → synthesise →
+review → write → re-check → publish, and the two products differ only in their writer.
 
 | Component | State | File |
 |---|---|---|
@@ -40,21 +40,34 @@ nothing. All three hold and are covered by tests.
 | `RunOutcome` + scheduler policy and backoff | done | [run_outcome.py](app/models/run_outcome.py), [pipeline_scheduler.py](app/services/pipeline_scheduler.py) |
 | **Tip presets deleted from the runtime path** | done | [tip_context.py](app/services/tip_context.py) |
 | End-to-end flow test | done | [test_evidence_flow.py](app/tests/test_evidence_flow.py) |
+| **Slice 3** | | |
+| Topic clustering | done | [clustering.py](app/services/evidence/clustering.py) |
+| Ranking (item 7) | done | [ranking.py](app/services/evidence/ranking.py) |
+| Article and tip writers | done | [writers.py](app/services/evidence/writers.py) |
+| Code-rendered citation URLs | done | [citations.py](app/services/evidence/citations.py) |
+| Post-edit re-check (item 6) | done | [postedit.py](app/services/evidence/postedit.py) |
+| Pipeline orchestration | done | [evidence_pipeline.py](app/services/evidence_pipeline.py) |
+| Job seam and scheduler dispatch | done | [evidence_jobs.py](app/services/evidence_jobs.py) |
 | Europe PMC client | **deferred** | — |
 | ClinicalTrials.gov client | **deferred** | — |
 | News-as-signal wrapper | **deferred** | — |
 
 ### Read this before assuming anything works end to end
 
-**The evidence layer still does not generate content.** Synthesis, grading and review are complete
-and tested, but no article or tip is produced from a bundle yet — that is slice 3, which puts both
-products on the reviewed evidence base. `LIVEON_EVIDENCE_PIPELINE` still does not exist; it arrives
-when there is a pipeline to gate.
+**The evidence pipeline now generates content, but only behind a flag.** Setting
+`LIVEON_EVIDENCE_PIPELINE=1` switches both scheduled jobs from the legacy prose path to the evidence
+path. With the flag unset — the default — nothing about the running system changes except the two
+slice-2 items below.
 
-**Two slice-2 changes are live in the running system**, unlike everything else so far:
+**It has never run against the live PubMed API.** Every test uses fixture XML and stub models. The
+first real run should be deliberate, with the cache on and the flag set for one job only, and it
+should be *watched*: a local model writing to prompts that have never seen its output is the part of
+this design with the least evidence behind it.
 
-1. **The tip presets are gone.** A run with no reachable research now publishes nothing instead of
-   falling back to hard-coded claims. This changes production behaviour on the next deploy.
+**Live in the running system regardless of the flag** (from slice 2):
+
+1. **The tip presets are gone.** A run with no reachable research publishes nothing instead of
+   falling back to hard-coded claims.
 2. **The scheduler acts on run outcomes.** "Nothing new" satisfies the cadence; an outage backs off
    exponentially instead of retrying hourly.
 
@@ -69,11 +82,15 @@ PubMedClient.search_records(query)          research/pubmed.py
    → ExtractorAgent.extract(record)         model quotes; code computes offsets
    → EvidenceStore.upsert_record()          state="extracted"
    → store.set_state(key, "approved")       required by G1
+   → cluster_records(approved)              grouped by intervention
+   → rank_clusters(clusters)                strength · novelty · recency · priority − redundancy
    → SynthesizerAgent.synthesize(records)   extracts only; code attaches NumberRefs
    → EvidenceReviewer.review(bundle, ...)   gates -> grade -> advisory model
-        ├─ approved / downgraded  -> publishable (slice 3 writes from here)
+        ├─ approved / downgraded  -> ArticleWriter / TipWriter
         ├─ regenerate             -> the prose was wrong; try again
         └─ rejected               -> the evidence was wrong; stop
+   → recheck_published_text(body)           G2/G4/G8 again, on the edited text
+   → publish + store.record_usage(...)      what G9 reads on the next run
 ```
 
 The reviewer runs the gates in two passes on purpose: G8 permits certainty language only in a
@@ -164,29 +181,60 @@ Not in improvements.md; recorded so a later session does not relitigate them.
     taken some useful test inputs with them; left in the runtime they were a way to publish
     mis-sourced health claims during an outage.
 
+### Slice 3
+
+24. **Clustering is by intervention, not by intervention+outcome.** A reader asks "what does
+    time-restricted eating do?", so one cluster gathers everything about one intervention whatever
+    each study measured. The narrower `topic_key` (intervention|outcome) is still what G9 uses for
+    the repetition window.
+25. **A record with no extracted intervention clusters by title words.** That groups less, which is
+    the safe direction: a split cluster produces two narrow articles, an over-merged one produces a
+    single article claiming two unrelated things.
+26. **Ranking needs a grade before review exists**, so `provisional_grade` runs the same rubric over
+    the records alone. Candidates are therefore ranked on the grade they will actually receive, and
+    the only later movement comes from what the claims turn out to say.
+27. **Ranking weights are a stated position, not a tuned parameter.** There is no ground truth to fit
+    them to, so they encode the editorial claim directly: strength counts twice recency, and a topic
+    covered last week is worth almost nothing however strong.
+28. **The writers never see a URL.** `citation_url` derives links from the canonical identifier at
+    render time, and `strip_handles` removes the `[E1]` markers from the body. A model that has never
+    seen a link cannot mangle one into the prose.
+29. **The post-edit re-check is deliberately coarser than G4.** Once prose is rewritten, the mapping
+    from sentence to source is gone, so it falls back to the strongest design in the bundle. The
+    precise version already ran before the editor touched it; this one catches drift, not nuance.
+30. **A failed re-check is editorial, not scientific.** The bundle stands and the writer retries up
+    to `LIVEON_MAX_REGENERATIONS`; only if the prose keeps drifting does the run end empty.
+31. **The run works down the ranking.** A topic refused for repetition or thin evidence does not end
+    the run while better-supported candidates are waiting — but a model or publisher failure does,
+    because those will fail the same way for every candidate.
+32. **Extraction promotes records to `approved` directly.** That is the deterministic layer's verdict
+    on the *record* (acquired from a primary source, classified from indexed metadata, spans
+    anchored). Whether anything may be *said* with it is the reviewer's question, one stage later.
+
 ---
 
 ## Next session: start here
 
-**Slice 3 — one pipeline.** Articles and tips both generated from reviewed bundles.
+**Slice 4 — surface.** Make the evidence visible, make a run reconstructable, and put the benchmark
+in CI. This is the slice that ends with the flag flipped on.
 
-1. **Clustering.** Group approved records into topics before synthesis. `topic_key_for` already
-   builds the key from extracted intervention and outcome; what is missing is the query-and-group
-   step that decides which records belong in one bundle.
-2. **Ranking** (item 7) — `app/services/evidence/ranking.py`, the scoring function with weights as
-   module constants and a test asserting that a human meta-analysis outranks a mouse study published
-   six hours later. `store.last_used_at` and the grades are already there to feed it.
-3. **Article and tip writers that consume a bundle.** They receive `[E1]` handles and a frozen claim
-   set; they may cut or soften, never add. `EvidenceHandles.prompt_block` is the prompt input.
-4. **Post-edit re-check** (item 6): re-run G2, G4 and G8 over the *edited* text. Editorial rewriting
-   is exactly where "was associated with" becomes "reduces", and the current gates only see the
-   pre-edit claims.
-5. **Wire it behind `LIVEON_EVIDENCE_PIPELINE`**, leaving the existing prose path intact until the
-   flag flips in slice 4.
+1. **Publication surface** (item 8). [articles/detail.html](app/templates/articles/detail.html) gains
+   an evidence block: grade, the one-line summary, study types, primary sources, limitations. List
+   views and tips get a compact `Evidence: Moderate` badge. `Article.evidence_assessed` already
+   distinguishes legacy rows; they render "not assessed" rather than being retro-graded.
+   `describe_grade` already produces the wording.
+2. **Observability** (item 10) — `run_id` threaded through every stage, `pipeline_runs` and
+   `run_events` tables, and the three timestamps kept apart (`source_published_at` vs `retrieved_at`
+   vs `published_date`). `EvidencePipelineResult` already carries most of what the log needs.
+3. **The benchmark** (item 11) — the corpus under `app/tests/fixtures/corpus/`, one directory per
+   case, and the thirteen invariants as named tests. Most of the machinery exists; what is missing is
+   the corpus and the CI gate.
+4. **Then flip `LIVEON_EVIDENCE_PIPELINE` to 1** — but not before a watched live run (see the warning
+   above).
 
 Still outstanding from slice 1: **Europe PMC**, **ClinicalTrials.gov**, and the **news-as-signal
-wrapper**. PubMed alone is enough to exercise everything built so far, but item 1 is not complete
-without them, and Europe PMC is where open-access full text would come from.
+wrapper**. Europe PMC matters most: it is where open-access full text would come from, and full text
+is what would let extraction fill the fields abstracts leave `not_reported`.
 
 ## Conventions this codebase has (follow them)
 
@@ -211,7 +259,11 @@ without them, and Europe PMC is where open-access full text would come from.
 
 ## Known gaps
 
-- **No content is generated from bundles yet.** See the warning above; that is slice 3.
+- **The evidence path has never run live.** See the warning above.
+- **The editors are not yet in the evidence path.** `ArticleWriter` and `TipWriter` produce the final
+  text directly; the existing `EditorAgent` and `TipEditorAgent` (and the tip editor's good rubric)
+  are not called. The post-edit re-check exists and is wired, so inserting them is a small change —
+  but it is a change, and until then "post-edit" means "post-writer".
 - **A pre-existing duplicate test name**: `test_an_unknown_cadence_is_refused` is defined twice in
   [test_pipeline_cadence.py](app/tests/test_pipeline_cadence.py) (lines 125 and 330), so the first
   definition never runs. Found by pyflakes during slice 2; left alone as unrelated to this work.

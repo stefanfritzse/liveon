@@ -606,6 +606,19 @@ def _resolve_db_path() -> Path:
 
 def _run_article_pipeline(run_at: datetime) -> RunOutcome:
     from app.scripts import run_pipeline
+    from app.services.evidence_pipeline import evidence_pipeline_enabled
+
+    if evidence_pipeline_enabled():
+        from app.services.evidence_jobs import run_article_job
+
+        try:
+            return run_article_job(run_at)
+        except Exception:
+            logger.exception(
+                "Evidence article pipeline failed",
+                extra={"event": "pipeline_scheduler.evidence_failed", "job": "articles"},
+            )
+            return RunOutcome.MODEL_FAILED
 
     try:
         storage = (os.getenv("LIVEON_STORAGE") or "sqlite").strip().lower()
@@ -637,6 +650,19 @@ def _run_article_pipeline(run_at: datetime) -> RunOutcome:
 
 def _run_tip_pipeline(run_at: datetime) -> RunOutcome:
     from app.scripts import run_tip_pipeline
+    from app.services.evidence_pipeline import evidence_pipeline_enabled
+
+    if evidence_pipeline_enabled():
+        from app.services.evidence_jobs import run_tip_job
+
+        try:
+            return run_tip_job(run_at)
+        except Exception:
+            logger.exception(
+                "Evidence tip pipeline failed",
+                extra={"event": "pipeline_scheduler.evidence_failed", "job": "tips"},
+            )
+            return RunOutcome.MODEL_FAILED
 
     try:
         provider = run_tip_pipeline._default_model_provider()

@@ -39,8 +39,11 @@ LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "APPROVED_STATES",
+    "CAUSAL_LANGUAGE",
     "GATE_SEVERITY",
     "CAP_GRADES",
+    "HEDGED_LANGUAGE",
+    "RANDOMISED_DESIGNS",
     "g1_sources_resolve",
     "g2_numbers_traceable",
     "g3_subject_consistency",
@@ -89,8 +92,10 @@ INSUFFICIENT_GATES: frozenset[str] = frozenset({"G1", "G2", "G6", "G10"})
 _COOLDOWN_ENV = "LIVEON_TOPIC_COOLDOWN_DAYS"
 _DEFAULT_COOLDOWN_DAYS = 30
 
-#: Language that asserts a mechanism rather than an association.
-_CAUSAL_LANGUAGE = re.compile(
+#: Language that asserts a mechanism rather than an association. Public because the
+#: post-edit re-check applies the same rule to the final prose, and two definitions of
+#: "causal language" would mean the editor could reintroduce what the gate refused.
+CAUSAL_LANGUAGE = re.compile(
     r"\b(causes?|caused|causing|reduces?|reduced|lowers?|lowered|raises?|raised|"
     r"increases?|increased|improves?|improved|boosts?|boosted|prevents?|prevented|"
     r"leads? to|results? in|makes? you|drives?|triggers?)\b",
@@ -98,11 +103,15 @@ _CAUSAL_LANGUAGE = re.compile(
 )
 
 #: Hedged framings that keep a causal verb honest: "may reduce", "was associated with".
-_HEDGED = re.compile(
+HEDGED_LANGUAGE = re.compile(
     r"\b(may|might|could|appears? to|seems? to|is associated with|are associated with|"
     r"was associated with|were associated with|linked to|correlated with|suggests?)\b",
     re.IGNORECASE,
 )
+
+#: Private aliases so the gate bodies below keep reading naturally.
+_CAUSAL_LANGUAGE = CAUSAL_LANGUAGE
+_HEDGED = HEDGED_LANGUAGE
 
 #: Designs that carry a randomised comparison, and so license causal language.
 RANDOMISED_DESIGNS: frozenset[str] = frozenset({"rct", "meta_analysis"})
