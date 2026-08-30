@@ -20,7 +20,18 @@ $HealthTimeoutSec = 60
 function Test-MinikubeRunning {
   try {
     $s = minikube status --output=json | ConvertFrom-Json
-    return ($s.Host -eq "Running" -and $s.Kubelet -eq "Running" -and $s.APIServer -eq "Running")
+    if ($s -and $s.Host -eq "Running" -and $s.Kubelet -eq "Running" -and $s.APIServer -eq "Running") {
+      return $true
+    }
+  } catch { }
+
+  # `minikube status` probes the node over SSH, and that handshake can fail while the
+  # cluster itself is perfectly healthy — which sent this script off to "start" a Minikube
+  # that was already up. What actually matters for deploying is whether the API server
+  # answers, so ask it directly.
+  try {
+    kubectl get nodes --request-timeout=10s *> $null
+    return ($LASTEXITCODE -eq 0)
   } catch { return $false }
 }
 
@@ -29,7 +40,10 @@ function Start-MinikubeSafe {
   # Vidarebefordra ev proxy-var
   $dockerEnvArgs = @()
   foreach ($k in @('HTTP_PROXY','HTTPS_PROXY','NO_PROXY','http_proxy','https_proxy','no_proxy')) {
-    $v = (Get-Item "Env:$k" -ErrorAction SilentlyContinue).Value
+    # Get-Item returns nothing when the variable is unset, and Set-StrictMode makes
+    # reading .Value off that a terminating error — so an unproxied machine could not
+    # start Minikube at all. GetEnvironmentVariable just returns $null.
+    $v = [Environment]::GetEnvironmentVariable($k)
     if ($v) { $dockerEnvArgs += "--docker-env=$k=$v" }
   }
   # Sätt DNS i nodcontainern (motverkar registry-DNS-strul)
