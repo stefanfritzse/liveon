@@ -57,11 +57,49 @@ if (-not (Test-MinikubeRunning)) {
   Write-Host "Minikube already running; skipping start."
 }
 
+# Minikube keeps its own credentials for the node container -- an SSH key and Docker TLS
+# certs -- and those can drift out of sync with the node while the cluster itself is
+# perfectly healthy. `docker-env` then cannot reach the node's daemon at all. That is a
+# broken toolchain, not a broken cluster: the API server answers and the node still runs
+# whatever images it has. So try the fast path, and fall back to building on the host
+# daemon and handing the finished image to the node.
+$usingNodeDaemon = $false
 Write-Host "Pointing Docker to Minikube's daemon..."
-(minikube docker-env --shell=powershell) | Invoke-Expression
+try {
+  $envScript = minikube docker-env --shell=powershell
+  if ($LASTEXITCODE -eq 0 -and $envScript) {
+    $envScript | Invoke-Expression
+    docker info *> $null
+    $usingNodeDaemon = ($LASTEXITCODE -eq 0)
+  }
+} catch { }
+
+if (-not $usingNodeDaemon) {
+  Write-Warning "Cannot reach Minikube's Docker daemon; building on the host and loading the image into the node instead."
+  # A half-applied docker-env would point the build at an unreachable daemon.
+  foreach ($k in @('DOCKER_TLS_VERIFY','DOCKER_HOST','DOCKER_CERT_PATH','MINIKUBE_ACTIVE_DOCKERD')) {
+    Remove-Item "Env:$k" -ErrorAction SilentlyContinue
+  }
+}
 
 Write-Host "Building Docker image $ImageName ..."
 docker build -t $ImageName .
+if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
+
+if (-not $usingNodeDaemon) {
+  $tar = Join-Path $env:TEMP 'liveon-image.tar'
+  Write-Host "Saving image to $tar ..."
+  docker save $ImageName -o $tar
+  if ($LASTEXITCODE -ne 0) { throw "docker save failed" }
+
+  # PowerShell 5.1 has no '<' redirection and corrupts binary data sent through a
+  # pipeline, so cmd feeds the tar to the node's daemon on stdin. `docker cp` is not an
+  # alternative here: it exits 0 while copying nothing when handed a Windows path.
+  Write-Host "Loading image into the Minikube node..."
+  cmd /c "docker exec -i minikube docker load < `"$tar`""
+  if ($LASTEXITCODE -ne 0) { throw "loading the image into the Minikube node failed" }
+  Remove-Item $tar -ErrorAction SilentlyContinue
+}
 
 Write-Host "Applying Kubernetes manifests..."
 if (Test-Path $PvcFile) {
@@ -69,6 +107,12 @@ if (Test-Path $PvcFile) {
 }
 kubectl apply -f $DeploymentFile
 kubectl apply -f $ServiceFile
+
+# The manifest pins `longevity-coach:latest`, so a rebuilt image leaves the Deployment
+# spec byte-identical and `kubectl apply` is a no-op: the old pod keeps running and the
+# rollout "succeeds" without the new image ever being picked up. Restarting forces it.
+Write-Host "Restarting deployment so the rebuilt image is picked up..."
+kubectl rollout restart deploy/$DeploymentName
 
 Write-Host "Waiting for deployment rollout..."
 kubectl rollout status deploy/$DeploymentName --timeout=$RolloutTimeout
@@ -109,7 +153,11 @@ $ok = $false
 
 while ((Get-Date) -lt $deadline) {
   try {
-    $resp = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 3
+    # -UseBasicParsing is not optional: without it PowerShell 5.1 routes the response
+    # through the Internet Explorer engine, which needs IE's first-run configuration and
+    # throws "PowerShell is in NonInteractive mode" when it is missing. The service is
+    # then healthy and the script reports it as broken.
+    $resp = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 3 -UseBasicParsing
     if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) {
       $ok = $true
       break

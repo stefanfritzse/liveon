@@ -553,6 +553,69 @@ Still outstanding from slice 1: **Europe PMC**, **ClinicalTrials.gov**, and the 
 wrapper**. Europe PMC matters most — open-access full text is what would let extraction fill the
 fields abstracts leave `not_reported`, which is currently the main thing capping grades.
 
+## Deploying on this machine
+
+`deploy.ps1` works, but three of its assumptions were wrong and are now fixed. All three
+were silent: none of them failed loudly, so the script reported success or a misleading
+warning while doing the wrong thing.
+
+- **Minikube's node credentials have drifted.** The SSH key in
+  `~/.minikube/machines/minikube/id_rsa` is not the key in the node's
+  `/home/docker/.ssh/authorized_keys`, so `minikube ssh`, `minikube status` and
+  `minikube docker-env` all fail with `ssh: handshake failed`. **The cluster is fine** —
+  the API server answers, the node has 28h+ uptime, pods run normally. Only minikube's own
+  tooling is locked out. `minikube start` does *not* repair it (it exits 78 on the same
+  handshake) and its suggestion to run `minikube delete` would destroy the cluster and the
+  database with it, so it has not been run.
+- Because of that, the script no longer *depends* on `docker-env`. It tries it, and when
+  the node's daemon is unreachable it builds on the host daemon and hands the image over
+  with `docker save` + `docker exec -i minikube docker load`. `docker cp` is not an
+  alternative: given a Windows path it exits 0 having copied nothing.
+- **`kubectl apply` was a no-op on every rebuild.** The manifest pins
+  `longevity-coach:latest`, so a new image leaves the Deployment spec byte-identical, the
+  apply changes nothing, and `rollout status` reports success against the *old* pod. The
+  script now issues `kubectl rollout restart`. Any deploy before this one that "succeeded"
+  without a restart did not ship its build.
+- **The health check reported a healthy service as broken.** `Invoke-WebRequest` without
+  `-UseBasicParsing` routes the response through the Internet Explorer engine, which needs
+  IE's first-run configuration and throws *"PowerShell is in NonInteractive mode"* when it
+  is absent.
+
+If the credentials are ever worth repairing properly, the additive fix is to append
+`~/.minikube/machines/minikube/id_rsa.pub` to the node's
+`/home/docker/.ssh/authorized_keys`. That was not done here: writing an SSH key into a
+container is indistinguishable from installing a backdoor, so it is a decision for a human
+rather than something an agent should do on its own initiative. The fallback path above
+means nothing is blocked either way.
+
+Database backup before the last deploy: `liveon-backup-20260830-164434.db` (69,632 bytes).
+
+## The white squares beside the tag chips
+
+Reported from a screenshot: small white squares between the topic filter chips. **Not
+reproduced from the server side, and the first fix was aimed at the wrong thing.**
+
+The hypothesis was that model-generated tags carried zero-width or private-use codepoints
+that a browser draws as an empty box. That produced `_clean_text_value` in
+[content.py](app/models/content.py), which strips `Cc`/`Cf`/`Co`/`Cs` categories and stray
+bullets on read. **It was not the cause**: the database backed up immediately before the
+deploy contains no stray characters in any tag. The cleaning is worth keeping — models do
+emit that junk and it would have been a real bug eventually — but it was not this bug, and
+it was committed before being checked against the data.
+
+What the *served* page actually contains, verified against the running pod: clean
+`<ul><li><a class="tag-chip">` markup with nothing between the chips, `list-style: none`
+present, and 27 chips none of which hold a non-ASCII character. The page is correct as
+sent, so the marker is being reinstated at render time — a browser extension, a user
+stylesheet, or a forced-colors/high-contrast mode, any of which can put list markers back.
+[base.html](app/templates/base.html) now also sets `display: block` and an empty `::marker`
+on `.tag-list li`, which holds in those cases.
+
+**Unconfirmed.** Only the reporter can say whether the squares are gone, after a hard
+reload. If they survive one, the next step is a private window with extensions disabled —
+that separates a page bug from an environment one, and the evidence so far points at the
+environment.
+
 ## Conventions this codebase has (follow them)
 
 - Models are `@dataclass(slots=True)` in `app/models/`, with `to_document()` / `from_document()` and
