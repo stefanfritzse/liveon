@@ -155,6 +155,20 @@
         padding: 0;
         list-style: none;
       }
+
+      /* Belt and braces against list markers reappearing beside the chips. Setting
+         list-style on the ul alone is enough in a standards browser, but an extension,
+         a user stylesheet or a forced-colors mode can put the marker back, and it then
+         renders as a small square wedged between the chips. */
+      .tag-list li {
+        display: block;
+        list-style: none;
+      }
+
+      .tag-list li::marker {
+        content: "";
+        font-size: 0;
+      }
       .correction-notice {
         background: rgba(190, 60, 60, 0.08);
         border: 1px solid rgba(190, 60, 60, 0.45);
