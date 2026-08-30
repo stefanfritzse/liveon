@@ -33,6 +33,7 @@ __all__ = [
     "Outcome",
     "Span",
     "Violation",
+    "clamp_grade",
     "make_source_key",
     "normalise_identifier",
     "parse_source_key",
@@ -73,13 +74,7 @@ StudyDesign = Literal[
     "unknown",
 ]
 
-#: Designs that carry a randomised comparison, and so may license causal language (G4).
-RANDOMISED_DESIGNS: frozenset[str] = frozenset({"rct", "meta_analysis"})
-
 Subject = Literal["human", "animal", "in_vitro", "in_silico", "mixed", "unknown"]
-
-#: Subjects that are not evidence of human benefit, whatever the study says (G3).
-NON_HUMAN_SUBJECTS: frozenset[str] = frozenset({"animal", "in_vitro", "in_silico"})
 
 RetractionState = Literal["none", "concern", "corrected", "retracted"]
 
@@ -100,6 +95,22 @@ Grade = Literal["high", "moderate", "low", "preliminary", "insufficient"]
 GRADE_ORDER: tuple[str, ...] = ("insufficient", "preliminary", "low", "moderate", "high")
 
 ExtractionStatus = Literal["extracted", "not_reported", "not_extractable"]
+
+
+def clamp_grade(proposed: str, computed: str) -> str:
+    """Return the lower of a model's grade and the one code computed.
+
+    This is invariant I4 in one line: the reviewer may argue a bundle *down* — it saw an
+    overstatement the rubric could not — but a model that returns "high" for evidence the
+    rubric graded "preliminary" is simply overruled. An unrecognised grade is treated as
+    the floor, so a typo or a hallucinated grade name can never raise anything.
+    """
+
+    if computed not in GRADE_ORDER:
+        return "insufficient"
+    if proposed not in GRADE_ORDER:
+        return computed
+    return min(proposed, computed, key=GRADE_ORDER.index)
 
 
 def _utc_now() -> datetime:
@@ -360,10 +371,6 @@ class Extracted(Generic[T]):
         if value is None or span is None:
             return cls.not_extractable()
         return cls(value=value, status="extracted", span=span)
-
-
-def _extracted_document(value: Extracted[Any]) -> dict[str, Any]:
-    return value.to_document()
 
 
 # ----------------------------------------------------------------------

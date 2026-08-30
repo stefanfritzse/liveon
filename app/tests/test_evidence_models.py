@@ -279,3 +279,32 @@ def test_malformed_number_references_are_dropped_on_load() -> None:
     )
 
     assert restored.claims[0].numbers == []
+
+
+# -- grade clamping (I4) -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("proposed", "computed", "expected"),
+    [
+        ("high", "preliminary", "preliminary"),   # a model may never raise a grade
+        ("high", "high", "high"),
+        ("low", "moderate", "low"),               # but it may argue one down
+        ("insufficient", "high", "insufficient"),
+    ],
+)
+def test_a_model_can_lower_a_grade_but_never_raise_one(
+    proposed: str, computed: str, expected: str
+) -> None:
+    from app.models.evidence import clamp_grade
+
+    assert clamp_grade(proposed, computed) == expected
+
+
+def test_an_unrecognised_grade_never_raises_anything() -> None:
+    """A hallucinated grade name must not become an upgrade path."""
+
+    from app.models.evidence import clamp_grade
+
+    assert clamp_grade("excellent", "low") == "low"
+    assert clamp_grade("high", "not-a-grade") == "insufficient"

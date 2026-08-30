@@ -10,7 +10,8 @@ would otherwise have to rediscover.
 
 ## Current position
 
-**Slice 1 (the spine) — core complete, 2026-08-30.** Test suite: 424 → 565 passing.
+**Slice 1 (the spine) — core complete, 2026-08-30.** Test suite: 424 → 571 passing. Working tree
+clean, `no_google` in sync with origin, `pyflakes` clean.
 
 Slice 1 is done when a source can be discovered, acquired, extracted, stored, and cited by key, and
 no claim with an unresolvable source or an unanchored number can be constructed. That property now
@@ -98,12 +99,26 @@ Not in improvements.md; recorded so a later session does not relitigate them.
 12. **`Tip` gained `source_urls` as well as the evidence fields.** Tips will keep citing plain URLs
     until the tip path moves onto bundles in slice 3, and losing them again in the meantime would
     re-introduce the exact defect this work exists to fix.
+13. **`clamp_grade` exists already** even though the rubric does not. It is invariant I4 in one
+    function — a model may lower a grade, never raise one, and an unrecognised grade name is treated
+    as the floor. The reviewer in slice 2 must route its grade through it rather than re-deriving
+    the rule.
+14. **Unused by design, do not delete:** the `Literal` aliases in `evidence.py` (`SourceType`,
+    `StudyDesign`, `Subject`, `RecordState`, `Grade`, …) are the documented value sets the field
+    comments refer to, and `create_store` is the construction path slice 2 wires up. Everything else
+    that was unreferenced has been removed — including a `GATES` tuple that duplicated the list
+    `run_gates` actually calls, which would have let a future gate be registered and never run.
 
 ---
 
 ## Next session: start here
 
 In order. Slice 2 is "Judgement" in the improvements.md delivery table.
+
+**Trip hazard, first thing:** G1 requires `state == "approved"`, and nothing currently promotes a
+record past `extracted`. Whatever wires the reviewer must call `store.set_state(key, "approved")`
+after review, or every bundle will fail G1 and the pipeline will look broken when it is merely
+closed. `g1_sources_resolve(..., allowed_states=...)` is the seam for testing around it.
 
 1. **Europe PMC client** (`app/services/research/europepmc.py`) — same shape as `pubmed.py`, plus
    open-access full text where `isOpenAccess=Y`. Reuse `ResearchHttpClient`; the record shape and

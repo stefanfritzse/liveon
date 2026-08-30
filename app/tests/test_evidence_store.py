@@ -244,3 +244,12 @@ def test_last_used_at_drives_the_repetition_window(store: EvidenceStore) -> None
 def test_a_record_without_a_key_is_refused(store: EvidenceStore) -> None:
     with pytest.raises(ValueError):
         store.upsert_record(EvidenceRecord(source_key=""))
+
+
+def test_an_unknown_bundle_role_is_refused(store: EvidenceStore) -> None:
+    """A typo must not become data: a lost "contradicting" role loses a disagreement."""
+
+    bundle = EvidenceBundle(bundle_id="b1", claims=[Claim(text="a", evidence_keys=["doi:a"])])
+
+    with pytest.raises(ValueError, match="Unknown bundle role"):
+        store.save_bundle(bundle, roles={"doi:a": "primry"})

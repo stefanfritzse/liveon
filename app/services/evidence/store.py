@@ -329,6 +329,13 @@ class EvidenceStore:
             raise ValueError("An evidence bundle requires a bundle_id")
 
         assigned = roles or {}
+        unknown = {role for role in assigned.values() if role not in BUNDLE_ROLES}
+        if unknown:
+            # A typo would otherwise become data, and "contradicting" silently
+            # degrading to something unrecognised is how disagreement gets lost.
+            raise ValueError(
+                f"Unknown bundle role(s) {sorted(unknown)}; expected one of {list(BUNDLE_ROLES)}"
+            )
         with self._conn:
             self._conn.execute(
                 """

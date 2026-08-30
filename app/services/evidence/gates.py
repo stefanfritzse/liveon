@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Mapping, Sequence
+from typing import Mapping
 
 from app.models.evidence import Claim, EvidenceBundle, EvidenceRecord, Violation
 
@@ -279,15 +279,6 @@ def g10_unknown_ceiling(
 # Entry point
 # ----------------------------------------------------------------------
 
-#: The gates implemented so far, in reporting order.
-GATES: tuple = (
-    g1_sources_resolve,
-    g2_numbers_traceable,
-    g6_no_retracted_sources,
-    g10_unknown_ceiling,
-)
-
-
 def run_gates(
     bundle: EvidenceBundle,
     records: Mapping[str, EvidenceRecord],
@@ -314,9 +305,3 @@ def run_gates(
             },
         )
     return violations
-
-
-def blocking_gates(violations: Sequence[Violation]) -> set[str]:
-    """The distinct gates that fired, for logging and for the reviewer's rationale."""
-
-    return {violation.gate for violation in violations}
