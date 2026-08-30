@@ -185,3 +185,48 @@ def test_the_draft_normaliser_trims_provenance_fields() -> None:
     assert draft.evidence_keys == ["doi:10.1/x"]
     assert draft.evidence_grade == "moderate"
     assert draft.evidence_bundle_id is None
+
+
+# -- stored strings are readable ---------------------------------------
+
+
+def test_invisible_characters_are_stripped_from_tags() -> None:
+    """A zero-width space renders as an empty box beside the tag on the site."""
+
+    article = Article.from_document(
+        {"title": "T", "content_body": "B", "tags": ["longevity​", "▪ healthy aging"]}
+    )
+
+    assert article.tags == ["longevity", "healthy aging"]
+
+
+def test_a_model_bullet_is_not_part_of_the_tag() -> None:
+    article = Article.from_document(
+        {"title": "T", "content_body": "B", "tags": ["- posture", "* aging", "• sleep"]}
+    )
+
+    assert article.tags == ["posture", "aging", "sleep"]
+
+
+def test_cleaning_leaves_hyphenated_words_and_identifiers_alone() -> None:
+    """The rule is about decoration, and a DOI may legitimately end in a hyphen."""
+
+    article = Article.from_document(
+        {
+            "title": "T",
+            "content_body": "B",
+            "tags": ["annual check-ups", "omega-3"],
+            "source_urls": ["https://doi.org/10.1016/s0140-6736(97)11096-0"],
+            "evidence_keys": ["doi:10.1016/s0140-6736(97)11096-0"],
+        }
+    )
+
+    assert article.tags == ["annual check-ups", "omega-3"]
+    assert article.source_urls == ["https://doi.org/10.1016/s0140-6736(97)11096-0"]
+    assert article.evidence_keys == ["doi:10.1016/s0140-6736(97)11096-0"]
+
+
+def test_a_tag_that_was_only_decoration_disappears() -> None:
+    article = Article.from_document({"title": "T", "content_body": "B", "tags": ["•", "  ", "ok"]})
+
+    assert article.tags == ["ok"]
