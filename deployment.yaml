@@ -25,6 +25,10 @@ spec:
           value: "sqlite"
         - name: LIVEON_DB_PATH
           value: "/home/appuser/liveon/data/content.db"
+        # NCBI throttles unidentified callers first; E-utilities asks that automated
+        # clients identify themselves with a contact address.
+        - name: LIVEON_NCBI_EMAIL
+          value: "fritzenshyllinge@gmail.com"
         - name: LIVEON_ROOT_PATH
           value: "/liveon"
         command: ["python", "-m", "app.scripts.seed_content"]
@@ -46,6 +50,10 @@ spec:
           value: "sqlite"
         - name: LIVEON_DB_PATH
           value: "/home/appuser/liveon/data/content.db"
+        # NCBI throttles unidentified callers first; E-utilities asks that automated
+        # clients identify themselves with a contact address.
+        - name: LIVEON_NCBI_EMAIL
+          value: "fritzenshyllinge@gmail.com"
         - name: LIVEON_ROOT_PATH
           value: "/liveon"
         - name: LIVEON_LLM_PROVIDER
