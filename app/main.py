@@ -16,7 +16,7 @@ import secrets
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import (
     HTMLResponse,
@@ -41,7 +41,11 @@ from app.services.coach import (
     resolve_llm_timeout,
     separate_disclaimer,
 )
-from app.services.pipeline_scheduler import create_pipeline_scheduler
+from app.services.pipeline_scheduler import (
+    CADENCES,
+    create_pipeline_scheduler,
+    resolve_cadence_key,
+)
 from app.utils.text import markdown_to_plain_text, markdown_to_html
 from app.services.sqlite_repo import LocalSQLiteContentRepository
 
@@ -1269,6 +1273,7 @@ async def admin_dashboard(
             "tips": tips,
             "pipeline_jobs": scheduler.describe_jobs() if scheduler else [],
             "scheduler_enabled": scheduler is not None,
+            "cadences": CADENCES,
         },
     )
 
@@ -1304,6 +1309,69 @@ async def run_pipeline_admin(
     logger.info(
         "Admin triggered pipeline",
         extra={"event": "admin.pipeline_triggered", "job": job_name, "actor": username},
+    )
+    return RedirectResponse(
+        request.url_for("admin_dashboard"),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+#: Guard on the form body, which is a handful of bytes in normal use.
+_MAX_FORM_BYTES = 4096
+
+
+async def _read_form_field(request: Request, name: str) -> str:
+    """Return one field from a URL-encoded form body.
+
+    Parsed with the standard library rather than Starlette's ``request.form()``,
+    which requires ``python-multipart`` even for URL-encoded bodies. One `<select>`
+    does not justify an extra runtime dependency.
+    """
+
+    body = await request.body()
+    if len(body) > _MAX_FORM_BYTES:
+        raise HTTPException(status_code=413, detail="Form submission too large.")
+
+    fields = dict(parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True))
+    return (fields.get(name) or "").strip()
+
+
+@app.post("/admin/pipelines/{job_name}/interval")
+async def set_pipeline_interval_admin(
+    request: Request,
+    job_name: str,
+    username: str = Depends(require_admin_write),
+) -> RedirectResponse:
+    """Change how often a content pipeline runs."""
+
+    scheduler = _get_scheduler()
+    if scheduler is None:
+        raise HTTPException(
+            status_code=503,
+            detail="The pipeline scheduler is not running in this process.",
+        )
+
+    cadence_key = resolve_cadence_key(await _read_form_field(request, "cadence"))
+    if cadence_key is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Choose one of: "
+                + ", ".join(cadence.key for cadence in CADENCES)
+            ),
+        )
+
+    if not scheduler.set_cadence(job_name, cadence_key):
+        raise HTTPException(status_code=404, detail=f"Unknown pipeline: {job_name}")
+
+    logger.info(
+        "Admin changed pipeline cadence",
+        extra={
+            "event": "admin.cadence_changed",
+            "job": job_name,
+            "cadence": cadence_key,
+            "actor": username,
+        },
     )
     return RedirectResponse(
         request.url_for("admin_dashboard"),

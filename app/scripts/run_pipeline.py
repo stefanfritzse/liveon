@@ -27,6 +27,7 @@ from app.models.aggregator import FeedSource
 from app.services.aggregator import LongevityNewsAggregator, load_feeds
 from app.services.editor import EditorAgent
 from app.services.pipeline import ContentPipeline
+from app.scripts.run_tip_pipeline import PipelineConfigurationError
 from app.services.llm_factory import create_chat_model
 from app.services.summarizer import SummarizerAgent
 from dataclasses import is_dataclass, asdict
@@ -77,7 +78,7 @@ def _load_feeds() -> list[FeedSource]:
     try:
         return load_feeds()
     except ValueError as exc:  # pragma: no cover - user configuration
-        raise SystemExit(str(exc)) from exc
+        raise PipelineConfigurationError(str(exc)) from exc
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -257,6 +258,14 @@ def _build_pipeline(storage: str, db_path: str | None, feed_limit: int) -> Conte
 
 def run(argv: list[str] | None = None) -> int:
     _configure_logging()
+    try:
+        return _run(argv)
+    except PipelineConfigurationError as exc:
+        LOGGER.error("%s", exc)
+        return 2
+
+
+def _run(argv: list[str] | None = None) -> int:
     # Logged here rather than at import: the web app imports this module to run the
     # scheduled job, and used to announce a pipeline start just by loading it.
     LOGGER.info("PIPELINE_START")

@@ -92,8 +92,8 @@ Each agent can override the shared choice with `LIVEON_<AGENT>_MODEL`,
 | --- | --- | --- |
 | `LIVEON_ENABLE_SCHEDULER` | Run the pipelines inside the web process | `1` |
 | `LIVEON_DISABLE_SCHEDULER` | Set to any value to turn the scheduler off | _(unset)_ |
-| `LIVEON_ARTICLE_INTERVAL_DAYS` | Days between article runs | `1` |
-| `LIVEON_TIP_INTERVAL_DAYS` | Days between tip runs | `1` |
+| `LIVEON_ARTICLE_INTERVAL_DAYS` | Days between article runs, until an operator picks a cadence in the console | `1` |
+| `LIVEON_TIP_INTERVAL_DAYS` | Days between tip runs, until an operator picks a cadence in the console | `1` |
 | `LIVEON_TIP_INTERVAL_MONTHS` | Months between tip runs; overrides the daily setting when > 0 | `0` |
 | `LIVEON_PIPELINE_CHECK_INTERVAL_SEC` | How often the scheduler checks for due jobs | `3600` |
 | `LIVEON_MAX_ARTICLES` | Articles published per article run | `1` |
@@ -236,6 +236,27 @@ content on first boot rather than after the first full interval.
 The authenticated admin console lists each pipeline with its last run and next due time
 and offers a **Run now** button, so the first run does not have to be a CLI ritual. Only
 successful runs record a timestamp — a failed run is retried on the next check.
+
+### Choosing how often each pipeline runs
+
+The console has a cadence selector per pipeline. Articles and tips are set independently:
+
+| Choice | Interval |
+| --- | --- |
+| Daily | every day |
+| Weekly | every 7 days |
+| Every two weeks | every 14 days |
+| Monthly | same day each month, clamped to short months |
+
+The choice is stored in the database, so it survives restarts and takes precedence over
+`LIVEON_ARTICLE_INTERVAL_DAYS` / `LIVEON_TIP_INTERVAL_DAYS` / `LIVEON_TIP_INTERVAL_MONTHS`.
+Those environment variables set the starting point for a fresh deployment; once an
+operator picks a cadence in the console, that is what applies.
+
+The next run is recalculated from the last *successful* run, so shortening an interval can
+make a pipeline due straight away — which is what switching from monthly to daily is
+asking for. An environment interval with no name in the list (say `LIVEON_ARTICLE_INTERVAL_DAYS=3`)
+is shown as a custom setting rather than silently rounded to the nearest option.
 
 ## Content Generation Pipelines
 

@@ -222,10 +222,18 @@ def test_tip_provider_falls_back_to_the_local_stub() -> None:
 
 
 def test_local_stub_requires_explicit_opt_in() -> None:
-    """--allow-local-llm was accepted and then ignored; now it gates the stub."""
+    """--allow-local-llm was accepted and then ignored; now it gates the stub.
 
-    with pytest.raises(SystemExit, match="allow-local-llm"):
+    A plain exception rather than SystemExit, so the in-process scheduler can fail one
+    job instead of taking the web server down with it.
+    """
+
+    with pytest.raises(run_tip_pipeline.PipelineConfigurationError, match="allow-local-llm"):
         run_tip_pipeline._create_tip_llm("local", model_name=None, allow_local_stub=False)
+
+
+def test_a_misconfigured_tip_provider_is_a_cli_exit_code_not_a_crash() -> None:
+    assert run_tip_pipeline.main(["--model-provider", "local"]) == 2
 
 
 def test_local_stub_is_available_with_the_flag() -> None:

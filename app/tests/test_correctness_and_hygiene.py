@@ -646,3 +646,63 @@ def test_articles_are_available_over_the_json_api(tmp_path: Path, monkeypatch: p
     finally:
         main_module.app.dependency_overrides.pop(main_module.get_repository, None)
         main_module.app.state.content_repository = None
+
+
+# ----------------------------------------------------------------------
+# A scheduled job must never take the process down
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "boom",
+    [
+        SystemExit("misconfigured provider"),
+        KeyboardInterrupt(),
+        RuntimeError("ordinary failure"),
+    ],
+)
+def test_a_job_that_raises_does_not_kill_the_scheduler(
+    store: PipelineScheduleStore, boom: BaseException
+) -> None:
+    """A misconfigured tip provider raised SystemExit, which is a BaseException.
+
+    It sailed past `except Exception`, escaped the worker thread, and terminated the
+    whole web server — found by running the scheduler for real rather than in a test.
+    """
+
+    import asyncio
+
+    from app.services.pipeline_scheduler import PipelineScheduler
+
+    def _explode(_at: datetime) -> bool:
+        raise boom
+
+    job = JobConfig(name="tips", runner=_explode, interval_days=1)
+    scheduler = PipelineScheduler(store, [job])
+
+    asyncio.run(scheduler.run_once())  # must return, not propagate
+
+    # The failure is recorded as "not done", so it is retried rather than skipped.
+    assert store.get_last_run("tips") is None
+
+
+def test_a_misconfigured_provider_fails_one_job_not_the_process(
+    store: PipelineScheduleStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real path: the scheduler's tip runner with no local-stub opt-in."""
+
+    import asyncio
+
+    from app.services import pipeline_scheduler
+
+    monkeypatch.delenv("LIVEON_ALLOW_LOCAL_LLM", raising=False)
+    monkeypatch.delenv("LIVEON_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("LIVEON_TIP_MODEL", raising=False)
+    monkeypatch.delenv("LIVEON_SUMMARIZER_MODEL", raising=False)
+
+    job = JobConfig(name="tips", runner=pipeline_scheduler._run_tip_pipeline, interval_days=1)
+    scheduler = pipeline_scheduler.PipelineScheduler(store, [job])
+
+    asyncio.run(scheduler.run_once())
+
+    assert store.get_last_run("tips") is None

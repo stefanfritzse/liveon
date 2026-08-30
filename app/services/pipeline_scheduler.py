@@ -53,18 +53,85 @@ def _positive_int(raw: str | None, default: int, *, minimum: int = 1) -> int:
 
 
 @dataclass(frozen=True)
+class Cadence:
+    """A named publishing rhythm offered in the admin console."""
+
+    key: str
+    label: str
+    days: int | None = None
+    months: int | None = None
+
+    def next_run_at(self, last_run: datetime) -> datetime:
+        if self.months:
+            return _add_months(last_run, self.months)
+        if self.days:
+            return last_run + timedelta(days=self.days)
+        raise ValueError(f"Cadence {self.key!r} has no interval.")
+
+
+#: Ordered so the admin console can render them shortest-first.
+CADENCES: tuple[Cadence, ...] = (
+    Cadence(key="daily", label="Daily", days=1),
+    Cadence(key="weekly", label="Weekly", days=7),
+    Cadence(key="biweekly", label="Every two weeks", days=14),
+    Cadence(key="monthly", label="Monthly", months=1),
+)
+
+CADENCES_BY_KEY: dict[str, Cadence] = {cadence.key: cadence for cadence in CADENCES}
+
+
+def resolve_cadence_key(raw: str | None) -> str | None:
+    """Return a known cadence key, or ``None`` when ``raw`` is not one."""
+
+    cleaned = (raw or "").strip().lower()
+    return cleaned if cleaned in CADENCES_BY_KEY else None
+
+
+@dataclass(frozen=True)
 class JobConfig:
     name: str
     runner: Callable[[datetime], bool]
     interval_days: int | None = None
     interval_months: int | None = None
 
-    def next_run_at(self, last_run: datetime) -> datetime:
+    def next_run_at(self, last_run: datetime, cadence: Cadence | None = None) -> datetime:
+        """Return when this job is next due.
+
+        ``cadence`` is the operator's stored choice; without one the interval
+        configured through the environment applies.
+        """
+
+        if cadence is not None:
+            return cadence.next_run_at(last_run)
         if self.interval_months:
             return _add_months(last_run, self.interval_months)
         if self.interval_days:
             return last_run + timedelta(days=self.interval_days)
         raise ValueError("JobConfig requires interval_days or interval_months.")
+
+    @property
+    def configured_cadence_key(self) -> str | None:
+        """The cadence matching this job's environment configuration, if any.
+
+        An interval like "every 3 days" has no name in the console, so it reports
+        ``None`` and is shown as a custom setting rather than silently rounded.
+        """
+
+        for cadence in CADENCES:
+            if cadence.months and cadence.months == self.interval_months:
+                return cadence.key
+            if cadence.days and not self.interval_months and cadence.days == self.interval_days:
+                return cadence.key
+        return None
+
+    @property
+    def configured_description(self) -> str:
+        if self.interval_months:
+            unit = "month" if self.interval_months == 1 else "months"
+            return f"Every {self.interval_months} {unit}"
+        days = self.interval_days or 0
+        unit = "day" if days == 1 else "days"
+        return f"Every {days} {unit}"
 
 
 class PipelineScheduleStore:
@@ -97,6 +164,17 @@ class PipelineScheduleStore:
                 );
                 """
             )
+            # The operator's cadence choice, which overrides the environment default
+            # and survives restarts.
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pipeline_interval (
+                    job_name TEXT PRIMARY KEY,
+                    cadence_key TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
 
     def get_last_run(self, job_name: str) -> datetime | None:
         row = self._conn.execute(
@@ -120,6 +198,48 @@ class PipelineScheduleStore:
                 (job_name, timestamp),
             )
 
+    def get_cadence_key(self, job_name: str) -> str | None:
+        """Return the stored cadence choice for ``job_name``, if one was made."""
+
+        row = self._conn.execute(
+            "SELECT cadence_key FROM pipeline_interval WHERE job_name = ?;",
+            (job_name,),
+        ).fetchone()
+        return resolve_cadence_key(row["cadence_key"]) if row else None
+
+    def set_cadence_key(self, job_name: str, cadence_key: str) -> None:
+        """Persist a cadence choice, replacing any previous one."""
+
+        key = resolve_cadence_key(cadence_key)
+        if key is None:
+            raise ValueError(f"Unknown cadence: {cadence_key!r}")
+
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO pipeline_interval(job_name, cadence_key, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(job_name) DO UPDATE SET
+                    cadence_key = excluded.cadence_key,
+                    updated_at = excluded.updated_at;
+                """,
+                (job_name, key, _format_timestamp(_utc_now())),
+            )
+
+    def clear_cadence(self, job_name: str) -> None:
+        """Drop a stored choice so the environment default applies again."""
+
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM pipeline_interval WHERE job_name = ?;", (job_name,)
+            )
+
+    def cadence_for(self, job: "JobConfig") -> Cadence | None:
+        """Return the cadence in force for ``job``: the stored choice, if any."""
+
+        key = self.get_cadence_key(job.name)
+        return CADENCES_BY_KEY.get(key) if key else None
+
     def is_due(self, job: "JobConfig", now: datetime) -> bool:
         """Return ``True`` when ``job`` should run.
 
@@ -136,7 +256,7 @@ class PipelineScheduleStore:
                 extra={"event": "pipeline_scheduler.first_run", "job": job.name},
             )
             return True
-        return now >= job.next_run_at(last_run)
+        return now >= job.next_run_at(last_run, self.cadence_for(job))
 
     def try_acquire(self, job_name: str, owner: str, *, now: datetime, ttl_seconds: int) -> bool:
         """Claim ``job_name`` for ``owner``, returning ``False`` if someone else holds it.
@@ -177,7 +297,7 @@ class PipelineScheduleStore:
         """Return when ``job`` is next due, or ``None`` when it has never run."""
 
         last_run = self.get_last_run(job.name)
-        return job.next_run_at(last_run) if last_run else None
+        return job.next_run_at(last_run, self.cadence_for(job)) if last_run else None
 
 
 class PipelineScheduler:
@@ -250,7 +370,16 @@ class PipelineScheduler:
 
         try:
             logger.info("Starting pipeline: %s", job.name)
-            success = await asyncio.to_thread(job.runner, now)
+            try:
+                success = await asyncio.to_thread(job.runner, now)
+            except BaseException:  # noqa: BLE001 - including SystemExit
+                # A job is background work; nothing it raises may end the process.
+                logger.exception(
+                    "Pipeline raised: %s",
+                    job.name,
+                    extra={"event": "pipeline_scheduler.job_raised", "job": job.name},
+                )
+                success = False
             if success:
                 self._store.set_last_run(job.name, now)
                 logger.info("Pipeline finished: %s", job.name)
@@ -272,16 +401,43 @@ class PipelineScheduler:
 
         summaries: list[dict[str, object]] = []
         for job in self._jobs:
-            last_run = self._store.get_last_run(job.name)
+            stored_key = self._store.get_cadence_key(job.name)
+            effective_key = stored_key or job.configured_cadence_key
+            cadence = CADENCES_BY_KEY.get(effective_key) if effective_key else None
             summaries.append(
                 {
                     "name": job.name,
-                    "last_run": last_run,
+                    "last_run": self._store.get_last_run(job.name),
                     "next_run": self._store.next_due(job),
                     "running": job.name in self._running,
+                    "cadence_key": effective_key,
+                    "cadence_label": cadence.label if cadence else job.configured_description,
+                    "cadence_is_custom": effective_key is None,
+                    "cadence_source": "console" if stored_key else "configuration",
                 }
             )
         return summaries
+
+    def set_cadence(self, job_name: str, cadence_key: str) -> bool:
+        """Change how often ``job_name`` runs, returning ``False`` if unknown.
+
+        The next run is recalculated from the last successful run, so shortening the
+        interval can make a job due straight away — which is what an operator asking
+        for "daily" instead of "monthly" means.
+        """
+
+        if job_name not in self.job_names:
+            return False
+        self._store.set_cadence_key(job_name, cadence_key)
+        logger.info(
+            "Pipeline cadence changed",
+            extra={
+                "event": "pipeline_scheduler.cadence_changed",
+                "job": job_name,
+                "cadence": cadence_key,
+            },
+        )
+        return True
 
     async def trigger(self, job_name: str) -> bool:
         """Start ``job_name`` in the background, returning ``False`` if unknown.

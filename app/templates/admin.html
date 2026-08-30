@@ -15,6 +15,36 @@
     .admin-table-actions button {
       margin: 0;
     }
+
+    /* Keep the cadence picker on one line beside its Save button. */
+    .cadence-form {
+      align-items: center;
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .cadence-form select {
+      margin: 0;
+      min-width: 10rem;
+      width: auto;
+    }
+
+    .cadence-form button {
+      margin: 0;
+      padding: 0.35rem 0.8rem;
+      white-space: nowrap;
+      width: auto;
+    }
+
+    .visually-hidden {
+      clip: rect(0 0 0 0);
+      clip-path: inset(50%);
+      height: 1px;
+      overflow: hidden;
+      position: absolute;
+      white-space: nowrap;
+      width: 1px;
+    }
   </style>
 
   <script>
@@ -49,6 +79,7 @@
         <thead>
           <tr>
             <th scope="col">Pipeline</th>
+            <th scope="col">How often</th>
             <th scope="col">Last run</th>
             <th scope="col">Next due</th>
             <th scope="col">Actions</th>
@@ -58,6 +89,35 @@
           {% for job in pipeline_jobs %}
             <tr>
               <td>{{ job.name | capitalize }}</td>
+              <td>
+                <form
+                  method="post"
+                  action="{{ request.scope.get('root_path', '') }}/admin/pipelines/{{ job.name }}/interval"
+                  class="cadence-form"
+                >
+                  <label class="visually-hidden" for="cadence-{{ job.name }}">
+                    How often the {{ job.name }} pipeline runs
+                  </label>
+                  <select id="cadence-{{ job.name }}" name="cadence">
+                    {% if job.cadence_is_custom %}
+                      {# An environment interval with no name in this list, e.g. every 3 days. #}
+                      <option value="" selected disabled>
+                        {{ job.cadence_label }} (custom)
+                      </option>
+                    {% endif %}
+                    {% for cadence in cadences %}
+                      <option
+                        value="{{ cadence.key }}"
+                        {% if job.cadence_key == cadence.key %}selected{% endif %}
+                      >{{ cadence.label }}</option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit" class="secondary">Save</button>
+                </form>
+                {% if job.cadence_source == 'configuration' and not job.cadence_is_custom %}
+                  <small class="article-meta">From configuration</small>
+                {% endif %}
+              </td>
               <td>
                 {% if job.last_run %}
                   {{ job.last_run.strftime("%Y-%m-%d %H:%M UTC") }}

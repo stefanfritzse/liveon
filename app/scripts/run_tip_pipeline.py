@@ -38,6 +38,14 @@ if not LOGGER.handlers:  # avoid duplicates on re-import
     LOGGER.propagate = False
 
 
+class PipelineConfigurationError(RuntimeError):
+    """A pipeline was asked to run with a configuration it cannot honour.
+
+    Raised rather than ``SystemExit`` so the in-process scheduler can fail one job
+    instead of terminating the web server; ``main`` converts it to an exit status.
+    """
+
+
 class SupportsInvoke(Protocol):
     """Protocol implemented by LangChain compatible chat models."""
 
@@ -126,7 +134,7 @@ def _parse_datetime(value: str | None) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as exc:  # pragma: no cover - user configuration
-        raise SystemExit(f"Invalid ISO-8601 timestamp: {value}") from exc
+        raise PipelineConfigurationError(f"Invalid ISO-8601 timestamp: {value}") from exc
 
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
@@ -149,7 +157,7 @@ def _create_tip_llm(
 
     resolved = normalise_provider(provider, default="local")
     if resolved == "local" and not allow_local_stub:
-        raise SystemExit(
+        raise PipelineConfigurationError(
             "The 'local' provider returns a deterministic stub, not real generated "
             "content. Pass --allow-local-llm (or set LIVEON_ALLOW_LOCAL_LLM=1) to use "
             "it, or choose --model-provider ollama."
@@ -271,6 +279,14 @@ def _build_pipeline(llm: SupportsInvoke) -> TipPipeline:
 
 def main(argv: Sequence[str] | None = None) -> int:
     _configure_logging()
+    try:
+        return _main(argv)
+    except PipelineConfigurationError as exc:
+        LOGGER.error("%s", exc)
+        return 2
+
+
+def _main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     LOGGER.info("TIP_PIPELINE_START provider=%s", args.model_provider)
 
@@ -280,6 +296,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_name=args.model_name,
             allow_local_stub=args.allow_local_llm,
         )
+    except PipelineConfigurationError:
+        # A configuration mistake, not a fault: report it plainly, without a traceback.
+        raise
     except Exception:
         LOGGER.exception("Failed to initialise language model for tip generator")
         return 1
