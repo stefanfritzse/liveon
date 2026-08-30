@@ -711,6 +711,47 @@ def _run_tip_pipeline(run_at: datetime) -> RunOutcome:
     return result.outcome
 
 
+def _run_maintenance(run_at: datetime) -> RunOutcome:
+    """Re-check published evidence and correct what has changed under it."""
+
+    from app.services.evidence.maintenance import MaintenanceSweep
+    from app.services.evidence.store import EvidenceStore
+    from app.services.research.pubmed import build_pubmed_client
+    from app.services.sqlite_repo import create_repository
+
+    try:
+        store = EvidenceStore(_resolve_db_path())
+    except Exception:
+        logger.exception(
+            "Maintenance could not open the evidence store",
+            extra={"event": "maintenance.store_unavailable"},
+        )
+        return RunOutcome.SOURCE_UNAVAILABLE
+
+    client = None
+    try:
+        client = build_pubmed_client()
+        report = MaintenanceSweep(
+            store=store,
+            repository=create_repository(),
+            acquirer=client,
+            now=lambda: run_at,
+        ).run()
+    except Exception:
+        logger.exception("Maintenance sweep failed", extra={"event": "maintenance.failed"})
+        return RunOutcome.MODEL_FAILED
+    finally:
+        store.close()
+        if client is not None:
+            client.http.close()
+
+    if report.errors:
+        # A source we could not reach has not been checked, so the sweep is incomplete and
+        # should be retried rather than counted as done.
+        return RunOutcome.RETRIEVAL_FAILED
+    return RunOutcome.PUBLISHED if report.acted else RunOutcome.NO_NEW_EVIDENCE
+
+
 def create_pipeline_scheduler() -> PipelineScheduler | None:
     if not scheduler_enabled():
         return None
@@ -732,8 +773,14 @@ def create_pipeline_scheduler() -> PipelineScheduler | None:
         if tip_months
         else JobConfig(name="tips", runner=_run_tip_pipeline, interval_days=tip_days)
     )
+    maintenance_days = _positive_int(os.getenv("LIVEON_MAINTENANCE_INTERVAL_DAYS"), 7)
     jobs = [
         JobConfig(name="articles", runner=_run_article_pipeline, interval_days=article_days),
         tip_job,
+        # Weekly by default: retractions are not frequent, and each sweep re-queries every
+        # source the site has ever cited.
+        JobConfig(
+            name="maintenance", runner=_run_maintenance, interval_days=maintenance_days
+        ),
     ]
     return PipelineScheduler(store, jobs, check_interval_sec=check_interval)

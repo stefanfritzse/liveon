@@ -113,6 +113,12 @@ class Article:
     #: The limitations the reviewed claims carried. Shown to readers, because a grade
     #: without its caveats is a score rather than an explanation.
     evidence_limitations: list[str] = field(default_factory=list)
+    #: Set when maintenance finds something wrong with the evidence after publication —
+    #: a retraction, an expression of concern. Shown to readers above the body.
+    correction_notice: str | None = None
+    #: Withdrawn content stays in the database but leaves the site. Deleting it would
+    #: destroy the record of what was published, which is the opposite of accountable.
+    withdrawn: bool = False
     id: str | None = None
 
     @property
@@ -138,6 +144,8 @@ class Article:
             "evidence_grade": self.evidence_grade,
             "evidence_summary": self.evidence_summary,
             "evidence_limitations": list(self.evidence_limitations),
+            "correction_notice": self.correction_notice,
+            "withdrawn": self.withdrawn,
         }
         if self.id:
             payload["id"] = self.id
@@ -167,6 +175,8 @@ class Article:
             evidence_grade=_optional_str(data.get("evidence_grade")),
             evidence_summary=_optional_str(data.get("evidence_summary")),
             evidence_limitations=_listify_strings(data.get("evidence_limitations")),
+            correction_notice=_optional_str(data.get("correction_notice")),
+            withdrawn=bool(data.get("withdrawn")),
             id=doc_id,
         )
 
@@ -188,6 +198,12 @@ class Tip:
     evidence_grade: str | None = None
     evidence_summary: str | None = None
     evidence_limitations: list[str] = field(default_factory=list)
+    #: Set when maintenance finds something wrong with the evidence after publication —
+    #: a retraction, an expression of concern. Shown to readers above the body.
+    correction_notice: str | None = None
+    #: Withdrawn content stays in the database but leaves the site. Deleting it would
+    #: destroy the record of what was published, which is the opposite of accountable.
+    withdrawn: bool = False
     id: str | None = None
 
     @property
@@ -206,6 +222,8 @@ class Tip:
             "evidence_grade": self.evidence_grade,
             "evidence_summary": self.evidence_summary,
             "evidence_limitations": list(self.evidence_limitations),
+            "correction_notice": self.correction_notice,
+            "withdrawn": self.withdrawn,
         }
         if self.id:
             payload["id"] = self.id
@@ -232,6 +250,8 @@ class Tip:
             evidence_grade=_optional_str(data.get("evidence_grade")),
             evidence_summary=_optional_str(data.get("evidence_summary")),
             evidence_limitations=_listify_strings(data.get("evidence_limitations")),
+            correction_notice=_optional_str(data.get("correction_notice")),
+            withdrawn=bool(data.get("withdrawn")),
             id=doc_id,
         )
 

@@ -855,6 +855,9 @@ class EvidenceBundle:
     violations: list[Violation] = field(default_factory=list)
     review_status: str = "pending"  # pending | approved | downgraded | regenerate | rejected
     review: ReviewDecision | None = None
+    #: Set when a newer bundle covers the same topic. The older one is not deleted — it is
+    #: what was believed at the time, and the run log points at it.
+    superseded_by: str | None = None
     created_at: datetime = field(default_factory=_utc_now)
     run_id: str | None = None
     schema_version: int = SCHEMA_VERSION
@@ -887,6 +890,7 @@ class EvidenceBundle:
             "violations": [violation.to_document() for violation in self.violations],
             "review_status": self.review_status,
             "review": self.review.to_document() if self.review else None,
+            "superseded_by": self.superseded_by,
             "created_at": self.created_at,
             "run_id": self.run_id,
             "schema_version": self.schema_version,
@@ -905,6 +909,7 @@ class EvidenceBundle:
             violations=[violation for violation in violations if violation is not None],
             review_status=_text(payload.get("review_status")) or "pending",
             review=ReviewDecision.from_document(payload.get("review")),
+            superseded_by=_text(payload.get("superseded_by")) or None,
             created_at=_parse_datetime(payload.get("created_at")) or _utc_now(),
             run_id=_text(payload.get("run_id")) or None,
             schema_version=payload.get("schema_version") if isinstance(payload.get("schema_version"), int) else SCHEMA_VERSION,

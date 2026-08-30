@@ -236,7 +236,7 @@ class LocalSQLiteContentRepository:
 
     # --- Article helpers --------------------------------------------------------
 
-    def get_latest_articles(self, *, limit: int = 5) -> list[Article]:
+    def get_latest_articles(self, *, limit: int = 5) -> list[Article]:  # noqa: D102
         """Return newest articles ordered by published_date DESC."""
         rows = self._conn.execute(
             f"""
@@ -548,6 +548,10 @@ class LocalSQLiteContentRepository:
                 continue
             # Filtered before the count, so pagination stays honest.
             if skip_legacy and not model.evidence_assessed:
+                continue
+            # Withdrawn after a retraction. The row stays for the record; the site does not
+            # keep serving a claim we know to be unsupported.
+            if getattr(model, "withdrawn", False):
                 continue
             matches.append(model)
 

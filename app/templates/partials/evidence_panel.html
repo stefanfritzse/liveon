@@ -7,6 +7,12 @@
    Content published before the evidence layer existed is badged as unassessed rather than
    retro-graded on no information. #}
 
+{% if item.correction_notice %}
+  <aside class="correction-notice" role="alert">
+    <p>{{ item.correction_notice }}</p>
+  </aside>
+{% endif %}
+
 {% if item.evidence_assessed %}
   <aside class="evidence-panel evidence-{{ item.evidence_grade or 'unknown' }}">
     <h4 class="evidence-heading">Evidence</h4>

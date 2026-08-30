@@ -66,6 +66,12 @@ second is still being judged.
 | Question screening and standing refusals | done | [coach_guard.py](app/services/coach_guard.py) |
 | Sentence-level output gating | done | [coach_guard.py](app/services/coach_guard.py) |
 | Grounding in reviewed evidence | done | [coach_evidence.py](app/services/coach_evidence.py) |
+| **Slice 5 — upkeep (item 12)** | | |
+| Retraction and correction sweep | done | [maintenance.py](app/services/evidence/maintenance.py) |
+| Correction notices and withdrawal | done | [content.py](app/models/content.py), [evidence_panel.html](app/templates/partials/evidence_panel.html) |
+| Supersession | done | [maintenance.py](app/services/evidence/maintenance.py) |
+| Contradiction reopening | done (weak by design) | [maintenance.py](app/services/evidence/maintenance.py) |
+| Weekly scheduled job | done | [pipeline_scheduler.py](app/services/pipeline_scheduler.py) |
 | Europe PMC client | **deferred** | — |
 | ClinicalTrials.gov client | **deferred** | — |
 | News-as-signal wrapper | **deferred** | — |
@@ -406,6 +412,20 @@ Not in improvements.md; recorded so a later session does not relitigate them.
 54. **Coach retrieval is deliberately shallow.** Canonical-topic matching, no embeddings. It fails by
     finding nothing, which makes the coach say it has no good evidence — true and safe. A cleverer
     matcher returning loosely-related bundles would produce answers that merely look grounded.
+55. **Annotating is the default; withdrawal is opt-in.** A silently vanished article is
+    indistinguishable from one that never existed. The correction notice keeps the record of what
+    was said and tells the reader it was wrong, which is the more accountable of the two.
+56. **Withdrawn content is hidden, never deleted.** The row survives so the record of what was
+    published survives; only the site stops serving it.
+57. **An expression of concern annotates but never withdraws.** It is a caveat, not a finding, and
+    erasing an article over one would be an overreaction that loses information.
+58. **An unreachable source is not a retraction.** Silence from PubMed says nothing about the paper,
+    so a failed sweep reports `RETRIEVAL_FAILED` and retries rather than counting itself done.
+59. **Correction notices are fixed strings in code.** It is the one piece of text on the site that
+    absolutely must not be improvised.
+60. **Contradiction reopening is deliberately weak.** Disagreement is read from extracted outcome
+    directions, which are model output, so it never retracts anything — it marks the topic as worth
+    covering again. A contradiction is a story, not a correction.
 
 ---
 
@@ -426,14 +446,14 @@ the pipeline produces in general.
 **Then slice 5 — upkeep** (improvements.md item 12), the only correction mechanism an autonomous
 system has:
 
-55. **Retraction and correction sweep** — a weekly job that re-queries every `source_key` in
+61. **Retraction and correction sweep** — a weekly job that re-queries every `source_key` in
    `evidence_usage` for `RetractionIn`, `ErratumIn` and expressions of concern. The store already
    holds the usage links and `set_retraction`; what is missing is the job and the decision about what
    to do with affected content (`LIVEON_RETRACTION_POLICY`, default `annotate`).
-56. **Supersession** — a newer systematic review on the same `topic_key` sets `superseded_by` on the
+62. **Supersession** — a newer systematic review on the same `topic_key` sets `superseded_by` on the
    bundles it replaces and lowers their ranking weight. The field exists on `EvidenceRecord` and is
    unused.
-57. **Consensus drift** — when new records reverse a published claim, queue the topic as a candidate
+63. **Consensus drift** — when new records reverse a published claim, queue the topic as a candidate
    article. A contradiction is itself the story.
 
 **Item 13, the coach, is now bounded.** It was the highest-risk surface in the product — personalised

@@ -276,8 +276,12 @@ def test_default_cadences_match_the_product(monkeypatch: pytest.MonkeyPatch, tmp
 
     assert scheduler is not None
     jobs = {job["name"]: job for job in scheduler.describe_jobs()}
-    assert set(jobs) == {"articles", "tips"}
-    # Never run, so both are due right away.
+    assert set(jobs) == {"articles", "tips", "maintenance"}
+    assert jobs["articles"]["cadence_key"] == "daily"
+    assert jobs["tips"]["cadence_key"] == "daily"
+    # Retractions are not frequent, and each sweep re-queries every source ever cited.
+    assert jobs["maintenance"]["cadence_key"] == "weekly"
+    # Never run, so all are due right away.
     assert all(job["next_run"] is None for job in jobs.values())
 
 

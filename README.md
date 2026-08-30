@@ -123,6 +123,8 @@ pipeline runs unchanged.
 | `LIVEON_MAX_REGENERATIONS` | Rewrites allowed before a draft is abandoned | `2` |
 | `LIVEON_RUN_RETENTION_DAYS` | How long pipeline run logs are kept | `365` |
 | `LIVEON_HIDE_LEGACY` | Hide content published before evidence review, rather than badging it | `0` |
+| `LIVEON_MAINTENANCE_INTERVAL_DAYS` | Days between retraction sweeps | `7` |
+| `LIVEON_RETRACTION_POLICY` | `annotate` (leave it up with a correction) or `unpublish` | `annotate` |
 
 Run it by hand before trusting it to the scheduler. A dry run exercises every stage against the
 real APIs and model but stores nothing, and records nothing that would block the real run:
@@ -340,6 +342,14 @@ instead of the two flows above. Research is acquired from PubMed rather than fro
 every extracted value is anchored to a verbatim span in the source, ten deterministic
 gates and a grade rubric decide what may be published, and the model may lower a grade but
 never raise one. A run that cannot verify its evidence publishes nothing.
+
+- **Maintenance (weekly):** re-checks every source the site has cited. A paper that has
+since been retracted, or put under an expression of concern, stops supporting a live
+claim: the affected article or tip gets a correction notice, and with
+`LIVEON_RETRACTION_POLICY=unpublish` it leaves the site as well. Nothing is deleted — a
+silently vanished article is indistinguishable from one that never existed. The same sweep
+marks older evidence bundles superseded when a newer one covers the topic, so the coach
+stops answering from replaced evidence.
 
 Both prose pipelines log warnings for soft failures (e.g., duplicate publications) and
 surface fatal errors so you can tune prompts or feeds as needed. Every run reports a

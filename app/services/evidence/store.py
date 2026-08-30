@@ -416,12 +416,34 @@ class EvidenceStore:
             WHERE review_status IN ('approved', 'downgraded')
               AND grade != 'insufficient'
               AND (topic_key = ? OR topic_key LIKE ?)
+              AND COALESCE(json_extract(data, '$.superseded_by'), '') = ''
             ORDER BY created_at DESC
             LIMIT ?;
             """,
             (topic_prefix, f"{topic_prefix}|%", limit),
         ).fetchall()
         return [EvidenceBundle.from_document(json.loads(row["data"])) for row in rows]
+
+    def bundles_for_topic(self, topic_key: str) -> list[EvidenceBundle]:
+        """Every bundle for a topic, newest first, superseded ones included."""
+
+        rows = self._conn.execute(
+            """
+            SELECT data FROM evidence_bundles
+            WHERE topic_key = ?
+            ORDER BY created_at DESC;
+            """,
+            (topic_key,),
+        ).fetchall()
+        return [EvidenceBundle.from_document(json.loads(row["data"])) for row in rows]
+
+    def topic_keys(self) -> list[str]:
+        """Distinct topics the store holds bundles for."""
+
+        rows = self._conn.execute(
+            "SELECT DISTINCT topic_key FROM evidence_bundles WHERE topic_key != '' ORDER BY topic_key;"
+        ).fetchall()
+        return [row["topic_key"] for row in rows]
 
     def bundle_roles(self, bundle_id: str) -> dict[str, str]:
         rows = self._conn.execute(
@@ -465,6 +487,18 @@ class EvidenceStore:
                     if key
                 ],
             )
+
+    def used_source_keys(self) -> list[str]:
+        """Every source cited by published content.
+
+        This is the working set for the maintenance sweep: there is no point re-checking
+        a paper nothing was ever written from.
+        """
+
+        rows = self._conn.execute(
+            "SELECT DISTINCT source_key FROM evidence_usage ORDER BY source_key;"
+        ).fetchall()
+        return [row["source_key"] for row in rows]
 
     def usage_for_source(self, source_key: str) -> list[dict[str, Any]]:
         """Every piece of published content citing ``source_key``."""
