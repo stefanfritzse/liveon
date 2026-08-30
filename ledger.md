@@ -62,6 +62,10 @@ second is still being judged.
 | **After the first live run** | | |
 | Canonical topic naming from MeSH | done | [vocabulary.py](app/services/evidence/vocabulary.py) |
 | Live MeSH regression fixture | done | [fixtures/live_mesh.py](app/tests/fixtures/live_mesh.py) |
+| **Item 13 — the coach** | | |
+| Question screening and standing refusals | done | [coach_guard.py](app/services/coach_guard.py) |
+| Sentence-level output gating | done | [coach_guard.py](app/services/coach_guard.py) |
+| Grounding in reviewed evidence | done | [coach_evidence.py](app/services/coach_evidence.py) |
 | Europe PMC client | **deferred** | — |
 | ClinicalTrials.gov client | **deferred** | — |
 | News-as-signal wrapper | **deferred** | — |
@@ -378,15 +382,30 @@ Not in improvements.md; recorded so a later session does not relitigate them.
     from the run that exposed the clustering fault. Hand-written fixtures could not have caught it —
     they all used one consistent intervention string, which is precisely the thing reality does not
     do. Capture real metadata whenever a live run surprises us.
-50. **The advisory reviewer answers questions; it does not return a verdict.** Given a status field
+47. **The advisory reviewer answers questions; it does not return a verdict.** Given a status field
     it will publish while objecting, and given a free-text "concerns" field it will file
     observations as concerns. Closed questions have answers, and answers can be acted on in code.
-51. **A reply that answers none of the questions is a refusal, not a pass.** There is a difference
+48. **A reply that answers none of the questions is a refusal, not a pass.** There is a difference
     between "no problems" and "did not look", and only one of them is a review.
-52. **A figure the writer adds as context must appear in a cited source.** The claims keep
+49. **A figure the writer adds as context must appear in a cited source.** The claims keep
     span-level provenance; context — a duration, an age range — needs only to be verbatim in the
     paper. Refusing an accurate figure taken from a source title we handed the writer is
     brittleness, not integrity, and it made the pipeline unable to publish at all.
+50. **A question the model should not answer is one it should not be handed.** Doses, diagnoses,
+    medication decisions and emergencies are screened on the way in and answered by code. Asking a
+    model to decline reliably is a weaker guarantee than not asking it.
+51. **Refusals are written in code and must survive their own gate.** The first draft of the
+    diagnosis refusal tripped the claim ceiling — it contained "what condition you have" — and the
+    fix was to reword it, not to exempt it. A refusal that cannot pass its own check is written
+    carelessly.
+52. **Streaming holds a sentence until it has been checked.** Text already sent cannot be recalled,
+    so the coach streams a sentence at a time rather than a word at a time. That is a real cost to
+    responsiveness and the right trade for this domain.
+53. **An ungrounded answer gets no certainty allowance.** The ceiling permits "proven" only at a high
+    grade, and an answer with no retrieved evidence is graded `insufficient` rather than `unknown`.
+54. **Coach retrieval is deliberately shallow.** Canonical-topic matching, no embeddings. It fails by
+    finding nothing, which makes the coach say it has no good evidence — true and safe. A cleverer
+    matcher returning loosely-related bundles would produce answers that merely look grounded.
 
 ---
 
@@ -407,20 +426,29 @@ the pipeline produces in general.
 **Then slice 5 — upkeep** (improvements.md item 12), the only correction mechanism an autonomous
 system has:
 
-47. **Retraction and correction sweep** — a weekly job that re-queries every `source_key` in
+55. **Retraction and correction sweep** — a weekly job that re-queries every `source_key` in
    `evidence_usage` for `RetractionIn`, `ErratumIn` and expressions of concern. The store already
    holds the usage links and `set_retraction`; what is missing is the job and the decision about what
    to do with affected content (`LIVEON_RETRACTION_POLICY`, default `annotate`).
-48. **Supersession** — a newer systematic review on the same `topic_key` sets `superseded_by` on the
+56. **Supersession** — a newer systematic review on the same `topic_key` sets `superseded_by` on the
    bundles it replaces and lowers their ranking weight. The field exists on `EvidenceRecord` and is
    unused.
-49. **Consensus drift** — when new records reverse a published claim, queue the topic as a candidate
+57. **Consensus drift** — when new records reverse a published claim, queue the topic as a candidate
    article. A contradiction is itself the story.
 
-**Item 13, the coach, is still unbuilt and is the highest-risk surface in the product.** It answers
-personalised health questions live with no retrieval and no claim ceiling. Everything needed to bound
-it now exists: approved bundles to retrieve from, `check_claim_ceiling` to constrain the output, and
-`describe_grade` for honest uncertainty. It should not stay last on the list indefinitely.
+**Item 13, the coach, is now bounded.** It was the highest-risk surface in the product — personalised
+answers in real time with no retrieval and no ceiling — and it is done:
+
+- Doses, diagnoses, medication decisions and emergencies are answered by code with a standing
+  referral, and the model is never called for them.
+- Every sentence passes the claim ceiling before it is sent. Streaming holds each sentence until it
+  is complete and checked, because text already sent cannot be recalled.
+- Answers are grounded in reviewed bundles where the store has them, with the grade stated; where it
+  has none the coach is told to say so, and gets no allowance for certainty language.
+
+Verified live: dosing and medication questions returned the standing refusals without calling the
+model, and "does time-restricted eating help with weight?" was answered from the bundle synthesised
+earlier that day, correctly described as preliminary and mixed.
 
 Still outstanding from slice 1: **Europe PMC**, **ClinicalTrials.gov**, and the **news-as-signal
 wrapper**. Europe PMC matters most — open-access full text is what would let extraction fill the

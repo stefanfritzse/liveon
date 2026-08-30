@@ -265,10 +265,27 @@ class _StreamingLLM:
         yield from self.parts
 
 
-def test_agent_streams_fragments_from_a_streaming_client() -> None:
+def test_agent_streams_a_sentence_at_a_time() -> None:
+    """Fragments are coalesced into complete, checked sentences before release.
+
+    Streamed text cannot be recalled, so a sentence is held until the claim ceiling has
+    seen it. The reader gets text a sentence at a time instead of a word at a time, which
+    is the price of never having to retract a dosing instruction mid-flow.
+    """
+
     agent = CoachAgent(llm=_StreamingLLM(["Move ", "more."]))
 
-    assert list(agent.stream("How?")) == ["Move ", "more."]
+    assert list(agent.stream("How?")) == ["Move more."]
+
+
+def test_streaming_still_arrives_progressively() -> None:
+    """Sentence-level gating must not turn streaming into one big block at the end."""
+
+    agent = CoachAgent(
+        llm=_StreamingLLM(["Walk ", "after meals. ", "Sleep ", "enough. ", "Keep ", "moving."])
+    )
+
+    assert list(agent.stream("How?")) == ["Walk after meals.", " Sleep enough.", " Keep moving."]
 
 
 def test_agent_falls_back_to_a_single_fragment_without_streaming_support() -> None:

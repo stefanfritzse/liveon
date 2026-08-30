@@ -425,10 +425,29 @@ def healthz():
 
 @lru_cache
 def _cached_coach_agent() -> CoachAgent:
-    """Create a singleton CoachAgent backed by the configured language model."""
+    """Create a singleton CoachAgent backed by the configured language model.
+
+    The agent is given the evidence store when one can be opened, so answers are grounded
+    in reviewed bundles rather than in whatever the model recalls. A store that cannot be
+    opened is not fatal: the coach still answers, still declines the questions it should
+    decline, and is still told to say when it has no good evidence.
+    """
 
     llm = create_coach_llm()
-    return CoachAgent(llm=llm)
+
+    evidence = None
+    try:
+        from app.services.coach_evidence import CoachEvidence
+        from app.services.evidence.store import EvidenceStore
+
+        evidence = CoachEvidence(store=EvidenceStore())
+    except Exception:  # noqa: BLE001 - grounding is an improvement, not a prerequisite
+        logger.warning(
+            "Coach evidence store unavailable; answers will be ungrounded",
+            extra={"event": "coach.evidence_store_unavailable"},
+        )
+
+    return CoachAgent(llm=llm, evidence=evidence)
 
 
 def get_coach_agent() -> CoachAgent:

@@ -11,6 +11,13 @@ import re
 import httpx
 
 from app.models.coach import CoachAnswer, CoachQuestion, CoachTurn
+from app.services.coach_guard import (
+    RequestKind,
+    SentenceGate,
+    classify_request,
+    refusal_for,
+    screen_answer,
+)
 from app.services.llm_factory import (
     DEFAULT_OLLAMA_MODEL,
     build_chat_ollama,
@@ -179,13 +186,37 @@ def classify_llm_error(exc: Exception) -> CoachError:
     return CoachError(str(exc) or "The language model failed to answer.")
 
 
+#: Stated to the model as well as enforced after it. The gate is what makes these true;
+#: saying them here means most answers never reach it.
+_COACH_LIMITS = (
+    "Hard limits, which you never cross: do not give doses, amounts or schedules for any "
+    "supplement or medicine; do not diagnose, or guess at what condition someone has; do "
+    "not tell anyone to start, stop or change a prescribed treatment; do not claim "
+    "anything cures, prevents or reverses a disease. Say plainly when the evidence is weak "
+    "or absent rather than filling the gap, and point people to their doctor or pharmacist "
+    "for anything about their own care."
+)
+
+
 @dataclass(slots=True)
 class CoachAgent:
-    """High level orchestration for answering user questions with Ollama."""
+    """High level orchestration for answering user questions with Ollama.
+
+    The coach is the most direct channel to a reader in this product: it answers
+    personalised questions in real time. It is therefore bounded on three sides
+    (:mod:`app.services.coach_guard`) — the question is screened before the model sees it,
+    the answer is grounded in reviewed evidence where the store has any, and every
+    sentence is checked against the claim ceiling before it is sent.
+
+    ``evidence`` is optional. Without it the agent behaves as it always did, which is what
+    the offline tests and the local responder rely on; with it, answers are grounded and
+    the coach is told how strong its ground is.
+    """
 
     llm: Any
     safety_instructions: str = _DEFAULT_SAFETY_INSTRUCTIONS
     default_disclaimer: str = _DEFAULT_DISCLAIMER
+    evidence: Any = None
 
     def ask(self, question: CoachQuestion | str) -> CoachAnswer:
         """Answer ``question`` using the configured language model."""
@@ -193,7 +224,12 @@ class CoachAgent:
         question_model = question if isinstance(question, CoachQuestion) else CoachQuestion(text=str(question))
         normalized_question = question_model.stripped()
 
-        prompt_value = self._build_prompt(normalized_question, question_model.history)
+        refusal = self._refusal_for(normalized_question)
+        if refusal is not None:
+            return CoachAnswer(message=refusal, disclaimer=self.default_disclaimer)
+
+        context = self._evidence_for(normalized_question)
+        prompt_value = self._build_prompt(normalized_question, question_model.history, context)
 
         try:
             response = self._invoke_llm(prompt_value)
@@ -202,6 +238,7 @@ class CoachAgent:
 
         response_text = self._extract_response_text(response)
         message, disclaimer = separate_disclaimer(response_text, default=self.default_disclaimer)
+        message, _violations = screen_answer(message, grade=_context_grade(context))
         return CoachAnswer(message=message, disclaimer=disclaimer)
 
     def stream(self, question: CoachQuestion | str) -> "Iterator[str]":
@@ -212,15 +249,33 @@ class CoachAgent:
         """
 
         question_model = question if isinstance(question, CoachQuestion) else CoachQuestion(text=str(question))
-        prompt_value = self._build_prompt(question_model.stripped(), question_model.history)
+        normalized_question = question_model.stripped()
+
+        refusal = self._refusal_for(normalized_question)
+        if refusal is not None:
+            yield refusal
+            return
+
+        context = self._evidence_for(normalized_question)
+        prompt_value = self._build_prompt(normalized_question, question_model.history, context)
+
+        # Text already sent cannot be recalled, so nothing goes out until the sentence
+        # holding it is complete and has passed the ceiling.
+        gate = SentenceGate(grade=_context_grade(context))
 
         try:
             if hasattr(self.llm, "stream"):
                 messages = self._as_messages(prompt_value)
                 for chunk in self.llm.stream(messages):
                     text = self._extract_response_text(chunk)
-                    if text:
-                        yield text
+                    if not text:
+                        continue
+                    for piece in gate.feed(text):
+                        yield piece
+                    if gate.stopped:
+                        return
+                for piece in gate.finish():
+                    yield piece
                 return
             response = self._invoke_llm(prompt_value)
         except Exception as exc:  # noqa: BLE001 - re-raised as a classified CoachError
@@ -228,7 +283,10 @@ class CoachAgent:
 
         text = self._extract_response_text(response)
         if text:
-            yield text
+            for piece in gate.feed(text):
+                yield piece
+            for piece in gate.finish():
+                yield piece
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -269,10 +327,42 @@ class CoachAgent:
             return str(response["content"])
         return str(response)
 
+    def _refusal_for(self, question: str) -> str | None:
+        """A standing answer when the question has no safe one, else ``None``.
+
+        The model is not asked at all in that case: a question it should not answer is a
+        question it should not be handed.
+        """
+
+        kind = classify_request(question)
+        if kind is RequestKind.GENERAL:
+            return None
+
+        LOGGER.info(
+            "Coach declined a question it should not answer",
+            extra={"event": "coach.request_declined", "kind": kind.value},
+        )
+        return refusal_for(kind)
+
+    def _evidence_for(self, question: str) -> Any:
+        """Reviewed evidence for this question, or ``None`` when unconfigured."""
+
+        if self.evidence is None:
+            return None
+        try:
+            return self.evidence.for_question(question)
+        except Exception:  # noqa: BLE001 - the coach still answers, ungrounded but bounded
+            LOGGER.warning(
+                "Coach evidence lookup failed",
+                extra={"event": "coach.evidence_failed"},
+            )
+            return None
+
     def _build_prompt(
         self,
         question: str,
         history: Sequence[CoachTurn] = (),
+        context: Any = None,
     ) -> Any:
         """Create a prompt payload regardless of LangChain availability.
 
@@ -282,7 +372,9 @@ class CoachAgent:
         fixed prompt template, it can carry a variable number of prior turns.
         """
 
-        messages: list[dict[str, str]] = [{"role": "system", "content": self._system_message()}]
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": self._system_message(context)}
+        ]
 
         for turn in trim_history(history):
             text = turn.stripped()
@@ -292,11 +384,18 @@ class CoachAgent:
         messages.append({"role": "human", "content": self._human_message(question, bool(history))})
         return messages
 
-    def _system_message(self) -> str:
-        return (
-            f"{self.safety_instructions}\n"
-            "Respond in a warm, empathetic tone while staying factual and concise."
-        )
+    def _system_message(self, context: Any = None) -> str:
+        parts = [
+            self.safety_instructions,
+            "Respond in a warm, empathetic tone while staying factual and concise.",
+            _COACH_LIMITS,
+        ]
+
+        if context is not None:
+            parts.append(context.instruction())
+            parts.append(f"Reviewed evidence:\n{context.prompt_block()}")
+
+        return "\n".join(parts)
 
     @staticmethod
     def _human_message(question: str, has_history: bool) -> str:
@@ -312,6 +411,16 @@ class CoachAgent:
                 f" given. {guidance}"
             )
         return f"User question:\n{question}\n\n{guidance}"
+
+
+def _context_grade(context: Any) -> str:
+    """The evidence grade governing this answer; the floor when there is none.
+
+    An absent context must mean "no support", not "unknown": the ceiling permits
+    certainty language only at a high grade, and an ungrounded answer has earned none.
+    """
+
+    return getattr(context, "best_grade", "insufficient") if context is not None else "insufficient"
 
 
 @dataclass(slots=True)

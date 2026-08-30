@@ -399,6 +399,30 @@ class EvidenceStore:
             return None
         return EvidenceBundle.from_document(json.loads(row["data"]))
 
+    def approved_bundles(self, topic_prefix: str, *, limit: int = 3) -> list[EvidenceBundle]:
+        """Approved bundles whose topic starts with ``topic_prefix``, newest first.
+
+        Topic keys are ``intervention|outcome``, so a prefix match on the intervention
+        returns everything reviewed about it whatever endpoint was measured — which is
+        what someone asking "does fasting help?" is actually asking.
+        """
+
+        if not (topic_prefix or "").strip() or limit <= 0:
+            return []
+
+        rows = self._conn.execute(
+            """
+            SELECT data FROM evidence_bundles
+            WHERE review_status IN ('approved', 'downgraded')
+              AND grade != 'insufficient'
+              AND (topic_key = ? OR topic_key LIKE ?)
+            ORDER BY created_at DESC
+            LIMIT ?;
+            """,
+            (topic_prefix, f"{topic_prefix}|%", limit),
+        ).fetchall()
+        return [EvidenceBundle.from_document(json.loads(row["data"])) for row in rows]
+
     def bundle_roles(self, bundle_id: str) -> dict[str, str]:
         rows = self._conn.execute(
             "SELECT source_key, role FROM bundle_sources WHERE bundle_id = ?;", (bundle_id,)

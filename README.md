@@ -203,6 +203,22 @@ kubectl create secret generic liveon-admin --from-literal=password='choose-a-pas
 | `POST /api/ask/stream` | Server-sent events: `chunk` per fragment, then `done` with the final answer and disclaimer, or `error`. Used by the web UI. |
 | `POST /api/ask` | A single JSON response. Used as the fallback and for integrations. |
 
+**What the coach will not do.** It answers personalised questions in real time, so it is
+bounded on three sides ([coach_guard.py](app/services/coach_guard.py)):
+
+- **Some questions are answered by code, and the model is never asked.** Doses, diagnoses,
+  decisions about a prescribed medicine, and anything that reads as a medical emergency get
+  a standing referral. A question the model should not answer is a question it should not
+  be handed.
+- **Every sentence is checked before it is sent.** The same claim ceiling the publisher
+  uses runs over the coach's output. Streamed text cannot be recalled, so a sentence is
+  held until it is complete and has passed — the coach streams a sentence at a time rather
+  than a word at a time, which is the price of never having to retract a dosing
+  instruction mid-flow.
+- **Answers are grounded where the store has evidence.** Reviewed bundles matching the
+  question are put in the prompt with their grades, and the coach is told to say plainly
+  when there is nothing — an ungrounded answer gets no allowance for certainty language.
+
 Both accept the same body. `history` carries the earlier turns so follow-up questions
 resolve against what was already discussed — the coach itself holds no session state:
 
