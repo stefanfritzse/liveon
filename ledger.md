@@ -71,16 +71,45 @@ fixture XML and stub responses. Turning it on blind would swap a working prose p
 whose failure mode is silence: fail-closed means a broken run publishes nothing, so the site would
 simply go quiet, and the run log would be the only place saying why.
 
-**The first live run should be deliberate and watched.** Suggested order:
+**The first live run should be deliberate and watched.** Every step below has a test behind it in
+[test_evidence_first_run.py](app/tests/test_evidence_first_run.py); an earlier draft of this list
+asked for two things the code could not do, which is why they are now asserted rather than assumed.
 
-1. `LIVEON_NCBI_EMAIL` set, cache on, `LIVEON_EVIDENCE_PIPELINE=1` for one job only.
-2. Run it once by hand from the admin console rather than waiting for the scheduler.
-3. Read the run log: `RunLog.recent()` then `RunLog.events(run_id)`. The ranking scores and the
-   reviewer decision are both recorded, so an unexpected refusal explains itself.
-4. Only then leave the flag on for both jobs.
+Set `LIVEON_NCBI_EMAIL` (NCBI throttles unidentified callers first) and leave the scheduler alone
+for now. Then:
+
+1. **Rehearse, publishing nothing.** This runs acquisition, extraction, ranking, synthesis, review
+   and the post-edit re-check against the real APIs and the real model, then declines to store the
+   result. Every gate still refuses, so a rehearsal that publishes nothing has told you something.
+
+       python -m app.scripts.run_evidence_pipeline --job articles --dry-run --verbose
+
+   It prints the outcome, the topic, the grade with its rationale, each claim, and any gate that
+   refused. A dry run deliberately does *not* record usage: rehearsing a topic must not put it inside
+   the G9 cooldown and block the real run it exists to de-risk.
+
+2. **Read what happened.** The run is in the log either way.
+
+       python -m app.scripts.run_evidence_pipeline --show-runs
+       python -m app.scripts.run_evidence_pipeline --show-run <run_id>
+
+   The ranked candidates with their component scores, the reviewer decision with its rationale and
+   violations, and each re-check attempt are all there, so an unexpected refusal explains itself.
+
+3. **Do it for real, still by hand.** Same command without `--dry-run`. Check the published article
+   or tip on the site: the evidence panel should name the study types actually cited.
+
+4. **Hand it to the scheduler, one product at a time.**
+
+       LIVEON_EVIDENCE_PIPELINE=1
+       LIVEON_EVIDENCE_PIPELINE_JOBS=tips     # articles keeps the path that is known to work
+
+5. **Only then widen it.** Drop `LIVEON_EVIDENCE_PIPELINE_JOBS` to switch both jobs.
 
 A local model writing into prompts that have never seen its actual output is the part of this design
-with the least evidence behind it.
+with the least evidence behind it. Exit status follows the outcome policy: a refusal exits 0, because
+a fail-closed pipeline that refuses has worked correctly; only a run that could not reach a
+conclusion exits 1.
 
 **Live in the running system regardless of the flag** (from slice 2):
 
@@ -250,6 +279,16 @@ Not in improvements.md; recorded so a later session does not relitigate them.
     imports in `publisher.py` and `sqlite_repo.py`, and a duplicate test name in
     `test_pipeline_cadence.py` that had been shadowing a store-level assertion so it never ran. That
     test now runs, and passes.
+39. **`LIVEON_EVIDENCE_PIPELINE_JOBS` narrows the master switch to named jobs.** A first live run
+    should not switch both products at once, and the flag had no such granularity when the checklist
+    first asked for it.
+40. **`resolve_db_path` is the single answer to "which database".** `EvidenceStore()` and `RunLog()`
+    previously defaulted to `~/liveon/data/content.db` while the application ran against
+    `LIVEON_DB_PATH`, so an operator inspecting the log could silently open — and create — an empty
+    second database and conclude the pipeline had never run.
+41. **A dry run does not record usage.** Everything else happens: it acquires, extracts, ranks,
+    synthesises, reviews and re-checks against the real model. Only the usage write is skipped,
+    because that is the one side effect that would block the real run afterwards.
 
 ---
 
@@ -313,9 +352,9 @@ fields abstracts leave `not_reported`, which is currently the main thing capping
   definition never runs. Found by pyflakes during slice 2; left alone as unrelated to this work.
 - **G8 is lexical only.** improvements.md 0.2 pairs it with an LLM paraphrase classifier in the
   advisory pass. The lexical layer is authoritative and shipped; the classifier is not written.
-- **The run log is written but never read by the application.** No admin console view, no API. The
-  data is there and `RunLog.recent()` / `.events()` are the way in; a console page would be a small
-  addition and would make step 3 of the live-run checklist a click instead of a Python shell.
+- **The run log has a CLI but no console view.** `run_evidence_pipeline --show-runs` / `--show-run`
+  is the way in. An admin console page would be a small addition and would put it in front of whoever
+  is already watching the pipeline cards.
 - **Europe PMC, ClinicalTrials.gov and the news-signal wrapper are not built.** PubMed alone is
   enough to exercise the spine, but item 1 is not complete without them.
 - **`build_pubmed_client` has never run against the live API.** Every test uses fixture XML. A first

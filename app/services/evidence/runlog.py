@@ -82,9 +82,9 @@ class RunLog:
     """Append-only record of pipeline runs and the events inside them."""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        from app.services.evidence.store import DEFAULT_DB_PATH
+        from app.services.evidence.store import resolve_db_path
 
-        self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self._db_path = resolve_db_path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row

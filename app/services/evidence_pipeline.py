@@ -46,11 +46,26 @@ __all__ = [
 ]
 
 
-def evidence_pipeline_enabled() -> bool:
-    """Whether the evidence path replaces the legacy prose path."""
+def evidence_pipeline_enabled(job: str | None = None) -> bool:
+    """Whether the evidence path replaces the legacy prose path for ``job``.
+
+    ``LIVEON_EVIDENCE_PIPELINE`` is the master switch. ``LIVEON_EVIDENCE_PIPELINE_JOBS``
+    narrows it to named jobs — ``"tips"`` or ``"articles"`` — which is how a first live run
+    is kept to one product while the other keeps running the path that is known to work.
+    """
 
     raw = (os.getenv("LIVEON_EVIDENCE_PIPELINE") or "0").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    if raw not in {"1", "true", "yes", "on"}:
+        return False
+
+    allowed = {
+        name.strip().lower()
+        for name in (os.getenv("LIVEON_EVIDENCE_PIPELINE_JOBS") or "").split(",")
+        if name.strip()
+    }
+    if not allowed or job is None:
+        return True
+    return job.strip().lower() in allowed
 
 
 class SupportsAcquisition(Protocol):
@@ -100,6 +115,10 @@ class EvidencePipeline:
     #: Optional. Without one the pipeline behaves identically but leaves no diary.
     runlog: RunLog | None = None
     run_id: str | None = None
+    #: A rehearsal: every stage runs and every gate still refuses, but usage is not
+    #: recorded. Without this a dry run would put the topic inside the G9 cooldown and
+    #: block the real run it was meant to de-risk.
+    dry_run: bool = False
 
     # -- stages --------------------------------------------------------
 
@@ -432,14 +451,15 @@ class EvidencePipeline:
             )
 
         content_id = str(getattr(published, "id", None) or getattr(published, "slug", "") or "")
-        self.store.record_usage(
-            source_keys=bundle.source_keys(),
-            content_type=content_type,
-            content_id=content_id,
-            bundle_id=bundle.bundle_id,
-            topic_key=bundle.topic_key,
-            used_at=self.now(),
-        )
+        if not self.dry_run:
+            self.store.record_usage(
+                source_keys=bundle.source_keys(),
+                content_type=content_type,
+                content_id=content_id,
+                bundle_id=bundle.bundle_id,
+                topic_key=bundle.topic_key,
+                used_at=self.now(),
+            )
 
         self._event(
             "publish",

@@ -110,6 +110,7 @@ pipeline runs unchanged.
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `LIVEON_EVIDENCE_PIPELINE` | Use the evidence pipeline instead of the prose pipeline | `0` |
+| `LIVEON_EVIDENCE_PIPELINE_JOBS` | Comma-separated jobs the flag applies to (`articles`, `tips`); empty means both | _(unset)_ |
 | `LIVEON_RESEARCH_QUERIES` | JSON list of PubMed queries to discover with | built-in set |
 | `LIVEON_NCBI_API_KEY` | Raises the NCBI rate ceiling from 3 to 10 requests a second | _(unset)_ |
 | `LIVEON_NCBI_EMAIL` | Contact address sent with E-utilities requests | _(unset)_ |
@@ -122,6 +123,15 @@ pipeline runs unchanged.
 | `LIVEON_MAX_REGENERATIONS` | Rewrites allowed before a draft is abandoned | `2` |
 | `LIVEON_RUN_RETENTION_DAYS` | How long pipeline run logs are kept | `365` |
 | `LIVEON_HIDE_LEGACY` | Hide content published before evidence review, rather than badging it | `0` |
+
+Run it by hand before trusting it to the scheduler. A dry run exercises every stage against the
+real APIs and model but stores nothing, and records nothing that would block the real run:
+
+```bash
+python -m app.scripts.run_evidence_pipeline --job articles --dry-run --verbose
+python -m app.scripts.run_evidence_pipeline --show-runs
+python -m app.scripts.run_evidence_pipeline --show-run <run_id>
+```
 
 **Feeds**
 

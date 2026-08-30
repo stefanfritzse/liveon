@@ -21,6 +21,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date, datetime, timezone
 import json
 import logging
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Final
@@ -30,6 +31,22 @@ from app.models.evidence import SCHEMA_VERSION, EvidenceBundle, EvidenceRecord
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH: Final[Path] = Path.home() / "liveon" / "data" / "content.db"
+
+
+def resolve_db_path(db_path: str | Path | None = None) -> Path:
+    """Return the database to use, honouring ``LIVEON_DB_PATH``.
+
+    Every other component resolves the path this way. Defaulting to ``DEFAULT_DB_PATH``
+    while the application runs against a configured one would silently open — and create —
+    a second, empty database, which is exactly the kind of quiet divergence that makes an
+    operator conclude the pipeline never ran.
+    """
+
+    if db_path is not None:
+        return Path(db_path)
+    configured = (os.getenv("LIVEON_DB_PATH") or "").strip()
+    return Path(configured) if configured else DEFAULT_DB_PATH
+
 
 #: Roles a source can play in a bundle. "contradicting" is a first-class role because the
 #: synthesizer must surface disagreement rather than average it away.
@@ -67,7 +84,7 @@ class EvidenceStore:
     """SQLite-backed store for evidence records, bundles, and their usage."""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self._db_path = resolve_db_path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row

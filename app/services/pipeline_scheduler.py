@@ -633,7 +633,7 @@ def _run_article_pipeline(run_at: datetime) -> RunOutcome:
     from app.scripts import run_pipeline
     from app.services.evidence_pipeline import evidence_pipeline_enabled
 
-    if evidence_pipeline_enabled():
+    if evidence_pipeline_enabled("articles"):
         from app.services.evidence_jobs import run_article_job
 
         try:
@@ -677,7 +677,7 @@ def _run_tip_pipeline(run_at: datetime) -> RunOutcome:
     from app.scripts import run_tip_pipeline
     from app.services.evidence_pipeline import evidence_pipeline_enabled
 
-    if evidence_pipeline_enabled():
+    if evidence_pipeline_enabled("tips"):
         from app.services.evidence_jobs import run_tip_job
 
         try:
