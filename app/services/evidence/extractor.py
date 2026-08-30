@@ -25,6 +25,7 @@ from app.models.evidence import (
     Outcome,
     Span,
 )
+from app.services.evidence.gates import normalise_number
 from app.utils.json_repair import invoke_json_object
 from app.utils.langchain_compat import BaseMessage, ChatPromptTemplate
 
@@ -340,13 +341,18 @@ def _outcomes(payload: Any, document: str) -> list[Outcome]:
 
 
 def _digits_present(number: float | int, quote: str) -> bool:
-    """Whether the reported number literally appears in the quoted source text."""
+    """Whether the reported number literally appears in the quoted source text.
 
-    digits = "".join(char for char in str(number) if char.isdigit()).lstrip("0")
-    quote_digits = "".join(char for char in quote if char.isdigit())
-    if not digits:
-        return "0" in quote_digits
-    return digits in quote_digits
+    Uses the same canonicalisation as G2, which checks this again downstream. A whole
+    number extracted as a float arrives as ``18.0`` while the source says "18", and two
+    different opinions about whether those match would mean the extractor accepting
+    figures the gate then rejects — or worse, the reverse.
+    """
+
+    canonical = normalise_number(number)
+    if not canonical:
+        return False
+    return canonical in normalise_number(quote)
 
 
 def _coerce_int(value: Any) -> int | None:

@@ -12,10 +12,15 @@ from pathlib import Path
 import sqlite3
 from typing import Callable, Iterable
 
+from app.models.run_outcome import RunOutcome, coerce_outcome, policy_for
 from app.services.sqlite_repo import DEFAULT_DB_PATH
 
 
 logger = logging.getLogger("liveon.scheduler")
+
+#: First retry after a failed run. Doubles per consecutive failure, capped at the job's
+#: own interval so a daily job never waits longer than a day.
+_BACKOFF_BASE_SECONDS = 900.0
 
 
 def _utc_now() -> datetime:
@@ -90,7 +95,9 @@ def resolve_cadence_key(raw: str | None) -> str | None:
 @dataclass(frozen=True)
 class JobConfig:
     name: str
-    runner: Callable[[datetime], bool]
+    #: Returns a :class:`RunOutcome`. ``bool`` is still accepted for compatibility and
+    #: coerced, with ``False`` treated as a retryable failure rather than a quiet success.
+    runner: Callable[[datetime], "RunOutcome | bool"]
     interval_days: int | None = None
     interval_months: int | None = None
 
@@ -175,6 +182,20 @@ class PipelineScheduleStore:
                 );
                 """
             )
+            # Backoff state for runs that failed. Kept out of pipeline_schedule because
+            # that table requires a last_run_at, and a job whose very first run failed has
+            # not run — writing one there would fake a successful run and push the next
+            # attempt a whole cadence away.
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pipeline_retry (
+                    job_name      TEXT PRIMARY KEY,
+                    retry_at      TEXT NOT NULL,
+                    failure_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at    TEXT NOT NULL
+                );
+                """
+            )
 
     def get_last_run(self, job_name: str) -> datetime | None:
         row = self._conn.execute(
@@ -247,7 +268,14 @@ class PipelineScheduleStore:
         first boot — as this used to — meant a fresh install produced no articles for a
         week and no tips for a month, which reads as a broken site rather than a
         scheduled one.
+
+        A job that failed is held until its backoff expires. Without that, a research
+        source being down means we knock on its door every hour until it comes back.
         """
+
+        retry_at = self.get_retry_at(job.name)
+        if retry_at is not None and now < retry_at:
+            return False
 
         last_run = self.get_last_run(job.name)
         if last_run is None:
@@ -257,6 +285,57 @@ class PipelineScheduleStore:
             )
             return True
         return now >= job.next_run_at(last_run, self.cadence_for(job))
+
+    # -- failure backoff -----------------------------------------------
+
+    def get_retry_at(self, job_name: str) -> datetime | None:
+        row = self._conn.execute(
+            "SELECT retry_at FROM pipeline_retry WHERE job_name = ?;", (job_name,)
+        ).fetchone()
+        if not row or not row["retry_at"]:
+            return None
+        return _parse_timestamp(row["retry_at"])
+
+    def get_failure_count(self, job_name: str) -> int:
+        row = self._conn.execute(
+            "SELECT failure_count FROM pipeline_retry WHERE job_name = ?;", (job_name,)
+        ).fetchone()
+        return int(row["failure_count"]) if row and row["failure_count"] else 0
+
+    def record_failure(self, job_name: str, *, now: datetime, cap_seconds: float) -> datetime:
+        """Note a failed run and return when the job may next be attempted.
+
+        Exponential from fifteen minutes, capped at the job's own interval: a daily job
+        never waits longer than a day, and a source outage costs a handful of polite
+        retries rather than one an hour indefinitely.
+        """
+
+        failures = self.get_failure_count(job_name) + 1
+        delay = min(_BACKOFF_BASE_SECONDS * (2 ** (failures - 1)), max(cap_seconds, 60.0))
+        retry_at = now + timedelta(seconds=delay)
+
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO pipeline_retry(job_name, retry_at, failure_count, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(job_name) DO UPDATE SET
+                    retry_at      = excluded.retry_at,
+                    failure_count = excluded.failure_count,
+                    updated_at    = excluded.updated_at;
+                """,
+                (
+                    job_name,
+                    _format_timestamp(retry_at),
+                    failures,
+                    _format_timestamp(now),
+                ),
+            )
+        return retry_at
+
+    def clear_failures(self, job_name: str) -> None:
+        with self._conn:
+            self._conn.execute("DELETE FROM pipeline_retry WHERE job_name = ?;", (job_name,))
 
     def try_acquire(self, job_name: str, owner: str, *, now: datetime, ttl_seconds: int) -> bool:
         """Claim ``job_name`` for ``owner``, returning ``False`` if someone else holds it.
@@ -371,7 +450,7 @@ class PipelineScheduler:
         try:
             logger.info("Starting pipeline: %s", job.name)
             try:
-                success = await asyncio.to_thread(job.runner, now)
+                result = await asyncio.to_thread(job.runner, now)
             except BaseException:  # noqa: BLE001 - including SystemExit
                 # A job is background work; nothing it raises may end the process.
                 logger.exception(
@@ -379,15 +458,58 @@ class PipelineScheduler:
                     job.name,
                     extra={"event": "pipeline_scheduler.job_raised", "job": job.name},
                 )
-                success = False
-            if success:
+                result = RunOutcome.MODEL_FAILED
+
+            outcome = coerce_outcome(result)
+            policy = policy_for(outcome)
+
+            log = getattr(logger, policy.level, logger.info)
+            log(
+                "Pipeline %s finished: %s — %s",
+                job.name,
+                outcome.value,
+                policy.note,
+                extra={
+                    "event": "pipeline_scheduler.job_outcome",
+                    "job": job.name,
+                    "outcome": outcome.value,
+                },
+            )
+
+            if policy.stamp:
+                # A quiet day, a refused draft and a published article all satisfy the
+                # cadence: the system looked, and it published what it should have.
                 self._store.set_last_run(job.name, now)
-                logger.info("Pipeline finished: %s", job.name)
+                self._store.clear_failures(job.name)
             else:
-                logger.warning("Pipeline failed: %s", job.name)
-            return success
+                retry_at = self._store.record_failure(
+                    job.name, now=now, cap_seconds=self._interval_seconds(job, now)
+                )
+                logger.info(
+                    "Pipeline %s will retry at %s",
+                    job.name,
+                    _format_timestamp(retry_at),
+                    extra={
+                        "event": "pipeline_scheduler.job_backoff",
+                        "job": job.name,
+                        "retry_at": _format_timestamp(retry_at),
+                        "failures": self._store.get_failure_count(job.name),
+                    },
+                )
+
+            return outcome is RunOutcome.PUBLISHED
         finally:
             self._store.release(job.name, self._owner)
+
+    def _interval_seconds(self, job: JobConfig, now: datetime) -> float:
+        """How long this job's own cadence is, used to cap the retry backoff."""
+
+        try:
+            return max(
+                (job.next_run_at(now, self._store.cadence_for(job)) - now).total_seconds(), 60.0
+            )
+        except ValueError:  # pragma: no cover - a job with no interval cannot be scheduled
+            return 3600.0
 
     # ------------------------------------------------------------------
     # Manual control
@@ -482,7 +604,7 @@ def _resolve_db_path() -> Path:
     return DEFAULT_DB_PATH
 
 
-def _run_article_pipeline(run_at: datetime) -> bool:
+def _run_article_pipeline(run_at: datetime) -> RunOutcome:
     from app.scripts import run_pipeline
 
     try:
@@ -496,17 +618,24 @@ def _run_article_pipeline(run_at: datetime) -> bool:
         )
     except Exception:
         logger.exception("Article pipeline execution failed")
-        return False
+        return RunOutcome.MODEL_FAILED
 
     if result.errors:
         logger.warning("Article pipeline errors: %s", "; ".join(result.errors))
-        return False
+        return RunOutcome.MODEL_FAILED
     if result.warnings:
         logger.info("Article pipeline warnings: %s", "; ".join(result.warnings))
-    return True
+
+    if result.published_count:
+        return RunOutcome.PUBLISHED
+    # Nothing was published. A feed outage and a slow news day look identical from here
+    # unless the aggregation errors are consulted, and they need different responses.
+    if result.aggregation.errors:
+        return RunOutcome.RETRIEVAL_FAILED
+    return RunOutcome.NO_NEW_EVIDENCE
 
 
-def _run_tip_pipeline(run_at: datetime) -> bool:
+def _run_tip_pipeline(run_at: datetime) -> RunOutcome:
     from app.scripts import run_tip_pipeline
 
     try:
@@ -522,14 +651,13 @@ def _run_tip_pipeline(run_at: datetime) -> bool:
         result = pipeline.run(published_at=run_at)
     except Exception:
         logger.exception("Tip pipeline execution failed")
-        return False
+        return RunOutcome.MODEL_FAILED
 
     if result.errors:
         logger.warning("Tip pipeline errors: %s", "; ".join(result.errors))
-        return False
     if result.warnings:
         logger.info("Tip pipeline warnings: %s", "; ".join(result.warnings))
-    return True
+    return result.outcome
 
 
 def create_pipeline_scheduler() -> PipelineScheduler | None:

@@ -10,11 +10,13 @@ from app.models.aggregator import AggregatedContent
 from app.models.content import Article, Tip
 from app.models.editor import EditedArticle
 from app.models.publisher import PublicationResult
+from app.models.run_outcome import RunOutcome
 from app.models.summarizer import ArticleDraft
 from app.models.tip import TipDraft
 from app.models.tip_context import TipGenerationContext
 from app.models.tip_editor import TipReviewResult
 from app.services.aggregator import AggregationResult
+from app.services.tip_context import TipContextUnavailable
 from app.services.publisher import _slugify
 from app.services.tip_publisher import TipPublicationResult
 
@@ -260,6 +262,8 @@ class TipPipelineResult:
     warnings: list[str] = field(default_factory=list)
     generation_attempts: int = 1
     editor_feedback: list[str] = field(default_factory=list)
+    #: What this run concluded, for the scheduler's policy table (item 9).
+    outcome: RunOutcome = RunOutcome.PUBLISHED
 
     @property
     def succeeded(self) -> bool:
@@ -297,6 +301,26 @@ class TipPipeline:
 
         try:
             context = self.context_provider.build()
+        except TipContextUnavailable as exc:
+            # Fail closed: no research today means no tip today. The carried outcome is
+            # what tells the scheduler whether to back off or simply wait for tomorrow.
+            logger.info(
+                "Tip run produced nothing: %s",
+                exc,
+                extra={"event": "tip_pipeline.no_context", "outcome": exc.outcome.value},
+            )
+            warnings.append(str(exc))
+            return TipPipelineResult(
+                context=None,
+                draft=None,
+                tip=None,
+                publication=None,
+                errors=errors,
+                warnings=warnings,
+                generation_attempts=0,
+                editor_feedback=[],
+                outcome=exc.outcome,
+            )
         except Exception as exc:
             errors.append(f"Tip context provider failed: {exc}")
             return TipPipelineResult(
@@ -308,6 +332,7 @@ class TipPipeline:
                 warnings=warnings,
                 generation_attempts=0,
                 editor_feedback=[],
+                outcome=RunOutcome.SOURCE_UNAVAILABLE,
             )
 
         try:
@@ -403,6 +428,9 @@ class TipPipeline:
                 warnings=warnings,
                 generation_attempts=attempt,
                 editor_feedback=feedback_log,
+                # Review refusing every attempt is the gate working, not a crash: the
+                # cadence is satisfied and nothing is published.
+                outcome=RunOutcome.REVIEW_REJECTED,
             )
 
         final_draft = review_result.revised_draft or draft
@@ -417,6 +445,7 @@ class TipPipeline:
                 warnings=warnings,
                 generation_attempts=attempt,
                 editor_feedback=feedback_log,
+                outcome=RunOutcome.MODEL_FAILED,
             )
 
         try:
@@ -432,6 +461,7 @@ class TipPipeline:
                 warnings=warnings,
                 generation_attempts=attempt,
                 editor_feedback=feedback_log,
+                outcome=RunOutcome.SOURCE_UNAVAILABLE,
             )
 
         tip = publication.tip
@@ -447,5 +477,6 @@ class TipPipeline:
             warnings=warnings,
             generation_attempts=attempt,
             editor_feedback=feedback_log,
+            outcome=RunOutcome.PUBLISHED if publication.created else RunOutcome.NO_NEW_EVIDENCE,
         )
 

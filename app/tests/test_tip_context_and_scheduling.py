@@ -21,7 +21,8 @@ from app.services.pipeline_scheduler import (
     PipelineScheduler,
     create_pipeline_scheduler,
 )
-from app.services.tip_context import DailyTipContextProvider
+from app.models.run_outcome import RunOutcome
+from app.services.tip_context import DailyTipContextProvider, TipContextUnavailable
 from app.services.tip_editor import TipEditorAgent
 
 NOW = datetime(2026, 3, 4, 9, 0, tzinfo=timezone.utc)
@@ -50,11 +51,6 @@ class _StubAggregator:
         if self.error is not None:
             raise self.error
         return AggregationResult(items=list(self.items), errors=list(self.errors))
-
-
-@pytest.fixture(autouse=True)
-def _no_preset_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LIVEON_TIP_CONTEXT_PRESETS", raising=False)
 
 
 # ----------------------------------------------------------------------
@@ -112,31 +108,50 @@ def test_a_very_long_note_is_trimmed() -> None:
     assert note.endswith("…")
 
 
-def test_presets_are_used_when_no_aggregator_is_configured() -> None:
+def test_no_configured_source_refuses_rather_than_inventing_one() -> None:
+    """The offline presets used to answer here, and published health claims from them."""
+
     provider = DailyTipContextProvider(now_provider=lambda: NOW)
 
-    context = provider.build()
+    with pytest.raises(TipContextUnavailable) as excinfo:
+        provider.build()
 
-    assert context.notes
-    assert context.theme in {"Strength snacks", "Circadian-friendly light", "Nutrient timing"}
+    assert excinfo.value.outcome is RunOutcome.SOURCE_UNAVAILABLE
 
 
-def test_presets_are_used_when_aggregation_fails() -> None:
-    """A feed outage must degrade to offline notes, not abort the run."""
+def test_a_feed_outage_fails_closed_and_asks_for_a_retry() -> None:
+    """Inability to see today's research means no tip, not a tip from memory."""
 
     aggregator = _StubAggregator(error=RuntimeError("network down"))
     provider = DailyTipContextProvider(aggregator=aggregator, now_provider=lambda: NOW)
 
-    context = provider.build()
+    with pytest.raises(TipContextUnavailable) as excinfo:
+        provider.build()
 
-    assert context.notes
-    assert context.theme in {"Strength snacks", "Circadian-friendly light", "Nutrient timing"}
+    assert excinfo.value.outcome is RunOutcome.RETRIEVAL_FAILED
 
 
-def test_presets_are_used_when_aggregation_returns_nothing() -> None:
+def test_feeds_that_answer_with_nothing_are_a_quiet_day_not_an_outage() -> None:
     provider = DailyTipContextProvider(aggregator=_StubAggregator([]), now_provider=lambda: NOW)
 
-    assert provider.build().notes
+    with pytest.raises(TipContextUnavailable) as excinfo:
+        provider.build()
+
+    assert excinfo.value.outcome is RunOutcome.NO_NEW_EVIDENCE
+
+
+def test_feeds_that_all_error_are_an_outage_not_a_quiet_day() -> None:
+    """The scheduler backs off from one and simply waits for tomorrow after the other."""
+
+    provider = DailyTipContextProvider(
+        aggregator=_StubAggregator([], errors=["feed one failed", "feed two failed"]),
+        now_provider=lambda: NOW,
+    )
+
+    with pytest.raises(TipContextUnavailable) as excinfo:
+        provider.build()
+
+    assert excinfo.value.outcome is RunOutcome.RETRIEVAL_FAILED
 
 
 def test_news_backed_context_varies_with_the_news() -> None:

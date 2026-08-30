@@ -244,15 +244,17 @@ class TipLocalJSONResponder:
 
 
 def _build_tip_aggregator() -> LongevityNewsAggregator | None:
-    """Return the news aggregator that feeds tip generation, if it can be built."""
+    """Return the news aggregator that feeds tip generation, if it can be built.
 
-    if _env_bool("LIVEON_TIP_USE_PRESETS"):
-        LOGGER.info("Tip context pinned to offline presets by LIVEON_TIP_USE_PRESETS")
-        return None
+    ``None`` no longer means "fall back to presets" — there are no presets. It means the
+    run has no research source, and :class:`DailyTipContextProvider` refuses rather than
+    publishing something it made up.
+    """
+
     try:
         return LongevityNewsAggregator(load_feeds())
-    except Exception:  # noqa: BLE001 - presets remain as the fallback
-        LOGGER.exception("Could not build the tip aggregator; using offline presets")
+    except Exception:  # noqa: BLE001 - reported downstream as SOURCE_UNAVAILABLE
+        LOGGER.exception("Could not build the tip aggregator; this run will publish nothing")
         return None
 
 

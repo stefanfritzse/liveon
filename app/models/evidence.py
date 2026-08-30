@@ -31,6 +31,7 @@ __all__ = [
     "Extracted",
     "NumberRef",
     "Outcome",
+    "ReviewDecision",
     "Span",
     "Violation",
     "clamp_grade",
@@ -787,6 +788,62 @@ class Violation:
 
 
 @dataclass(slots=True)
+class ReviewDecision:
+    """The outcome of evidence review, and enough of its reasoning to audit later.
+
+    ``grade`` is always the computed grade after clamping, never whatever a model
+    proposed: see :func:`clamp_grade`.
+    """
+
+    status: str = "pending"  # pending | approved | downgraded | regenerate | rejected
+    grade: str = "insufficient"
+    rationale: list[str] = field(default_factory=list)
+    violations: list["Violation"] = field(default_factory=list)
+    notes: str = ""
+    reviewed_at: datetime = field(default_factory=_utc_now)
+    model_id: str | None = None
+    prompt_version: str | None = None
+
+    @property
+    def is_approved(self) -> bool:
+        return self.status in ("approved", "downgraded") and self.grade != "insufficient"
+
+    @property
+    def may_retry(self) -> bool:
+        """Whether regenerating the prose could plausibly fix this."""
+
+        return self.status == "regenerate"
+
+    def to_document(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "grade": self.grade,
+            "rationale": list(self.rationale),
+            "violations": [violation.to_document() for violation in self.violations],
+            "notes": self.notes,
+            "reviewed_at": self.reviewed_at,
+            "model_id": self.model_id,
+            "prompt_version": self.prompt_version,
+        }
+
+    @classmethod
+    def from_document(cls, data: Any) -> "ReviewDecision | None":
+        if not isinstance(data, dict):
+            return None
+        violations = [Violation.from_document(item) for item in data.get("violations") or []]
+        return cls(
+            status=_text(data.get("status")) or "pending",
+            grade=_text(data.get("grade")) or "insufficient",
+            rationale=_strings(data.get("rationale")),
+            violations=[violation for violation in violations if violation is not None],
+            notes=_text(data.get("notes")),
+            reviewed_at=_parse_datetime(data.get("reviewed_at")) or _utc_now(),
+            model_id=_text(data.get("model_id")) or None,
+            prompt_version=_text(data.get("prompt_version")) or None,
+        )
+
+
+@dataclass(slots=True)
 class EvidenceBundle:
     """A reviewed set of claims about one topic, and the sources behind them."""
 
@@ -797,6 +854,7 @@ class EvidenceBundle:
     grade_rationale: list[str] = field(default_factory=list)
     violations: list[Violation] = field(default_factory=list)
     review_status: str = "pending"  # pending | approved | downgraded | regenerate | rejected
+    review: ReviewDecision | None = None
     created_at: datetime = field(default_factory=_utc_now)
     run_id: str | None = None
     schema_version: int = SCHEMA_VERSION
@@ -828,6 +886,7 @@ class EvidenceBundle:
             "grade_rationale": list(self.grade_rationale),
             "violations": [violation.to_document() for violation in self.violations],
             "review_status": self.review_status,
+            "review": self.review.to_document() if self.review else None,
             "created_at": self.created_at,
             "run_id": self.run_id,
             "schema_version": self.schema_version,
@@ -845,6 +904,7 @@ class EvidenceBundle:
             grade_rationale=_strings(payload.get("grade_rationale")),
             violations=[violation for violation in violations if violation is not None],
             review_status=_text(payload.get("review_status")) or "pending",
+            review=ReviewDecision.from_document(payload.get("review")),
             created_at=_parse_datetime(payload.get("created_at")) or _utc_now(),
             run_id=_text(payload.get("run_id")) or None,
             schema_version=payload.get("schema_version") if isinstance(payload.get("schema_version"), int) else SCHEMA_VERSION,

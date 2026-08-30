@@ -13,6 +13,7 @@ from app.models.evidence import (
     Classification,
     EvidenceBundle,
     EvidenceRecord,
+    Extracted,
     NumberRef,
     Span,
 )
@@ -37,6 +38,9 @@ def _record(**overrides) -> EvidenceRecord:
         source_key=KEY,
         document_text=DOCUMENT,
         classification=Classification(design="rct", subject="human", basis=("pt:rct",)),
+        # A reported sample size is part of being "clean": G7 caps the grade when no
+        # cited human study says how many people were studied.
+        sample_size=Extracted.found(412, _span("412 adults")),
         state="approved",
     )
     defaults.update(overrides)
