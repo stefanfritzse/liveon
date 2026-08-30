@@ -17,6 +17,9 @@ data/
 *.log
 *.npy
 
+# Source archives produced with git archive
+*.zip
+
 # Editor and OS noise
 *.bak
 .DS_Store
