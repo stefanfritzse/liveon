@@ -1,636 +1,661 @@
-# Live On — Improvement Backlog
+# Live On — Evidence Layer
 
-**Scope of review:** README intent vs. current implementation, focused on *stability*, *user
-friendliness*, *UX design*, and *AI functionality*.
-**Reviewed at:** commit `a73df50` (branch `no_google`), 2026-08-29.
-**Verification performed:** full test suite run (`52 passed`), event-loop blocking reproduced,
-repository construction cost measured, 404 behaviour probed. Findings marked *(measured)* were
-reproduced, not inferred.
+**Goal:** replace the RSS→prose content pipeline with an evidence-first research pipeline, so that
+every published claim traces to a real scientific source and its strength is stated honestly.
 
-The README's promise is a locally-hosted, offline-friendly longevity coach: agentic content
-pipelines feeding a public site, plus a conversational coach on a local Ollama model. The
-building blocks are all there and the agent code is thoughtfully structured. What is missing is
-mostly the layer between "it runs on my machine once" and "it survives a user session": the
-coach blocks the whole server, tips are effectively static, and the admin console is open to
-anyone who can reach the site.
+**Baseline:** commit `f078224` (branch `no_google`), 2026-08-30, 362 tests passing.
+**Runtime:** local Ollama (`qwen2.5:14b` class), offline-friendly, no cloud or Google dependency.
+**Operating constraint:** the pipeline is **fully autonomous**. Nothing is held for human approval,
+so every gate in this plan must be executable code, covered by tests, and safe when it fails.
+**Dependencies:** none new. `httpx` (already pinned) plus stdlib `xml.etree` covers every research
+API used here; `feedparser` stays for news discovery.
 
----
-
-## Status
-
-**P0 (items 1–5): implemented and verified — 2026-08-29.** The test suite went from 52 to 101
-passing; the two headline regression tests were each confirmed to fail when their fix is reverted.
-Verified live against a real Ollama server: during a 24.2-second `qwen2.5:14b` generation, 46/46
-concurrent `/healthz` checks were served at sub-millisecond latency and full pages kept rendering.
-
-One finding emerged during the work and is folded into item 2 below: `langchain-community` passes
-its `timeout` to a *streaming* `requests.post`, where it bounds the gap between tokens rather than
-total duration — so it alone is not a ceiling. A wall-clock deadline in the endpoint supplies the
-real bound.
-
-**P1 (items 6–13): implemented and verified — 2026-08-29.** The suite went from 101 to 216
-passing. Verified live against real Ollama and live Google News feeds: the coach streamed
-698 fragments across 78% of a 10.4s answer; a follow-up question resolved its implied
-subject from history alone; and the tip pipeline generated, reviewed, refined, and
-published a tip drawn from that morning's headlines.
-
-Live testing changed the diagnosis twice, and both corrections are folded into the items
-below. First, a scheduler run appeared to show the tip editor inventing repetition
-against an empty tip list — it was not. `run_tip_pipeline` built its repository with no
-`db_path`, so it ignored `LIVEON_DB_PATH` and read the *default* database, where a
-matching tip really did exist. That bug is now fixed (item 10). Second, once the editor
-was seen to be judging correctly, the real defect surfaced: the editor knew the
-publication history and the generator did not, so the review loop could never converge —
-the generator kept re-mining a story it had already covered and could not see why.
-
-**P2 (items 14–21): implemented and verified — 2026-08-29.** The suite went from 216 to 288
-passing, plus 38 live checks against a running server and a 14-check Node harness that
-exercises the browser-side transcript behaviour rather than merely asserting it is wired.
-
-One P3 item came forward out of necessity: #24 (unsanitised rendering). Item 16 asks for the
-server to be the single renderer, which meant sending server-rendered HTML to the browser —
-widening a vector that already existed. `sanitize_html` now runs over every rendered
-Markdown output, so #24 is closed too.
-
-**P3 (items 22–30): implemented and verified — 2026-08-29.** The suite went from 288 to 348
-passing, `pyflakes` is clean across the application, and every environment variable the code
-reads is now documented. Verified live: a real two-article pipeline run against Google News
-feeds, and `/api/articles` measured at 0.36 ms of database work per request — against the
-~1.08 ms that *repository construction alone* used to cost.
-
-All items in this document are now closed.
+Numbering follows the original backlog (items 1–12) so the two documents can be read side by side.
+Item 2 is split into 2a/2b, and item 13 (the coach) is new.
 
 ---
 
-## P0 — Stability and safety. Fix before anyone else uses this.
+## 0. Invariants
 
-### 1. The entire site freezes while the coach is generating *(measured)* — ✅ FIXED
+These are the properties the system must hold at all times. Every item below exists to establish or
+protect one of them, and each has at least one test in item 11 that fails when it is violated.
 
-[main.py:335-354](app/main.py#L335-L354) declares `ask_coach_endpoint` as `async def` but calls
-the synchronous `agent.ask(question)` directly on the event loop. Nothing else is served until
-the model finishes.
+| | Invariant |
+|---|---|
+| **I1** | LLMs interpret and communicate evidence. They never define what the evidence *is*. |
+| **I2** | Every published quantitative claim resolves to a verbatim span in a stored source document. |
+| **I3** | `unknown` is a value, not a gap to be filled. Absence is never inferred away. |
+| **I4** | Evidence grades are computed in code. A model may downgrade a grade; it may never raise one. |
+| **I5** | Unverifiable means unpublished. No failure mode degrades into "publish anyway". |
+| **I6** | A gate that exists only inside a prompt is not a gate. |
 
-Reproduced: with a stub agent that takes 3 s, a `GET /healthz` issued 0.5 s into the request
-could not even be *dispatched* until t=3.01 s. With `phi3:14b` on CPU a real answer is 30–120 s,
-so every other visitor sees a hung site for the duration — and the Kubernetes `livenessProbe`
-([deployment.yaml:86-91](deployment.yaml#L86-L91), default `timeoutSeconds: 1`,
-`failureThreshold: 3`, `periodSeconds: 20`) will fail three checks and **restart the pod
-mid-answer**.
+## 0.1 The autonomy budget
 
-**Fix:** `answer = await asyncio.to_thread(agent.ask, question)` (or drop `async`, letting
-Starlette use its threadpool). Then raise `timeoutSeconds` on the probe. This one change is the
-single largest stability win available.
+There is no human reviewer, so the controls that would normally sit with one have to be paid for
+elsewhere. This is where:
 
-**Fixed.** The handler now runs the model call in a worker thread under a wall-clock deadline, and
-the probes carry explicit `timeoutSeconds`/`failureThreshold`. Verified live with `qwen2.5:14b`:
-during a 24.2 s generation, 46/46 concurrent `/healthz` checks were served at sub-millisecond
-latency and `/tips` kept rendering. The regression test in
-`app/tests/test_coach_endpoint_resilience.py` was confirmed to fail when the fix is reverted.
+1. **Deterministic gates carry the weight.** The scientific review (item 3) is primarily Python. The
+   model is consulted only for the judgement that cannot be computed, and only after the computable
+   checks have already passed.
+2. **The model is bounded by construction.** It cites opaque evidence handles it cannot invent
+   (item 4), it is graded by a rubric it cannot influence upward (item 3), and every number it writes
+   must already exist in an extracted span (I2).
+3. **Silence is the default failure.** Every named failure state (item 9) ends in "publish nothing".
+   The offline presets that let a feed outage turn into a confident health claim are deleted.
+4. **A claim ceiling applies regardless of evidence.** Some classes of statement are never published
+   autonomously, however strong the study (section 0.2).
+5. **The benchmark is the release gate.** Item 11 runs in CI. A prompt or model change that lowers
+   scientific integrity fails the build instead of reaching readers.
+6. **Publication is revocable.** Item 12 can retract or annotate already-published content. Without a
+   human in the loop, automatic correction is the only correction mechanism there is.
 
-### 2. No timeout on the coach model call — ✅ FIXED
+## 0.2 Claim ceiling
 
-The LangChain path builds `ChatOllama(model=model, base_url=base_url)` with no timeout
-([coach.py:240](app/services/coach.py#L240)). A wedged or swapping Ollama daemon holds the
-request — and, per #1, the whole server — indefinitely. The fallback HTTP client
-([coach.py:160](app/services/coach.py#L160)) hard-codes 30 s, which is *too short* for the
-default 14B model. The two paths fail in opposite directions.
+Enforced by `app/services/evidence/claim_policy.py` as gate **G8**, over both the drafted and the
+*edited* text. A draft that trips one is regenerated once and then abandoned; it is never rewritten
+into compliance, because the rewrite would be the model arguing with the gate.
 
-**Fix:** one `LIVEON_LLM_TIMEOUT` (suggest 180 s) applied to both paths; map expiry to `504`
-with a "the local model is still warming up" message rather than a generic failure.
+- **Dosing and protocol specifics** for supplements or drugs — amount, frequency, duration.
+- **Diagnosis or individualised medical advice** — anything phrased as instruction to a reader with a
+  named condition.
+- **Cure / prevent / reverse / treat** applied to a named disease.
+- **Discontinuation or substitution of medical care**, including "instead of" and "you do not need".
+- **Superlative certainty** — proven, guaranteed, definitive — outside a `high` grade bundle.
 
-**Fixed.** `LIVEON_LLM_TIMEOUT` (default 180 s) now feeds both client paths, and — because the
-`langchain-community` timeout only bounds the gap between streamed tokens — a wall-clock deadline
-in the endpoint (`_run_with_deadline`) supplies the real ceiling. `asyncio.wait_for` is unusable
-here: it awaits the cancelled task, and an uninterruptible thread makes that a full wait. The
-worker is abandoned instead. Expiry returns `504`. Verified live: a 2 s ceiling cut a ~10 s
-generation at 2.24 s and the server stayed healthy.
-
-### 3. The admin console is public, unauthenticated, and destructive — ✅ FIXED
-
-`GET /admin` plus `POST /admin/{articles,tips}/{id}/delete`
-([main.py:448-495](app/main.py#L448-L495)) have no authentication, no CSRF token, and no
-confirmation step — and [base.html:110](app/templates/base.html#L110) links "Admin" in the
-global nav for every visitor. Any crawler that follows a form, or any visitor who clicks, can
-permanently delete content. `delete_article` also cascades `article_sources`, so the URL
-de-duplication history goes with it and the pipeline will happily re-publish the deleted story.
-
-**Fix:** put the console behind auth (HTTP Basic from an env-set credential is enough for this
-deployment), drop the nav link, add a confirm step, and consider soft-delete so a mistake is
-recoverable.
-
-**Fixed.** HTTP Basic auth from `LIVEON_ADMIN_USER`/`LIVEON_ADMIN_PASSWORD`, compared with
-`secrets.compare_digest` (both fields always, so timing reveals nothing). **The console is disabled
-— `503` — until a password is set**, so an unconfigured deployment is off rather than open. Deletes
-additionally require a same-origin `Origin`/`Referer` (Basic credentials are cached by the browser,
-so cross-site POSTs are the real risk) and a confirmation dialog, and are logged with the actor.
-The nav link is gone. 20 tests in `app/tests/test_admin_security.py`.
-
-### 4. Only `RuntimeError` is handled around the model call — ✅ FIXED
-
-[main.py:355](app/main.py#L355) catches `RuntimeError`, but a down Ollama raises
-`httpx.ConnectError` / LangChain transport errors. Those escape as an unstyled `500 Internal
-Server Error` — the most common real-world failure mode is the one path that is *not* handled,
-and the user is told nothing actionable.
-
-**Fix:** catch `Exception`, and distinguish connection refused (`503`, "coach offline — is
-`ollama serve` running?") from timeout (`504`) from everything else (`500`).
-
-**Fixed.** `CoachAgent.ask` now funnels every client failure through `classify_llm_error`, which
-walks the exception chain and matches on the naming conventions `httpx` and `requests` share —
-avoiding a hard dependency on either hierarchy. Connection failures → `503`, timeouts → `504`,
-other model failures → `503`, genuine bugs → `500`. Verified against the real stack: with Ollama
-unreachable the endpoint returns `503` where it previously returned an unstyled `500`.
-
-### 5. Internal exception text is shipped to the browser and rendered in the chat — ✅ FIXED
-
-`_build_debug_detail` ([main.py:104](app/main.py#L104)) puts the exception `type` and `message`
-into the HTTP response, and the coach UI prints them into the transcript under "Debug
-information:" ([coach.html:554](app/templates/coach.html#L554)). This leaks internal
-paths/hostnames, and from a user's perspective a wellness coach answering a sleep question with
-a Python exception is alarming.
-
-**Fix:** log server-side with a short correlation id, return the id to the user, and gate the
-debug payload behind `LIVEON_DEBUG_ERRORS=1`.
-
-**Fixed.** Responses now carry `message` and a 12-character `reference`; the exception and full
-traceback go to the server log under that same reference. Confirmed end-to-end: the browser payload
-contains no traceback, host, port, or library name, while the log holds the complete chain.
-`LIVEON_DEBUG_ERRORS=1` restores inline details for development. The coach UI shows the reference
-instead of a Python exception.
+The check is a lexical rule set plus a small LLM classifier for paraphrase. The lexical half is
+authoritative: when it fires, no model opinion overrides it.
 
 ---
 
-## P1 — AI functionality. This is what makes the product feel like a coach.
+## 1. Where the code actually stands
 
-### 6. The coach has no conversation memory — ✅ FIXED
+Verified against the tree at the baseline commit, because several items in the original backlog
+describe work that is partly done, and one describes a mechanism that does not exist.
 
-The UI is a transcript, so users will naturally ask "and what about after 50?" — but every
-`/api/ask` builds a fresh two-message prompt from the single question
-([coach.py:107-131](app/services/coach.py#L107-L131)). `CoachQuestion.include_history` exists
-([models/coach.py:14](app/models/coach.py#L14)) and is never read anywhere in the codebase. The
-interface promises continuity the model cannot deliver; follow-ups get confidently wrong answers.
-
-**Fix:** accept an optional `history` array in `AskCoachRequest`, cap it server-side (last ~6
-turns / N characters), and fold it into the prompt. The client already holds the transcript.
-
-**Fixed.** `CoachQuestion` carries a `history` of `CoachTurn`s, which `/api/ask` and
-`/api/ask/stream` accept and the agent replays as prior conversation turns. The dead
-`include_history` flag is gone. History is bounded twice over — turn count
-(`LIVEON_COACH_HISTORY_TURNS`, default 6) and character budgets — because the client
-supplies the transcript. Verified live: after one exchange about strength training,
-"And how should that change after 65?" produced an answer about resistance training it
-was never re-told the subject of, and differed from the same question asked cold.
-
-### 7. No streaming — 30–120 seconds of dead air — ✅ FIXED
-
-The only feedback is the submit button changing to "Sending…"
-([coach.html:394-404](app/templates/coach.html#L394-L404)). There is no typing indicator in the
-transcript, no elapsed timer, no cancel, and no client-side `fetch` timeout — a dropped
-connection leaves the button disabled forever. Most first-time users will assume it is broken
-and reload.
-
-**Fix (highest UX leverage after P0):** Ollama supports `stream: true`; expose `/api/ask/stream`
-as SSE and render tokens as they arrive. If that is too large a step, ship the cheap version
-first: a pulsing "Coach is thinking…" bubble, an elapsed-seconds counter, an `AbortController`
-with a Cancel button, and a client timeout.
-
-**Fixed.** `POST /api/ask/stream` emits server-sent events — `chunk` per fragment, then
-`done` with the cleaned answer and disclaimer, or `error` carrying the status the JSON
-endpoint would have returned. The blocking generator runs in a worker thread and feeds
-the event loop through a queue, so streaming inherits the P0 non-blocking guarantee and
-the same wall-clock deadline. The UI adds a pulsing "thinking" bubble, an elapsed-seconds
-counter, a Stop button (`AbortController`), a client-side timeout, and it restores the
-question after a failure or stop. It falls back to `/api/ask` if the stream cannot open.
-Verified live with `qwen2.5:14b`: 698 chunks, first token at 2.25s, spread across 78% of
-a 10.4s answer.
-
-### 8. Health answers ship with an empty disclaimer — ✅ FIXED
-
-`_DEFAULT_DISCLAIMER = ""` ([coach.py:29](app/services/coach.py#L29)), while
-`AskCoachResponse.disclaimer` is documented as the "Safety disclaimer appended to every
-response" ([main.py:180](app/main.py#L180)). In practice the field is empty unless the model
-happens to emit the literal token `Disclaimer:`, so the styled disclaimer block in the
-transcript almost never renders. For a product giving health guidance the per-answer disclaimer
-should not be luck-of-the-draw — the site footer is not the same thing.
-
-**Fix:** set a real default (one sentence: educational only, consult a professional).
-
-**Fixed.** `_DEFAULT_DISCLAIMER` is now a real sentence, so every answer carries it
-whether or not the model volunteers one; a model-supplied trailing `Disclaimer:` still
-takes precedence.
-
-### 9. `_separate_disclaimer` can truncate a real answer — ✅ FIXED
-
-[coach.py:247-260](app/services/coach.py#L247-L260) does `lower.rfind("disclaimer:")` anywhere
-in the text and discards everything after it. An answer that legitimately mentions "…the
-supplement label disclaimer: …" loses its tail into the disclaimer box.
-
-**Fix:** only split on a `Disclaimer:` that starts its own line near the end — or better, ask the
-model for JSON and stop scraping prose.
-
-**Fixed.** The marker must now start its own line *and* open the final block of the
-response. A mid-answer mention keeps its full text. The first regex missed
-`**Disclaimer:**` — emphasis can close on either side of the colon — which the tests
-caught.
-
-### 10. "Tips" are three hard-coded presets on a 3-day rotation — ✅ FIXED
-
-`DailyTipContextProvider` picks `presets[today.toordinal() % 3]`
-([tip_context.py:16-94](app/services/tip_context.py#L16-L94)) from three literal dicts. The tip
-pipeline therefore sees identical research notes every third day and never touches news
-aggregation at all. Two consequences:
-
-- The README states both pipelines "share the same aggregation pool" — they do not. The site's
-  "Tip of the Day" is, at best, a three-item carousel.
-- The `TipEditorAgent` rubric explicitly rejects repetition
-  ([tip_editor.py:19-25](app/services/tip_editor.py#L19-L25)) while the generator is fed the same
-  three note sets. Once a handful of tips exist, runs should increasingly burn all three attempts
-  and fail — the editor-in-the-loop is fighting its own input.
-
-**Fix:** feed the tip generator from `LongevityNewsAggregator` (the article pipeline already does
-the URL-dedup work), keep the presets only as an offline fallback, and pass recent tip *bodies* —
-not just titles ([tip_editor.py:154-170](app/services/tip_editor.py#L154-L170)) — into the
-novelty check.
-
-**Fixed.** `DailyTipContextProvider` now takes the aggregator and distils the same news
-pool the article pipeline uses into notes and sources, falling back to the presets when
-no feed is reachable or `LIVEON_TIP_USE_PRESETS=1`. Feed configuration moved to
-`app/services/aggregator.py` so both pipelines share one definition. The novelty check
-sees tip *bodies*, not just titles.
-
-Two further defects surfaced only under live testing:
-
-- `run_tip_pipeline._build_pipeline` constructed `LocalSQLiteContentRepository()` with no
-  path, so every tip run ignored `LIVEON_DB_PATH` and wrote to the default database. Both
-  it and `seed_content` now use `create_repository()`.
-- The editor knew the publication history and the generator did not, so the loop could not
-  converge. The generator now receives recently published tips with an explicit
-  "pick a different angle" instruction, and each retry leads with a different source story
-  (`TipGenerationContext.focused`). Verified live: against a database already holding a
-  conflicting tip, the generator moved to an entirely different story, and a subsequent
-  run converged on attempt 3 to publish a specific, news-derived tip.
-
-### 11. Default cadences contradict the product — ✅ FIXED
-
-[pipeline_scheduler.py:245-246](app/services/pipeline_scheduler.py#L245-L246): articles every
-**7 days**, tips every **1 month** — under a homepage that says "Tip of the Day". Worse,
-`ensure_initialized` ([pipeline_scheduler.py:111](app/services/pipeline_scheduler.py#L111))
-stamps `last_run = now` on first boot, so a fresh install generates *nothing* for a week
-(articles) or a month (tips). The scheduler is on by default and undocumented, so this is the
-out-of-box experience.
-
-**Fix:** tips daily, articles daily or every other day; on first boot run once immediately rather
-than starting the clock; document the knobs; add a "Run now" button to the (now-authenticated)
-admin console so the first run isn't a CLI ritual.
-
-**Fixed.** Articles and tips both default to daily (`LIVEON_ARTICLE_INTERVAL_DAYS`,
-`LIVEON_TIP_INTERVAL_DAYS`); `LIVEON_TIP_INTERVAL_MONTHS` still works if set. A job with
-no recorded run is due immediately instead of having `last_run` stamped to now, and only
-a *successful* run records a timestamp, so a failure is retried rather than skipped. The
-admin console lists each pipeline with its last run and next due time and offers
-"Run now", which starts the job in the background rather than holding the request open.
-Verified live: a server started against an empty database published an article on first
-boot, and the failed tip run correctly recorded no timestamp.
-
-### 12. The tip CLI can't reach Ollama, and one env var breaks it outright — ✅ FIXED
-
-- `--model-provider` allows only `["local", "openai", "gpt"]`
-  ([run_tip_pipeline.py:82](app/scripts/run_tip_pipeline.py#L82)) although `_create_tip_llm`
-  implements an `ollama` branch — the README's "you can still select OpenAI/Ollama providers" is
-  not reachable from the CLI.
-- The argparse *default* comes from `LIVEON_TIP_MODEL` **or `LIVEON_SUMMARIZER_MODEL`**
-  ([run_tip_pipeline.py:73-75](app/scripts/run_tip_pipeline.py#L73-L75)). Setting
-  `LIVEON_SUMMARIZER_MODEL=ollama` — exactly what you do to configure the article pipeline —
-  makes the tip CLI abort with `invalid choice: 'ollama'`.
-- `--allow-local-llm` is threaded into `_create_tip_llm(allow_local_stub=…)` and never read: the
-  flag documented in the README does nothing.
-- The tip Ollama branch imports the deprecated `langchain_community.chat_models.ChatOllama`
-  directly and sets neither `format="json"` nor `temperature`, unlike the article path
-  ([run_pipeline.py:160-186](app/scripts/run_pipeline.py#L160-L186)) which carefully does both.
-  The tip agents demand strict JSON while running at Ollama's default temperature of 0.8.
-
-**Fix:** add `ollama` to `choices`, share one `_create_llm` helper between both scripts, and
-either implement or delete `--allow-local-llm`.
-
-**Fixed.** `app/services/llm_factory.py` is now the single place chat models are built,
-shared by both CLIs and the coach; the three copies of the Ollama URL resolver are gone.
-`--model-provider` offers every supported provider including `ollama`, and an inherited
-`LIVEON_SUMMARIZER_MODEL=ollama` no longer aborts the tip CLI. `--allow-local-llm` is
-enforced: the deterministic stub requires explicit opt-in, since publishing fabricated
-tips should be a decision rather than the accident of an unset variable. The default
-provider now consults `LIVEON_LLM_PROVIDER`, so a deployment configured for Ollama gets
-real tips. The tip path finally gets the `format="json"` and low temperature the article
-path always had.
-
-### 13. Four copies of the JSON-repair code, and no retry when it fails — ✅ FIXED
-
-`_parse_payload` / `_strip_code_fence` / `_scan_for_object` / `_try_parse_mapping` are duplicated
-near-verbatim in [summarizer.py](app/services/summarizer.py#L98-L160),
-[editor.py](app/services/editor.py#L131-L204),
-[tip_generator.py](app/services/tip_generator.py#L178-L237) and
-[tip_editor.py](app/services/tip_editor.py#L218-L279) — four places to fix the next parser bug.
-And when parsing does fail, the article pipeline gives up on the whole run: one malformed response
-from a small local model discards all the aggregation work.
-
-**Fix:** extract `app/utils/json_repair.py`, and add one bounded re-ask ("your last reply was not
-valid JSON, return only the object") before failing — the tip pipeline already proves the
-feedback-loop pattern works.
-
-**Fixed.** `app/utils/json_repair.py` holds the one parsing ladder — whole response,
-fenced block, embedded object, Python literal — and all four agents call it; roughly 300
-lines of duplication removed. `invoke_json_object` re-asks once with the parse error and
-the offending reply attached, so a single malformed response no longer discards the feed
-fetching and summarisation that preceded it. Writing the tests caught a bug in the new
-helper: list-shaped message content was returned unjoined, which would have failed
-downstream on `.strip()`.
+| Area | Today | Implication |
+|---|---|---|
+| Discovery | [aggregator.py](app/services/aggregator.py) parses RSS only; the default feeds are Google News search RSS. No page body is ever fetched. | There is no acquisition layer to extend. Item 1 is new construction. |
+| Article provenance | [allowlisted_sources](app/models/editor.py#L115) already rejects model-invented URLs and keeps the feed spelling. | Item 4 is a generalisation (URL allowlist → evidence IDs), not a rewrite. |
+| Tip provenance | [TipPublisher.publish](app/services/tip_publisher.py#L57) builds `Tip(...)` with no source field; [Tip](app/models/content.py#L145) has none. | `context.sources` and `TipDraft.metadata` are discarded at persistence. Confirmed. |
+| Tip fallback | [_DEFAULT_PRESETS](app/services/tip_context.py) ships quantitative claims ("20-30g of protein … curb cravings for the next 6 hours") behind a link that does not support them. | A feed outage currently produces a confident, mis-sourced health claim. Most urgent single fix here. |
+| Article selection | [ContentPipeline.run](app/services/pipeline.py) calls `summarize([item])` per candidate, newest-first. | Item 7 is real; the `Sequence` interface already exists, unused. |
+| Storage | [sqlite_repo.py](app/services/sqlite_repo.py) stores `to_document()` JSON in a `data` column and `from_document` tolerates missing keys. | New model fields are additive; no migration needed. Item 8 is template work. |
+| Scheduling | Runners return `bool`; [_execute](app/services/pipeline_scheduler.py#L384) stamps `last_run` only on success, on an hourly tick. | "Nothing new today" advances the cadence; "feeds are down" retries hourly forever. Item 9 must change this signature. |
+| Coach | [coach.py](app/services/coach.py) has no retrieval — system prompt plus history. | The most safety-sensitive surface sits entirely outside the evidence layer. Item 13. |
+| Tests | 362 passing; [conftest.py](app/tests/conftest.py) has no network guard. | New HTTP clients will silently reach the network in CI unless one is added (item 11). |
 
 ---
 
-## P2 — User friendliness and UX design
+## 2. Target architecture
 
-### 14. Broken links show raw JSON to the user *(measured)* — ✅ FIXED
+```
+                         DISCOVERY
+        ┌────────────────────┼────────────────────┐
+        │                    │                    │
+   PubMed / EPMC     ClinicalTrials.gov      News / RSS
+    (primary)           (primary)          (signal only)
+        │                    │                    │
+        └────────────────────┼────────────────────┘
+                             ▼
+                    ACQUISITION  (code)
+        canonical ID · verbatim document · metadata
+                             │
+                             ▼
+              ┌──── RESEARCH KNOWLEDGE STORE ────┐
+              │   evidence_sources · aliases     │
+              │   bundles · usage · runs         │
+              └──────────────┬───────────────────┘
+                             ▼
+              2a  EXTRACTOR    (LLM, span-anchored, per source)
+                             ▼
+              2b  SYNTHESIZER  (LLM, per topic cluster)
+                             ▼
+              3   EVIDENCE REVIEWER
+                  ├─ G1–G10 gates      (code, authoritative)
+                  ├─ grade rubric      (code, downgrade-only)
+                  └─ residual review   (LLM, advisory)
+                             │
+                     approved bundle
+                    ┌────────┴────────┐
+                    ▼                 ▼
+              ARTICLE WRITER      TIP WRITER
+                    │                 │
+              ARTICLE EDITOR       TIP EDITOR     ← editorial only, claim set frozen
+                    └────────┬────────┘
+                             ▼
+                POST-EDIT RE-CHECK (G2, G4, G8)
+                             ▼
+                         PUBLISHER
+```
 
-`GET /articles/does-not-exist` returns `application/json` `{"detail":"Article not found"}`, and
-any unknown path returns `{"detail":"Not Found"}` — no header, no nav, no way back.
-
-**Fix:** an `HTTPException` handler that renders a styled 404/500 template for HTML requests and
-keeps JSON for `/api/*`.
-
-**Fixed.** A `StarletteHTTPException` handler renders `errors/error.html` — with the site
-header, navigation, and suggested destinations — for browser requests, while `/api/*` and
-`/healthz` keep returning JSON. Response headers survive the switch, so a `401` still
-carries `WWW-Authenticate` and the browser still prompts.
-
-### 15. Stale copy contradicting shipped features — ✅ FIXED
-
-- Home hero: "and **soon** chat with an AI longevity coach" ([home.html:9](app/templates/home.html#L9)) — it shipped.
-- Admin: "Removal actions will be available soon" ([admin.html:6](app/templates/admin.html#L6)) sits directly above working Delete buttons.
-- `/coach` route docstring: "placeholder page for the future interactive coach experience" ([main.py:434](app/main.py#L434)).
-
-**Fixed.** The home hero no longer calls the coach future work, the `/coach` docstring
-describes what it is, and the admin console's "removal actions will be available soon"
-went with the P0 lockdown.
-
-### 16. Chat rendering emits invalid HTML and duplicates the server's markdown — ✅ FIXED
-
-[coach.html:478](app/templates/coach.html#L478) assigns block-level markup (`<p>`, `<ul>`, `<ol>`)
-into `body.innerHTML` where `body` is a `<p>` element — browsers silently close the paragraph and
-the nesting and spacing degrade. Separately, the hand-rolled `renderMarkdown`
-([coach.html:331](app/templates/coach.html#L331)) is a second, weaker markdown implementation that
-will drift from the server's `markdown_to_html` filter.
-
-**Fix:** render into a `<div class="coach-message-body">`; consider having the API return
-pre-rendered, sanitized HTML so there is one renderer.
-
-**Fixed.** The invalid `<p>` nesting went with the P1 streaming rewrite. For the duplicate
-renderer, `/api/ask` and the stream's `done` event now return `answer_html` alongside the
-raw Markdown, and the browser displays that — so the server is the single authoritative
-renderer and the small client-side one is demoted to a streaming preview. Sending server
-HTML to the page meant sanitising it first, which closes #24 as well.
-
-### 17. The conversation is disposable — ✅ FIXED
-
-Reload and the transcript is gone. There is no Clear, no Copy, no Retry, no way to keep a useful
-answer. For a coach whose answers take a minute to produce, losing them to an accidental refresh
-is a genuine frustration.
-
-**Fix:** `sessionStorage` for the transcript, plus copy/clear controls. (Named sessions are the
-natural follow-on once #6 lands.)
-
-**Fixed.** The transcript is kept in `sessionStorage` for the life of the tab and restored
-on reload (with a note saying so), alongside a per-answer Copy button, a Copy conversation
-button, and a Clear control. Storage access is wrapped so private-browsing quota errors
-degrade to "not kept" rather than breaking the page, and an oversized transcript is trimmed
-to the most recent exchanges. Verified by running the page script against a stub DOM in
-Node: ask → persist → reload → restore → copy → clear → reload.
-
-### 18. Offline-first claim broken by a CDN stylesheet — ✅ FIXED
-
-[base.html:14-17](app/templates/base.html#L14-L17) loads Pico CSS from jsdelivr. The README's
-whole pitch is "iterate offline while keeping sensitive data on the developer machine" — on a
-plane or an air-gapped host the site renders unstyled. No dark mode either, despite Pico
-supporting it and the audience (evening sleep questions) wanting it.
-
-**Fix:** vendor Pico into `app/static/`, add a `prefers-color-scheme` palette.
-
-**Fixed.** Pico is vendored at `app/static/vendor/pico.min.css`, so the site is styled
-offline. The palette became a set of `--liveon-*` tokens defined once in `base.html` and
-flipped by `prefers-color-scheme`; the coach page's literal colours were converted to those
-tokens, since hard-coded values are exactly what breaks a theme.
-
-### 19. Content browsing has no depth — ✅ FIXED
-
-`/articles` and `/tips` are hard-capped at 20 with no pagination, no tag filter, and no search
-([main.py:381](app/main.py#L381), [main.py:414](app/main.py#L414)) — item 21 is unreachable
-forever. Tags are stored and displayed but not clickable. The article detail page
-([articles/detail.html](app/templates/articles/detail.html)) shows no summary, no key-takeaways
-block, and no link back to the list.
-
-**Fixed.** `browse_articles`/`browse_tips` on the repository return a `ContentPage` with
-search, exact tag filtering, and pagination (10 per page). SQL does a coarse `LIKE`
-pre-filter and the exact tag comparison happens in Python, because tags live inside the
-stored JSON where `LIKE` alone would match unrelated substrings. The listings gained a
-search box, clickable tag chips, a result summary, and previous/next links that preserve
-the active filters; the tip page drops its featured slot once the reader is filtering. The
-article detail page now leads with the summary, shows clickable tags, and links back.
-
-### 20. Deleting content takes one click, with no confirmation and no undo — ✅ FIXED
-
-See #3. Even after auth is added, this needs a confirm step.
-
-**Fixed** as part of #3. Deletion requires authentication, a same-origin submission, and a
-confirmation dialog, and is logged with the acting user. Undo would need soft-delete and is
-not implemented.
-
-### 21. Question length is unbounded — ✅ FIXED
-
-`question: str = Field(...)` ([main.py:163](app/main.py#L163)) has no `max_length`. A pasted
-novel becomes a multi-minute generation that (per #1) freezes the site for everyone. Add
-`max_length` (~2000) with a live character counter on the textarea, plus simple per-IP rate
-limiting on `/api/ask`.
-
-**Fixed.** `max_length=2000` on the question, a live character counter on the textarea
-(turning red near the limit), and a per-client sliding-window rate limit
-(`LIVEON_ASK_RATE_LIMIT`, default 30/minute) on both coach endpoints, answering `429` with
-a `Retry-After`. The limiter is deliberately in-process: it exists to stop one tab or a
-stuck retry loop from monopolising a single local model, not to defend a public API.
+The post-edit re-check is not decoration. Editorial rewriting is exactly where "was associated with"
+becomes "reduces", so the gates covering causal language and the claim ceiling run again over the
+text that will actually be published.
 
 ---
 
-## P3 — Correctness, hygiene, and documentation
+# P0 — The evidence spine
 
-### 22. The article pipeline hides publisher failures and exits 0 — ✅ FIXED
+## 1. Discovery: query the literature directly; demote news to a signal
 
-[pipeline.py:173](app/services/pipeline.py#L173) has `errors.append(f"Publisher failed: {exc}")`
-commented out in favour of a bare `logging.exception`. The result is a `PipelineResult` with no
-publication *and no errors*, so `run()` reports "Pipeline finished without producing content" and
-**returns exit code 0** ([run_pipeline.py:378-383](app/scripts/run_pipeline.py#L378-L383)). A
-CronJob or the in-app scheduler treats a broken publisher as a successful no-op — and the
-scheduler then stamps `last_run`, silently skipping the next window. Restore the append.
+**Problem.** The original plan asked the aggregator to follow a news story back to its underlying
+study. That resolution chain — follow the Google News redirect, fetch publisher HTML, find a DOI,
+search PubMed, disambiguate — is the highest-failure-rate component in the whole design, and it fails
+*silently* into "no evidence found". It also inverts the difficulty: the literature APIs already
+offer structured search over structured metadata, which is exactly what we need.
 
-**Fixed.** The `errors.append` is restored, so a publisher exception surfaces as a
-pipeline error, the CLI exits non-zero, and the scheduler does not stamp `last_run` on a
-failed run. Verified both directions: a failing publisher exits 1, a working one exits 0.
+**Change.** Primary discovery runs against the research APIs. News becomes a topicality and novelty
+signal that is never itself evidence.
 
-### 23. Every page view opens a new database *(measured)* — ✅ FIXED
+New package `app/services/research/`:
 
-`get_repository()` ([main.py:272](app/main.py#L272)) is a per-request FastAPI dependency that
-constructs a `LocalSQLiteContentRepository`, which `mkdir`s, opens a connection, sets two PRAGMAs
-and re-runs six `CREATE TABLE/INDEX IF NOT EXISTS` statements — per request
-([sqlite_repo.py:143-200](app/services/sqlite_repo.py#L143-L200)). Measured at **~100× the cost of
-a shared connection** (1.08 ms vs 0.010 ms per query locally; worse on the Kubernetes PVC).
+| Module | Responsibility |
+|---|---|
+| `pubmed.py` | E-utilities `esearch`/`efetch`. Returns PMID, DOI, title, abstract (verbatim), journal, dates, publication types, MeSH descriptors, retraction links. |
+| `europepmc.py` | Europe PMC REST. Same shape; adds open-access full text where `isOpenAccess=Y`. |
+| `trials.py` | ClinicalTrials.gov v2. NCT ID, phase, enrolment, status, primary outcomes. |
+| `news.py` | Wraps the existing aggregator; emits `NewsSignal`, never `EvidenceRecord`. |
+| `http.py` | Shared politeness layer: rate limiting, retries with backoff, on-disk cache. |
 
-**Fix:** build one repository at startup, store it on `app.state`, and have the dependency return
-it.
+Rules that make this safe and neighbourly:
 
-**Fixed.** The repository is built once and kept on `app.state`, created lazily so importing
-the module never touches the filesystem, and closed on shutdown by the new lifespan. `memory`
-also became a *supported* value rather than one that happened to land on the "unsupported"
-fallback. Measured live: 0.36 ms of database work per request for a full browse — filter,
-paginate, and collect tags — against the ~1.08 ms construction alone previously cost.
+- **Rate limits.** NCBI allows 3 req/s unauthenticated, 10 with a key (`LIVEON_NCBI_API_KEY`). Send
+  `tool=liveon` and `email=` on every E-utilities call. The limiter lives in `http.py` and is shared,
+  not per-client.
+- **Cache.** Responses land under `cache/research/<source>/<sha256-of-request>.json` with a TTL
+  (`LIVEON_RESEARCH_CACHE_TTL_HOURS`, default 168). The cache is what makes the item 11 benchmark
+  runnable offline and keeps re-extraction free.
+- **Queries** come from `LIVEON_RESEARCH_QUERIES` (JSON list of `{name, query, source, max_results}`),
+  defaulting to a small set filtered by publication type and date window, e.g.
+  `("longevity"[tiab] OR "healthy aging"[tiab]) AND (randomized controlled trial[pt] OR meta-analysis[pt] OR systematic review[pt])`.
+- **News resolution is opt-in and lossy by design.** `LIVEON_NEWS_RESOLUTION` defaults to `0`. When
+  enabled, `news.py` reads `citation_doi` / `dc.identifier` / `prism.doi` meta tags from the fetched
+  page and looks the DOI up. A signal that does not resolve is **dropped**, never promoted.
 
-### 24. Rendered markdown is never sanitized — ✅ FIXED (with #16)
+**Acceptance.** With every news feed returning 500, the pipeline still discovers, acquires and
+publishes. With the research APIs unreachable, it publishes nothing (item 9).
 
-`markdown_to_html` returns `Markup(...)` unescaped
-([utils/text.py:57-64](app/utils/text.py#L57-L64)) over content whose two upstreams are RSS feeds
-and an LLM. The `markdown` library passes raw HTML through by default, so a `<script>` in a feed
-item or a hallucinated `<img onerror=…>` becomes stored XSS on the article page.
+## 2a. Extraction: per source, span-anchored, cached
 
-**Fix:** a `bleach`/`nh3` allowlist pass before `Markup`.
+**Problem.** The evidence model in the original plan assumes access to sample size, effect size with
+uncertainty, limitations, and funding/COI. Abstracts frequently omit all four, and full text is
+paywalled outside the Europe PMC open-access subset. Handed a field it cannot fill, a 14B local model
+will fill it anyway. This is the single largest confabulation risk in the design.
 
-**Fixed.** `sanitize_html` in `app/utils/text.py` rebuilds rendered Markdown from an
-allowlist of tags, attributes, and URL schemes, dropping script/style/iframe bodies
-entirely and hardening outbound links. It is stdlib-only (`html.parser`), so no new
-dependency. Closed early because #16 required sending server-rendered HTML to the browser.
+**Change.** Extraction is per source, produces only span-anchored values, and is separated from
+synthesis (2b) so it can be cached and replayed.
 
-### 25. Deprecated APIs that will break on the next upgrade — ✅ FIXED
+```python
+# app/models/evidence.py
+T = TypeVar("T")
 
-- `@app.on_event("startup"/"shutdown")` ([main.py:113-130](app/main.py#L113-L130)) — FastAPI already warns; migrate to `lifespan`.
-- `datetime.utcnow()` ([sqlite_repo.py:120](app/services/sqlite_repo.py#L120)) — deprecated in 3.12, and returns a *naive* timestamp into a codebase that is otherwise carefully tz-aware.
-- `from langchain_community.chat_models import ChatOllama` ([coach.py:14](app/services/coach.py#L14)) — deprecated in favour of `langchain-ollama`, which the README already tells users to install but which the coach never imports. `run_pipeline._resolve_chat_ollama` gets this right; copy it.
+@dataclass(slots=True, frozen=True)
+class Span:
+    """Anchor into the stored verbatim document. This is what makes I2 checkable."""
+    quote: str
+    start: int
+    end: int
 
-**Fixed.** `@app.on_event` became a `lifespan` context manager (which also gave shutdown a
-place to release the repository); `datetime.utcnow()` became an aware `datetime.now(timezone.utc)`;
-and the coach no longer imports `langchain_community` directly — it asks the shared factory,
-which prefers the maintained `langchain-ollama`. With that package now declared, the
-deprecation warning is gone from start-up.
+    def verify(self, document_text: str) -> bool:
+        return document_text[self.start : self.end] == self.quote
 
-The migration also surfaced something worth knowing: `langchain_ollama.ChatOllama` has no
-`timeout` field but *accepts the keyword silently*, so a timeout would have looked applied
-while doing nothing. The factory now drops options a client does not declare and logs that it
-did, since for `timeout` the caller needs to know the request deadline is the only bound.
 
-### 26. Dependency and packaging gaps — ✅ FIXED
+@dataclass(slots=True)
+class Extracted(Generic[T]):
+    value: T | None
+    status: Literal["extracted", "not_reported", "not_extractable"]
+    span: Span | None = None      # required when status == "extracted"
+```
 
-`app/requirements.txt` pins everything except `langchain-community` (unpinned — a breaking release
-lands silently), omits `langchain-ollama` despite the README recommending it, and ships `pytest`
-into the production image ([Dockerfile:29](Dockerfile#L29)). Split dev requirements out.
+- `extracted` — present in the document, with a span that verifies.
+- `not_reported` — the document genuinely does not state it.
+- `not_extractable` — the model could not locate it, or its span failed verification.
 
-**Fixed.** `app/requirements.txt` is runtime-only and fully pinned — including
-`langchain-community`, which an unpinned minor release could previously have broken silently,
-and `langchain-ollama`, which the README recommended but nothing installed. `pytest` moved to a
-new `requirements-dev.txt` that includes the runtime set, so it no longer ships in the image.
+`ExtractorAgent.extract(record)` returns a record whose every extracted field carries a span. **Any
+span that does not verify byte-for-byte against `document_text` is discarded and the field is
+demoted to `not_extractable`.** The model never gets a second chance to "correct" the offsets; a
+wrong span is a signal that the value was invented.
 
-### 27. Repository hygiene — ✅ FIXED
+Results are cached in the store keyed by `(source_key, prompt_version, model_id)`, so re-runs and the
+benchmark do not re-invoke the model.
 
-Tracked build/run artifacts: `uvicorn.log`, `data/results.db`,
-`data/embeddings/**/ad_full.npy`, and `controller_manifest.json` (which embeds absolute local
-paths under `C:\Users\stefa\`). `controller_manifest.json.bak` is untracked clutter. `.gitignore`
-is missing a trailing newline, so its last line reads `refactor_plan.mdapp/tests/__pycache__/` —
-**both** of those patterns are inert. Add `.venv/`, `__pycache__/`, `.pytest_cache/`, `*.db`,
-`*.log`.
+## 2b. Synthesis: per topic cluster, across sources
 
-**Fixed.** `.gitignore` was rewritten and now ends with a newline, so its last two patterns
-are no longer fused into one inert line. It covers `__pycache__/`, `.venv/`, `.pytest_cache/`,
-`*.db`, `*.log`, `*.npy`, and `*.bak`. `uvicorn.log`, `data/results.db`, the embeddings `.npy`,
-and `controller_manifest.json` were untracked with `git rm --cached` — the files stay on disk,
-they just leave version control. A test asserts no such artifact is tracked again.
+`SynthesizerAgent.synthesize(records) -> EvidenceBundle`. It reasons across an already-extracted
+cluster; it never reads raw documents, so it cannot introduce an unanchored number.
 
-### 28. README drift — ✅ FIXED
+```python
+@dataclass(slots=True)
+class NumberRef:
+    text: str                      # as it will appear in prose, e.g. "23%"
+    source_key: str
+    span: Span
 
-Beyond #10 and #12: the README says the PVC mounts at `/root/liveon/data` while
-[deployment.yaml:73](deployment.yaml#L73) mounts `/home/appuser/liveon/data`; `LIVEON_STORAGE` is
-documented as accepting `memory` but [main.py:274](app/main.py#L274) only special-cases `sqlite`
-(memory works, but only via the "unsupported storage type" warning path); and roughly a dozen live
-environment variables are undocumented — `LIVEON_ROOT_PATH`, `LIVEON_COACH_PROMPTS`,
-`LIVEON_ENABLE_SCHEDULER`, `LIVEON_DISABLE_SCHEDULER`, `LIVEON_ARTICLE_INTERVAL_DAYS`,
-`LIVEON_TIP_INTERVAL_MONTHS`, `LIVEON_PIPELINE_CHECK_INTERVAL_SEC`, `LIVEON_FEED_LIMIT`,
-`LIVEON_FEED_SOURCES`, `LIVEON_FEED_HEADERS`, `LIVEON_FEED_TIMEOUT`, `LIVEON_MODEL_TEMPERATURE`,
-`LIVEON_OLLAMA_FORMAT`, `LIVEON_TIP_CONTEXT_PRESETS`, `LIVEON_LOG_LEVEL`. The in-app scheduler is
-not mentioned in the README at all, which matters since it is on by default.
+@dataclass(slots=True)
+class Claim:
+    text: str
+    claim_type: Literal["descriptive", "associative", "causal", "recommendation"]
+    evidence_keys: list[str]       # source_keys, in the store
+    numbers: list[NumberRef]
+    population_scope: str
+    applicability: str
+    limitations: list[str]
+    contradicted_by: list[str] = field(default_factory=list)
 
-**Fixed.** The environment reference was rebuilt as grouped tables covering *every*
-variable the code reads — storage, model, coach, admin, scheduling, feeds, and diagnostics —
-including the per-agent `LIVEON_<AGENT>_*` override pattern. The PVC path now matches
-`deployment.yaml` (`/home/appuser/liveon/data`, the non-root user the image runs as), the
-install instructions cover the dev requirements, the feed-limit/article-count distinction is
-explained, and the JSON API has its own table. A check confirms nothing is left undocumented.
+@dataclass(slots=True)
+class EvidenceBundle:
+    bundle_id: str
+    topic_key: str
+    claims: list[Claim]
+    grade: Grade                   # computed in item 3, never by the model
+    grade_rationale: list[str]
+    review: ReviewDecision | None
+    schema_version: int
+    created_at: datetime
+```
 
-### 29. Test coverage gaps — ✅ FIXED
+Contradiction is represented, not averaged: when two records disagree in direction on the same
+outcome, both are kept and `contradicted_by` is populated. Item 12 turns those into article material.
 
-52 tests pass, but nothing covers the admin routes (including the destructive ones),
-`LocalSQLiteContentRepository`, `PipelineScheduler`, the `/articles` routes, or the coach's
-non-`RuntimeError` failure path. Note that `scheduler_enabled()` returns `False` under
-`PYTEST_CURRENT_TEST` ([pipeline_scheduler.py:172](app/services/pipeline_scheduler.py#L172)) —
-convenient, but it means the default-on production behaviour is never exercised.
+**Acceptance.** A synthesis whose claim contains a number absent from every `NumberRef` fails G2 and
+never reaches an editor.
 
-**Fixed** across this and the previous rounds. The admin routes have 20 tests, the coach's
-non-`RuntimeError` paths are covered, and `/articles` is exercised through search, filtering,
-and pagination. This round added `LocalSQLiteContentRepository` coverage — round-trips, updates,
-source-URL lookup, cascade on delete, tips, and seeding — plus the scheduler's cross-process
-lock. `scheduler_enabled()` is now tested with `PYTEST_CURRENT_TEST` removed, so the default-on
-production behaviour is exercised rather than skipped.
+## 3. Evidence Reviewer: code first, model last
 
-### 30. Smaller items — ✅ FIXED
+**Problem.** As originally written, the reviewer was a prompt — one local model grading another local
+model, and the load-bearing gate for the entire system. With no human behind it, that is not enough
+independence to be worth the name (I6).
 
-- `LongevityNewsAggregator` creates an `httpx.Client` it never closes ([aggregator.py:60](app/services/aggregator.py#L60)); no context manager, no `close()`.
-- `_TRACKING_PARAM_PREFIXES` / `_TRACKING_PARAM_NAMES` ([aggregator.py:23-24](app/services/aggregator.py#L23-L24)) are dead — only the `utm_` prefix is actually stripped, so `fbclid`/`gclid` variants of the same link still slip past de-duplication.
-- `SupportsTipGeneration.generate(items, feedback)` ([pipeline.py:197](app/services/pipeline.py#L197)) no longer matches the real call `generate(context=…, feedback=…)` ([pipeline.py:314](app/services/pipeline.py#L314)) — a stale protocol a type checker would flag.
-- The scheduler is per-process: running uvicorn with `--workers N` gives N schedulers racing on the same SQLite `pipeline_schedule` row. Guard with a lock or move to a CronJob.
-- `run_pipeline` logs `PIPELINE_START` at *import* time ([run_pipeline.py:56](app/scripts/run_pipeline.py#L56)), so the web app logs a pipeline start whenever the scheduler imports the module.
-- `ContentPipeline.run` publishes exactly one article per invocation regardless of `--feed-limit`, which only widens the candidate pool. Worth documenting, or making it explicit with a `--max-articles`.
-- No `/api/articles` endpoint although `/api/tips/latest` exists — an asymmetric public API.
+**Change.** `app/services/evidence/reviewer.py` runs three layers in order. Each gate is a pure
+function over `(bundle, store)` returning `list[Violation]`, individually tested.
 
-**Fixed**, item by item:
+### Layer 1 — deterministic gates (authoritative)
 
-- The aggregator closes the HTTP client it opened, supports `with`, and leaves a
-  caller-supplied client alone.
-- The tracking-parameter constants are wired up: `fbclid`, `gclid`, `msclkid` and friends are
-  stripped alongside `utm_`, so links differing only by campaign tags now deduplicate together
-  instead of arriving as separate items.
-- `SupportsTipGeneration` matches the real signature again (fixed with #10); a test compares
-  the two directly so they cannot drift apart silently.
-- The scheduler takes a cross-process claim in SQLite before running a job, so
-  `uvicorn --workers N` no longer gives N schedulers racing. Claims expire, so a worker that
-  dies mid-run cannot wedge the job.
-- `PIPELINE_START` moved out of import into `run()`; importing the module — which the web app
-  does to reach the scheduled job — no longer announces a pipeline start.
-- `--max-articles` (default 1) now decides how many articles a run publishes, separately from
-  `--feed-limit`, which only widens the candidate pool. Verified live: a run with
-  `--max-articles 2` published exactly two articles from real feeds.
-- `GET /api/articles` and `GET /api/articles/{id}` fill the gap left by the tips-only API,
-  accepting the same `q`/`tag`/`page` parameters as the HTML listing.
+| Gate | Check | On failure |
+|---|---|---|
+| **G1** | Every `evidence_key` resolves to an `approved`-or-better record in the store. | reject |
+| **G2** | Every number in every claim matches a `NumberRef` whose span verifies. | reject claim; reject bundle if it was load-bearing |
+| **G3** | Subject consistency: a claim citing only animal/in-vitro records may not use human-population language. Subject comes from PubMed publication types and MeSH (`Animals`, `Humans`), **not** from the model. | downgrade to `preliminary` + rewrite scope, else reject |
+| **G4** | Causal language requires an RCT or a meta-analysis of RCTs. Observational designs permit associative verbs only. | reject claim |
+| **G5** | Surrogate endpoints may not be stated as clinical benefit. | downgrade |
+| **G6** | No cited record has `retraction_state` in `{retracted, concern}`. | reject |
+| **G7** | Sample-size floors: human `n < 30`, or `not_reported`, caps the grade at `preliminary`. | cap |
+| **G8** | Claim ceiling (section 0.2), lexical layer authoritative. | reject |
+| **G9** | Novelty: the topic cluster has not been published within `LIVEON_TOPIC_COOLDOWN_DAYS` (default 30) — checked against `evidence_usage`. | reject |
+| **G10** | Unknown ceiling: `design` or `subject` `not_extractable` on a load-bearing record → `insufficient`. | reject |
+
+### Layer 2 — grade rubric (code, downgrade-only)
+
+```python
+Grade = Literal["high", "moderate", "low", "preliminary", "insufficient"]
+```
+
+| Grade | Requires |
+|---|---|
+| `high` | A systematic review or meta-analysis of human RCTs, or ≥2 independent human RCTs agreeing in direction, no unresolved contradiction, clinical endpoints. |
+| `moderate` | One human RCT, n ≥ 100, clinical endpoint; or a systematic review of prospective cohorts. |
+| `low` | Human observational only; or an RCT with surrogate endpoints or n < 100. |
+| `preliminary` | Animal, in-vitro, in-silico, preprint, n < 30, or single exploratory result. |
+| `insufficient` | Anything tripping G1, G2, G6 or G10. **Never publishes.** |
+
+`compute_grade(bundle, records) -> (Grade, rationale)` is deterministic and unit-tested per row.
+
+### Layer 3 — residual review (LLM, advisory)
+
+The model is asked only what code cannot compute: does the draft overstate its sources, is important
+contradicting evidence ignored, is the stated applicability honest. Its output is constrained:
+
+```python
+@dataclass(slots=True)
+class ReviewDecision:
+    status: Literal["approved", "downgraded", "regenerate", "rejected"]
+    grade: Grade                   # must be <= the computed grade; a higher value is discarded
+    violations: list[Violation]
+    notes: str
+    reviewed_at: datetime
+    model_id: str
+    prompt_version: str
+```
+
+A returned grade above the computed one is dropped with a warning, not honoured (I4). Regeneration is
+capped at `LIVEON_MAX_REGENERATIONS` (default 2), after which the outcome is `REVIEW_REJECTED`.
+
+## 4. Provenance as identity, not prose
+
+**Problem, corrected.** Articles are already protected: `allowlisted_sources` keeps model-invented
+URLs out. Tips are not — `TipPublisher` never persists sources, so `context.sources` dies at the
+database boundary. The work is to generalise the article mechanism and extend it to tips.
+
+**Change.**
+
+1. **Writers never see URLs.** Prompts carry opaque handles `[E1] … [En]`; the handle→`source_key` map
+   lives in application code. `allowlisted_evidence(allowed_keys, model_keys)` replaces
+   `allowlisted_sources`; the old function stays as a thin wrapper during the migration.
+2. **Unknown handle = dropped claim.** A citation the map does not contain is a G1 violation.
+3. **Rendering is code.** Citations are formatted by the publisher from stored records. The model
+   never writes a URL, a DOI, a journal name, or an author list into the body.
+4. **Models gain evidence fields** (additive JSON, no migration):
+
+```python
+# Article and Tip
+evidence_bundle_id: str | None = None
+evidence_keys: list[str] = field(default_factory=list)
+evidence_grade: str | None = None      # "high" … "preliminary"
+evidence_summary: str | None = None    # "one human RCT plus supporting cohort evidence"
+```
+
+Both are `slots=True` dataclasses: add the fields to the class, `to_document`, and `from_document`
+together, defaulting to empty so existing rows keep loading.
+
+**Acceptance.** Given a stored article or tip, `published claim → reviewed claim → evidence record →
+source_key → original document span` resolves entirely from the database, with no LLM in the path.
 
 ---
 
-## Suggested sequence
+# P1 — One research pipeline, several products
 
-**Week 1 — make it survivable. ✅ Done** for #1–#5 (see Status above); #1 alone changed the app
-from single-user to multi-user. **#22 (stop hiding pipeline failures) is still outstanding** — it
-was grouped here because it is a one-line fix with the same "silent failure" character, but it sits
-in the pipeline rather than the request path, so it was not part of the P0 set.
+## 5. The Research Knowledge Store
 
-**Week 2 — make it feel like a coach. ✅ Done** for #6–#9. #14 and #15 (404 page, stale
-copy) are P2 and remain open.
+`app/services/evidence/store.py`, in the existing SQLite database, following the repository
+conventions already in `sqlite_repo.py` (JSON `data` column, denormalised columns for lookup).
 
-**Week 3 — make the content real. ✅ Done** for #10–#13. #23 (shared repository) is P3 and
-remains open.
+```sql
+CREATE TABLE evidence_sources (
+  source_key       TEXT PRIMARY KEY,   -- canonical: "doi:10.1001/x", "pmid:12345678", "nct:NCT01234567"
+  source_type      TEXT NOT NULL,
+  state            TEXT NOT NULL,      -- discovered|acquired|extracted|reviewed|approved|rejected
+  retraction_state TEXT NOT NULL DEFAULT 'none',   -- none|concern|corrected|retracted
+  superseded_by    TEXT,               -- source_key, nullable
+  document_text    TEXT,               -- verbatim; spans index into this and it is never rewritten
+  data             TEXT NOT NULL,      -- EvidenceRecord.to_document()
+  first_seen_at    TEXT NOT NULL,
+  retrieved_at     TEXT,
+  updated_at       TEXT NOT NULL,
+  schema_version   INTEGER NOT NULL
+);
+CREATE TABLE evidence_aliases (      -- doi ↔ pmid ↔ pmcid ↔ nct ↔ canonical url
+  alias      TEXT PRIMARY KEY,
+  source_key TEXT NOT NULL REFERENCES evidence_sources(source_key) ON DELETE CASCADE
+);
+CREATE TABLE evidence_bundles (
+  bundle_id TEXT PRIMARY KEY, topic_key TEXT NOT NULL, grade TEXT NOT NULL,
+  review_status TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL, run_id TEXT
+);
+CREATE TABLE bundle_sources (
+  bundle_id TEXT NOT NULL, source_key TEXT NOT NULL,
+  role TEXT NOT NULL,                 -- primary|supporting|contradicting
+  PRIMARY KEY (bundle_id, source_key)
+);
+CREATE TABLE evidence_usage (         -- usage is NOT a lifecycle state
+  source_key TEXT NOT NULL, bundle_id TEXT, content_type TEXT NOT NULL,  -- article|tip
+  content_id TEXT NOT NULL, used_at TEXT NOT NULL,
+  PRIMARY KEY (source_key, content_type, content_id)
+);
+```
 
-**P2 (#14–#21): ✅ Done.** #24 (sanitisation) was pulled forward with it, since #16 required
-sending server-rendered HTML to the browser.
+**Correction to the original lifecycle.** `used` was listed as a terminal state, but a record is used
+many times over its life. Usage is a join table; `state` stays a pure acquisition/review lifecycle,
+and `retraction_state` / `superseded_by` are orthogonal flags. Without this split, item 5 deduplication
+and item 12 maintenance fight the state machine.
 
-**P3 (#22–#30): ✅ Done.**
+**Deduplication** is by `source_key` after alias resolution: a DOI, its PMID, its PMCID and the
+publisher URL all collapse to one record. `topic_key` clusters by normalised
+intervention + outcome + population.
 
-Every item in this document is now closed. What is left is not on this list: the scheduler's
-claim is per-database rather than truly distributed, deletion still has no undo (that needs
-soft-delete), and the Kubernetes manifests still assume a single replica.
+## 6. Scientific review is not editorial review
+
+- **Evidence Reviewer** (item 3) — is it scientifically justified?
+- **Editor / Tip Editor** — is it clear, useful, concise, non-repetitive? The existing five-point tip
+  rubric is right for this stage and stays.
+
+Editors receive a **frozen claim set**. They may cut a claim or soften wording; they may not add a
+claim, a number, or a source. After editing, G2, G4 and G8 run again over the edited text (see the
+architecture diagram). A re-check failure is treated as an editorial rejection, not a scientific one:
+regenerate the edit, keep the bundle.
+
+## 7. Ranking, in code
+
+Replace newest-first selection with an explicit, testable score in
+`app/services/evidence/ranking.py`:
+
+```python
+score = (W_STRENGTH   * grade_weight          # high 1.0 … preliminary 0.2
+       + W_NOVELTY    * novelty               # 0 if topic used within cooldown
+       + W_RECENCY    * recency_decay         # half-life LIVEON_RECENCY_HALFLIFE_DAYS (default 21)
+       + W_IMPORTANCE * topic_priority        # from LIVEON_TOPIC_PRIORITIES
+       - W_REDUNDANCY * overlap_with_recent)
+```
+
+Weights are module constants with a docstring justifying each, and a test asserts the property the
+original document asked for: *a human meta-analysis outranks a mouse study published six hours later.*
+Ties break on grade, then on source count, then on `source_key` for determinism.
+
+## 8. Show the evidence
+
+Extend the publication surface rather than flattening back to prose plus URLs.
+
+- **Article detail** ([app/templates/articles/detail.html](app/templates/articles/detail.html)) gains an
+  evidence block: grade, one-line summary, study types, primary sources with links, and the material
+  limitations carried from the bundle.
+- **List views and tips** get a compact badge — `Evidence: Moderate`.
+- Reader-facing wording is generated in code from the bundle, not by a model:
+  `"Moderate — one human RCT plus supporting observational evidence"`.
+
+**Legacy content decision.** Everything published before this work has no evidence record. Rather than
+hide the archive, grandfather it: content with no `evidence_bundle_id` renders
+`Evidence: not assessed — published before evidence review`, and is excluded from item 13 retrieval.
+`LIVEON_HIDE_LEGACY=1` hides it entirely for anyone who prefers that.
+
+## 9. Fail closed, and mean it
+
+**Problem.** `_run_article_pipeline` returns `True` when nothing was published and `False` only on
+error; `_execute` stamps `last_run` only on success, on an hourly tick. So "nothing new today"
+advances the cadence, and "feeds are down" retries every hour forever. Six named states cannot be
+expressed through one boolean.
+
+**Change.** Runners return an outcome, and the scheduler holds an explicit policy table.
+
+```python
+class RunOutcome(StrEnum):
+    PUBLISHED             = "published"
+    NO_NEW_EVIDENCE       = "no_new_evidence"
+    EVIDENCE_INSUFFICIENT = "evidence_insufficient"
+    REVIEW_REJECTED       = "review_rejected"
+    RETRIEVAL_FAILED      = "retrieval_failed"
+    SOURCE_UNAVAILABLE    = "source_unavailable"
+    MODEL_FAILED          = "model_failed"
+```
+
+| Outcome | Stamp `last_run`? | Retry | Notes |
+|---|---|---|---|
+| `PUBLISHED` | yes | next cadence | |
+| `NO_NEW_EVIDENCE` | yes | next cadence | A quiet day is a successful day. |
+| `EVIDENCE_INSUFFICIENT` | yes | next cadence | Fail-closed working as designed, logged at INFO. |
+| `REVIEW_REJECTED` | yes | next cadence | Counted; `k` consecutive raises a WARN (possible prompt/model regression). |
+| `RETRIEVAL_FAILED` | no | backoff | |
+| `SOURCE_UNAVAILABLE` | no | backoff | |
+| `MODEL_FAILED` | no | backoff | |
+
+`JobConfig.runner` becomes `Callable[[datetime], RunOutcome]`, with a `bool` adapter so existing tests
+and any external caller keep working. Backoff is exponential from 15 minutes, capped at the cadence
+interval, stored as a new nullable `retry_at` column on `pipeline_schedule` — added by an
+`ALTER TABLE` guarded by `PRAGMA table_info`, since `CREATE TABLE IF NOT EXISTS` will not add it to an
+existing database. Without the backoff a failing job hammers NCBI hourly, which is exactly the
+behaviour their rate-limit policy exists to prevent.
+
+**Presets are deleted from the runtime path.** `_DEFAULT_PRESETS` and
+`DailyTipContextProvider._build_from_presets` move to `app/tests/fixtures/tip_presets.py`. A tip run
+with no usable evidence returns `NO_NEW_EVIDENCE` and publishes nothing. This is the fix for the
+"20-30g of protein … next 6 hours" claim, and it is the one change that should ship first if anything
+here ships alone.
+
+---
+
+# P2 — Making integrity measurable
+
+## 10. Observability and reproducibility
+
+A `run_id` (UUID) is created at the top of every pipeline run and threaded through every stage. The
+codebase already logs with `extra={"event": ...}`; this adds structure and persistence.
+
+```sql
+CREATE TABLE pipeline_runs (
+  run_id TEXT PRIMARY KEY, job TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT,
+  outcome TEXT, model_id TEXT, prompt_versions TEXT, data TEXT
+);
+CREATE TABLE run_events (
+  run_id TEXT NOT NULL, seq INTEGER NOT NULL, stage TEXT NOT NULL,
+  event TEXT NOT NULL, data TEXT, at TEXT NOT NULL, PRIMARY KEY (run_id, seq)
+);
+```
+
+Recorded per run: sources considered, candidate ranking with scores, extraction results, every gate
+violation, the computed grade and the reviewer decision, dropped claims, model and prompt versions,
+the publication decision, and errors.
+
+**Separate the three timestamps** the code currently conflates: `source_published_at` (when the study
+appeared), `retrieved_at` (when we fetched it), and `published_date` (when Live On published). The
+article pipeline currently reuses the feed timestamp for its own publication date.
+
+Retention: `LIVEON_RUN_RETENTION_DAYS` (default 365), pruned on scheduler start.
+
+## 11. The evidence benchmark
+
+**Test hygiene first, or none of this is trustworthy:**
+
+- Add an autouse `conftest.py` fixture that fails any test making a real network call (patch the
+  `httpx` transport). Without it, 362 existing tests plus new research clients will quietly hit the
+  internet in CI.
+- The corpus is **checked-in offline fixtures** — real PubMed/Europe PMC payloads under
+  `app/tests/fixtures/corpus/`, one directory per case, each with the record and its expected labels.
+- Invariants are asserted with **stub LLMs**, so they are deterministic. Model-in-the-loop runs are a
+  separate, optional marker (`@pytest.mark.live`), excluded from CI.
+
+Corpus cases: strong human RCT · observational association · animal study · in-vitro · systematic
+review · meta-analysis · tiny exploratory study (n<30) · preprint · surrogate-endpoint study ·
+contradictory pair · retracted paper · corrected paper · news article overstating its primary source ·
+statistically significant but trivially small effect · a model attempting to invent a citation.
+
+Required invariants — each one test, each named for the gate it protects:
+
+1. A `source_key` absent from the store never reaches publication. (G1)
+2. Every number in published text resolves to a verifying span. (G2, I2)
+3. An animal study is labelled animal evidence and cannot carry human-population language. (G3)
+4. Observational evidence never becomes causal, including after editing. (G4, post-edit re-check)
+5. A retracted record blocks publication and retro-flags anything already using it. (G6, item 12)
+6. `not_extractable` design or subject yields `insufficient` and no publication. (G10, I3)
+7. A reviewer rejection prevents publication. (I5)
+8. A model-returned grade above the computed grade is discarded. (I4)
+9. Tip provenance survives persistence and reload. (item 4)
+10. Contradictions are surfaced in the bundle, not averaged away. (item 2b)
+11. Claim-ceiling constructions are rejected at any grade. (G8)
+12. A meta-analysis outranks a newer mouse study. (item 7)
+13. Every failure state publishes nothing. (item 9, parametrised over `RunOutcome`)
+
+**CI gate.** `pytest -m "not live"` must pass, and the benchmark is a required check. A prompt edit
+that lowers integrity fails the build.
+
+---
+
+# P3 — Continuous maintenance
+
+## 12. Keep published claims true over time
+
+With no human in the loop, this is the only correction mechanism the system has, so it is not
+optional garnish.
+
+- **Retraction and correction sweep** (weekly job): re-query every `source_key` used by published
+  content for `RetractionIn`, `ErratumIn`, or expression-of-concern links. On a hit, set
+  `retraction_state`, find affected content via `evidence_usage`, and either unpublish or stamp a
+  visible correction notice, according to `LIVEON_RETRACTION_POLICY` (default `annotate`).
+- **Supersession:** a newer systematic review on the same `topic_key` sets `superseded_by` on the
+  bundles it replaces and lowers their ranking weight.
+- **Consensus drift:** when new records reverse the direction of a published claim, the topic is
+  queued as a candidate article — a contradiction is itself the story.
+- **Repetition control:** `evidence_usage` plus `topic_key` prevents re-reporting the same finding
+  under a new headline.
+
+## 13. Bound the coach (new)
+
+[coach.py](app/services/coach.py) does no retrieval — it is a system prompt plus conversation history,
+answering personalised health questions live. It is the highest-risk surface in the product and the
+original document mentioned it once, in passing. Building a rigorous gate for passive reading while
+the interactive channel stays ungoverned is the wrong order of work.
+
+Minimum scope for this phase:
+
+1. **Retrieval over approved evidence.** Coach answers draw on approved bundles and published,
+   evidence-backed content; legacy content is excluded.
+2. **The claim ceiling applies** (section 0.2), enforced on the streamed response by the same lexical
+   rules used at publication.
+3. **Uncertainty is stated, not smoothed.** With no supporting bundle above `low`, the coach says so
+   and declines to specify. "I do not have good evidence on that" is a correct answer.
+4. **Refusal paths** for dosing, diagnosis and medication questions, routed to a standing referral
+   line rather than improvised per conversation.
+
+Sequenced in slice 5, but it is P1 in priority: it should not be the last thing built.
+
+---
+
+# Delivery sequence
+
+Eleven items is a pipeline rewrite, and a big-bang cutover would leave the site unpublishable for the
+duration. Each slice ships behind `LIVEON_EVIDENCE_PIPELINE` (default `0` until slice 4), with the
+existing prose path intact and passing its tests throughout.
+
+| Slice | Contents | Done when |
+|---|---|---|
+| **1 — Spine** | `app/models/evidence.py`, store (item 5 schema), `research/` clients with cache and rate limiting, extractor (2a), G1/G2/G6/G10, ID-based provenance (item 4). | A record can be discovered, acquired, extracted, stored, and cited by key; no claim with an unresolvable source or unanchored number can be built. |
+| **2 — Judgement** | Synthesizer (2b), full G1–G10, grade rubric, reviewer (item 3), outcome states and scheduler policy (item 9), **preset deletion**. | The tip pipeline runs end to end on real evidence and publishes nothing when evidence is missing. |
+| **3 — One pipeline** | Clustering, ranking (item 7), article path on the same store, editorial separation and post-edit re-check (item 6). | Articles and tips are generated from the same reviewed bundles; ranking tests pass. |
+| **4 — Surface** | Publication fields and templates (item 8), observability (item 10), benchmark in CI (item 11). Flip `LIVEON_EVIDENCE_PIPELINE` to `1`. | A reader can see the grade; a run is fully reconstructable; CI enforces the invariants. |
+| **5 — Upkeep** | Maintenance sweeps (item 12), coach binding (item 13). | A retraction upstream changes what the site says without anyone intervening. |
+
+**Latency budget.** Everything runs on one local Ollama instance. The tip loop is already up to three
+generate+review cycles; adding extraction and evidence review to each could push a run past the
+scheduler lock TTL (`max(check_interval*2, 3600)`). Therefore:
+
+- Extraction is cached per `(source_key, prompt_version, model_id)` and never repeated within a run.
+- Per-run wall-clock budget `LIVEON_RUN_BUDGET_SEC` (default 1800); on expiry the run ends as
+  `MODEL_FAILED` and backs off rather than holding the lock.
+- Agent models are configured separately via the existing `LIVEON_<AGENT>_MODEL` convention in
+  [llm_factory.py](app/services/llm_factory.py). Extraction and review are JSON-structured and should
+  use `json_mode=True` with the largest model the host can run; editorial work can use a smaller one.
+
+---
+
+# Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LIVEON_EVIDENCE_PIPELINE` | `0` → `1` at slice 4 | Master switch for the new path. |
+| `LIVEON_RESEARCH_QUERIES` | built-in set | JSON list of literature queries. |
+| `LIVEON_NCBI_API_KEY` | unset | Raises the E-utilities limit from 3 to 10 req/s. |
+| `LIVEON_NCBI_EMAIL` | unset | Required contact for E-utilities politeness. |
+| `LIVEON_RESEARCH_CACHE_TTL_HOURS` | `168` | Research response cache lifetime. |
+| `LIVEON_NEWS_RESOLUTION` | `0` | Opt-in news→DOI resolution. |
+| `LIVEON_TOPIC_COOLDOWN_DAYS` | `30` | G9 repetition window. |
+| `LIVEON_MAX_REGENERATIONS` | `2` | Reviewer regeneration cap. |
+| `LIVEON_RECENCY_HALFLIFE_DAYS` | `21` | Ranking recency decay. |
+| `LIVEON_TOPIC_PRIORITIES` | unset | JSON map of topic → importance weight. |
+| `LIVEON_RUN_BUDGET_SEC` | `1800` | Per-run wall-clock ceiling. |
+| `LIVEON_RUN_RETENTION_DAYS` | `365` | Run-log retention. |
+| `LIVEON_RETRACTION_POLICY` | `annotate` | `annotate` or `unpublish`. |
+| `LIVEON_HIDE_LEGACY` | `0` | Hide pre-evidence content instead of badging it. |
+
+---
+
+# Decisions taken, so implementation does not stall
+
+1. **PubMed/Europe PMC are primary; news is a signal.** News resolution is off by default and an
+   unresolved signal is dropped.
+2. **Abstract-only is the normal case.** Missing fields are `not_reported` / `not_extractable` and cap
+   the grade. They are never inferred.
+3. **The reviewer is code first.** The LLM layer is advisory and downgrade-only.
+4. **No human in the loop, by design.** The compensating controls are section 0.1; the claim ceiling
+   in 0.2 is the price of that decision.
+5. **Legacy content is grandfathered with a badge**, not hidden or retro-graded.
+6. **Usage is a join table, not a lifecycle state.**
+7. **Presets are deleted from the runtime path**, retained only as test fixtures.
+8. **No new runtime dependencies**; `httpx` plus stdlib covers every API used here.
+9. **The benchmark runs offline with stub models** and gates CI; live-model runs are opt-in.
