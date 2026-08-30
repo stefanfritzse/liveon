@@ -10,15 +10,16 @@ would otherwise have to rediscover.
 
 ## Current position
 
-**Slice 4 (surface) — complete except the flag, 2026-08-30.** Test suite: 802 → 866 passing.
-Working tree clean, `no_google` in sync with origin, `pyflakes app` exits clean (it is now a CI
-step, so it has to).
+**Slices 1–4 complete except the flag. First live run done, 2026-08-30.** Test suite: 902
+passing, `pyflakes app` clean.
 
-Slices 1–3 completed earlier the same day, minus the deferrals listed below.
+The evidence pipeline has now run against live PubMed and a real local model
+(`qwen2.5:14b-instruct`) in dry-run mode, twice. It works end to end — and the first run found a
+design fault that no offline fixture could have caught. See "What the first live run found" below.
 
-Slice 4 is done when a reader can see the grade, a run is reconstructable, and CI enforces the
-invariants. All three hold. **The fourth item — flipping `LIVEON_EVIDENCE_PIPELINE` to 1 — has
-deliberately not been done; see below.**
+**`LIVEON_EVIDENCE_PIPELINE` is still 0.** Steps 1 and 2 of the checklist are done; step 3
+(publishing for real) has not been taken, because the first run surfaced a blocking defect and the
+second is still being judged.
 
 | Component | State | File |
 |---|---|---|
@@ -58,6 +59,9 @@ deliberately not been done; see below.**
 | The thirteen invariants | done | [test_evidence_benchmark.py](app/tests/test_evidence_benchmark.py) |
 | CI gate | done | [.github/workflows/tests.yml](.github/workflows/tests.yml) |
 | Flip the flag on | **not done, on purpose** | — |
+| **After the first live run** | | |
+| Canonical topic naming from MeSH | done | [vocabulary.py](app/services/evidence/vocabulary.py) |
+| Live MeSH regression fixture | done | [fixtures/live_mesh.py](app/tests/fixtures/live_mesh.py) |
 | Europe PMC client | **deferred** | — |
 | ClinicalTrials.gov client | **deferred** | — |
 | News-as-signal wrapper | **deferred** | — |
@@ -119,6 +123,60 @@ conclusion exits 1.
    exponentially instead of retrying hourly.
 3. **Every article and tip page now shows an evidence line.** Existing content says "not assessed"
    rather than being retro-graded, which is visible to readers on the next deploy.
+
+---
+
+## What the first live run found
+
+Run `88e997f31fa14c7fa222b8fd83fed34f`, 2026-08-30, dry run, query
+`time-restricted eating[tiab] AND randomized controlled trial[pt]`, model
+`qwen2.5:14b-instruct`. Ten records acquired, extracted, ranked, synthesised, reviewed, re-checked;
+it would have published at grade `preliminary`. Nothing was stored and no usage recorded.
+
+**What held.** Span anchoring bit on every single record: each extraction logged two to five
+unanchored fields demoted to `not_extractable`. The local model routinely emits quotes that are not
+in the abstract, and every one of them lost its value instead of being believed. That is invariant
+I2 working on its first contact with a real model, and it is the single most reassuring thing in
+this log.
+
+**What broke: clustering.** Ten randomised trials of *one* intervention became ten topics, so the
+article was written from a single paper — exactly what slice 3 existed to end. The cause was that
+clustering keyed on the intervention phrase the model extracted:
+
+    'early time-restricted eating (eTRE) and/or…'      'TRE (8 h eating window), CR (15% reduction…'
+    '16:8 TRE regimen (16 h fasting, 8 h eating)'      '10-h time-restricted eating (TRE)'
+    <not_extractable>  ×3                              …seven distinct phrasings in ten papers
+
+Free text cannot be a key. All ten carried the MeSH descriptor **Intermittent Fasting**, assigned by
+a human indexer. Clustering and topic keys now come from MeSH via
+[vocabulary.py](app/services/evidence/vocabulary.py); the same ten records now form one cluster.
+The real metadata is checked in as a fixture and the regression is asserted against it.
+
+**What run 2 then broke: the post-edit check refused a good article.** With clustering fixed, five
+trials formed one cluster and the synthesizer produced three honest claims across them — two null
+results and one positive finding, which is exactly the output this system exists to produce. It was
+then refused: `G2: Edited text contains '4', which is not among the figures the bundle anchored.`
+That was a false positive and a bug of mine. `number_references` drew only on sample sizes and
+effect magnitudes, so a study *duration* — extracted, span-verified, sitting right there in the
+record — could not back a figure, and any article mentioning "over 4 weeks" was unpublishable. Any
+verified span may now back a figure.
+
+Fixing that surfaced a latent false *acceptance* in the same area: the containment check compared
+digit strings, so "40" matched a quote reporting "412 adults aged 70". Figures are now compared
+token-wise, by both the gate and the synthesizer.
+
+**Run 3 completed end to end**, `18b177b782044c94b33c475d522377da`: one topic, three claims from
+five sources, grade `preliminary` (G7 capping for surrogate endpoints), post-edit check passed,
+would have published. The claims report null results as null results.
+
+**Still open: the advisory reviewer approves while objecting.** It returned `downgraded` with three
+"concerns", one of which was substantive — *"The claims about lean mass-related measures contradict
+the expected outcomes"* — and the bundle published anyway carrying that claim. Another "concern" was
+not a concern at all (*"The population is correctly described as postmenopausal women"*). The model
+is using that field as a notepad. The design says the advisory layer may only downgrade or refuse,
+and it did neither; nothing is technically broken, but a concerns list that mixes objections with
+observations is decorative rather than a control. Worth deciding whether a substantive concern
+should force a downgrade, or whether the field should be dropped as unreliable.
 
 ---
 
@@ -289,25 +347,48 @@ Not in improvements.md; recorded so a later session does not relitigate them.
 41. **A dry run does not record usage.** Everything else happens: it acquires, extracts, ranks,
     synthesises, reviews and re-checks against the real model. Only the usage write is skipped,
     because that is the one side effect that would block the real run afterwards.
+42. **Topics are named from MeSH, not from extracted prose.** This is invariant I1 in a place it had
+    quietly been violated: the model may describe an intervention, but it does not decide what the
+    intervention *is*. The vocabulary is curated and therefore incomplete — an unmapped term falls
+    through to a weaker key rather than being guessed at. If it starts needing frequent additions,
+    fetch MeSH tree numbers and classify by tree position instead.
+43. **The prose fallback deliberately does not merge.** It only runs for records with no usable
+    indexing at all, and merging on prose is guesswork: guessing wrong produces one article claiming
+    two unrelated things, while not merging produces two narrower articles. Grouping less is the safe
+    direction.
+44. **Any verified span may back a figure.** The narrower rule — only typed numeric fields — was
+    arbitrary, and it made study durations uncitable. If a figure appears in a span that verifies
+    against the source document, it is traceable; that is what I2 says, and now it is what the code
+    says.
+45. **Figures are compared token-wise, never by digit substring.** Both the gate and the synthesizer
+    use `quote_contains_number`, so they cannot disagree about whether a source reports a number.
+46. **Live metadata is a test fixture.** `app/tests/fixtures/live_mesh.py` holds the real MeSH terms
+    from the run that exposed the clustering fault. Hand-written fixtures could not have caught it —
+    they all used one consistent intervention string, which is precisely the thing reality does not
+    do. Capture real metadata whenever a live run surprises us.
 
 ---
 
 ## Next session: start here
 
-**The live run comes first.** See the warning above; everything below assumes the evidence path has
-been watched working at least once.
+**The live run has happened** (steps 1 and 2, twice). What remains before the flag goes on:
+
+1. Judge the second dry run's output — is the article worth publishing, now that it is synthesised
+   across ten trials rather than written from one?
+2. Decide the advisory-reviewer question above.
+3. Then steps 3 to 5 of the checklist.
 
 **Then slice 5 — upkeep** (improvements.md item 12), the only correction mechanism an autonomous
 system has:
 
-1. **Retraction and correction sweep** — a weekly job that re-queries every `source_key` in
+47. **Retraction and correction sweep** — a weekly job that re-queries every `source_key` in
    `evidence_usage` for `RetractionIn`, `ErratumIn` and expressions of concern. The store already
    holds the usage links and `set_retraction`; what is missing is the job and the decision about what
    to do with affected content (`LIVEON_RETRACTION_POLICY`, default `annotate`).
-2. **Supersession** — a newer systematic review on the same `topic_key` sets `superseded_by` on the
+48. **Supersession** — a newer systematic review on the same `topic_key` sets `superseded_by` on the
    bundles it replaces and lowers their ranking weight. The field exists on `EvidenceRecord` and is
    unused.
-3. **Consensus drift** — when new records reverse a published claim, queue the topic as a candidate
+49. **Consensus drift** — when new records reverse a published claim, queue the topic as a candidate
    article. A contradiction is itself the story.
 
 **Item 13, the coach, is still unbuilt and is the highest-risk surface in the product.** It answers

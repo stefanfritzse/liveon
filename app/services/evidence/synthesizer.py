@@ -33,7 +33,12 @@ from app.models.evidence import (
     Span,
 )
 from app.services.evidence.citations import EvidenceHandles
-from app.services.evidence.gates import normalise_number, numeric_tokens
+from app.services.evidence.gates import (
+    normalise_number,
+    numeric_tokens,
+    quote_contains_number,
+)
+from app.services.evidence.vocabulary import canonical_topic
 from app.utils.json_repair import invoke_json_object
 from app.utils.langchain_compat import BaseMessage, ChatPromptTemplate
 
@@ -242,7 +247,7 @@ def number_references(text: str, records: Sequence[EvidenceRecord]) -> list[Numb
             continue
 
         for record in records:
-            span = _anchored_span_for(normalised, record)
+            span = _anchored_span_for(token, record)
             if span is not None:
                 references.append(
                     NumberRef(text=token, source_key=record.source_key, span=span)
@@ -253,39 +258,58 @@ def number_references(text: str, records: Sequence[EvidenceRecord]) -> list[Numb
     return references
 
 
-def _anchored_span_for(normalised: str, record: EvidenceRecord) -> Span | None:
-    """Find an extracted value in ``record`` whose span quote carries this number."""
+def _anchored_span_for(token: str, record: EvidenceRecord) -> Span | None:
+    """Find a verified span in ``record`` whose quote reports this figure.
 
-    for value, span in _anchored_numbers(record):
-        if span is None:
-            continue
-        if normalise_number(value) != normalised:
-            continue
-        # The gate re-checks that the figure is inside the quote; agree with it here.
-        if normalised in normalise_number(span.quote):
+    Any anchored span counts, not only the typed numeric fields. A study duration is
+    extracted and span-verified like everything else, so "over 4 weeks" is exactly as
+    traceable as a sample size — and the first live run refused an otherwise good article
+    because this function could not see the duration it had itself extracted.
+    """
+
+    for span in _anchored_spans(record):
+        if quote_contains_number(span.quote, token):
             return span
     return None
 
 
-def _anchored_numbers(record: EvidenceRecord) -> Iterable[tuple[Any, Span | None]]:
-    if record.sample_size.is_known:
-        yield record.sample_size.value, record.sample_size.span
+def _anchored_spans(record: EvidenceRecord) -> Iterable[Span]:
+    """Every span in the record that verified against its document."""
+
+    for value in record.extracted_fields.values():
+        if value.is_known and value.span is not None:
+            yield value.span
 
     for outcome in record.outcomes:
         effect = outcome.effect
-        for item in (effect.magnitude, effect.ci_low, effect.ci_high):
-            if item.is_known:
-                yield item.value, item.span
+        for item in (
+            outcome.is_surrogate,
+            outcome.direction,
+            effect.magnitude,
+            effect.unit,
+            effect.ci_low,
+            effect.ci_high,
+            effect.p_value,
+        ):
+            if item.is_known and item.span is not None:
+                yield item.span
 
 
 def topic_key_for(records: Sequence[EvidenceRecord], *, hint: Any = None) -> str:
-    """Build the clustering key: intervention and outcome, normalised.
+    """Build the topic key: intervention and outcome, canonically named.
 
-    A model-supplied ``hint`` is used only when the extracts have nothing to offer, and
-    even then it is slugged rather than trusted as prose. The key decides what counts as
-    "the same finding" for the repetition window, so it must be stable across runs.
+    G9 compares this key against what has been published recently, so it has to mean the
+    same thing on every run. The intervention half therefore comes from MeSH — the same
+    canonical naming clustering uses — and falls back to extracted prose only when the
+    record carries no usable indexing. A model-supplied ``hint`` is the last resort, and
+    even then it is slugged rather than trusted as prose.
     """
 
+    canonical = [
+        topic
+        for topic in (canonical_topic(record.mesh_terms) for record in records)
+        if topic
+    ]
     interventions = [
         record.intervention.value
         for record in records
@@ -294,7 +318,11 @@ def topic_key_for(records: Sequence[EvidenceRecord], *, hint: Any = None) -> str
     outcomes = [outcome.name for record in records for outcome in record.outcomes if outcome.name]
 
     parts = []
-    if interventions:
+    if canonical:
+        # The topic the most records agree on, so one oddly-indexed paper in a cluster
+        # cannot rename the whole thing.
+        parts.append(max(sorted(set(canonical)), key=canonical.count))
+    elif interventions:
         parts.append(_slug(min(interventions, key=len)))
     if outcomes:
         parts.append(_slug(min(outcomes, key=len)))

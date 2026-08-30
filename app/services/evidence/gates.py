@@ -56,6 +56,7 @@ __all__ = [
     "g10_unknown_ceiling",
     "normalise_number",
     "numeric_tokens",
+    "quote_contains_number",
     "run_gates",
 ]
 
@@ -197,6 +198,21 @@ def normalise_number(token: str) -> str:
 _normalise_number = normalise_number
 
 
+def quote_contains_number(quote: str, token: str) -> bool:
+    """Whether ``quote`` actually reports the figure ``token``.
+
+    Compared token by token rather than by substring. Substring matching over the digits
+    of a quote accepts far too much: "40" appears inside the digits of "412 adults aged
+    70", so a claim could cite a number the source never reported and still pass. Both the
+    gate and the synthesizer use this, so they agree on what counts as present.
+    """
+
+    wanted = normalise_number(token)
+    if not wanted:
+        return False
+    return any(normalise_number(found) == wanted for found in numeric_tokens(quote))
+
+
 # ----------------------------------------------------------------------
 # Gates
 # ----------------------------------------------------------------------
@@ -315,7 +331,7 @@ def _verified_numbers(
             continue
 
         normalised = _normalise_number(number.text)
-        if normalised and normalised not in _normalise_number(number.span.quote):
+        if normalised and not quote_contains_number(number.span.quote, number.text):
             violations.append(
                 Violation(
                     gate="G2",

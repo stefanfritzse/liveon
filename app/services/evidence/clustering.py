@@ -5,13 +5,20 @@ That is why it could never say "previous studies agree" or "this contradicts las
 trial" — it only ever held one paper at a time.
 
 Clustering is by *intervention*, because that is the question a reader has: what does
-time-restricted eating do? A cluster therefore gathers everything acquired about one
-intervention, whatever endpoint each study measured, and the synthesizer decides what can
-honestly be said across them.
+time-restricted eating do? A cluster gathers everything acquired about one intervention,
+whatever endpoint each study measured, and the synthesizer decides what can honestly be
+said across them.
 
-Records with no extracted intervention fall back to the significant words of their title.
-That is deliberately weaker — it groups less — which is the safe direction: a cluster that
-splits produces two narrower articles, while a cluster that over-merges produces one
+The intervention is named from **MeSH**, not from the extracted prose. The first live run
+made the reason unmistakable: ten randomised trials of time-restricted eating produced ten
+clusters, because the model described the intervention differently in every one
+("10-h time-restricted eating (TRE)", "16:8 TRE regimen", and three it could not anchor at
+all). All ten carried the descriptor *Intermittent Fasting*, assigned by a human indexer.
+See :mod:`app.services.evidence.vocabulary`.
+
+The fallback chain runs canonical MeSH → any topical MeSH → extracted prose → title words,
+each rung weaker and each grouping less. Grouping less is the safe direction: a cluster
+that splits produces two narrower articles, while one that over-merges produces a single
 article claiming two unrelated things.
 """
 
@@ -25,6 +32,7 @@ from typing import Iterable, Sequence
 
 from app.models.evidence import EvidenceRecord
 from app.services.evidence.synthesizer import topic_key_for
+from app.services.evidence.vocabulary import canonical_topic
 
 LOGGER = logging.getLogger(__name__)
 
@@ -122,8 +130,17 @@ def cluster_records(
 
 
 def cluster_key(record: EvidenceRecord) -> str:
-    """The intervention this record is about, normalised."""
+    """The intervention this record is about, named canonically where possible.
 
+    MeSH first, because it is the only name that is spelled the same way twice.
+    """
+
+    canonical = canonical_topic(record.mesh_terms)
+    if canonical:
+        return canonical
+
+    # No usable indexing. Fall back to the extracted phrase, capped to its first few
+    # words so that two descriptions of one intervention have some chance of meeting.
     if record.intervention.is_known and record.intervention.value:
         slug = _slug(str(record.intervention.value))
         if slug:
@@ -170,8 +187,16 @@ def _design_weight(record: EvidenceRecord) -> int:
 
 
 def _slug(value: str) -> str:
+    """Normalise an extracted phrase into a key.
+
+    Deliberately conservative: it trims and caps, but does not try to find a common stem
+    between two descriptions. Merging on prose is guesswork, and guessing wrong here
+    produces one article claiming two unrelated things. MeSH does the real merging; this
+    only runs for records carrying no usable indexing at all.
+    """
+
     slug = _SLUG_RE.sub("-", (value or "").strip().lower()).strip("-")
-    return "-".join(part for part in slug.split("-") if part)[:80]
+    return "-".join(part for part in slug.split("-") if part)[:60]
 
 
 def _title_slug(title: str) -> str:

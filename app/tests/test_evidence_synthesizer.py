@@ -273,3 +273,34 @@ def test_unknown_fields_are_shown_as_unknown_in_the_prompt() -> None:
 def test_synthesis_needs_at_least_one_record() -> None:
     with pytest.raises(ValueError):
         _agent({"claims": []}).synthesize([])
+
+
+# -- what may back a figure --------------------------------------------
+
+
+def test_a_study_duration_can_be_cited() -> None:
+    """The first live run refused a good article over a duration it had itself extracted."""
+
+    record = _trial()
+    record.duration = Extracted.found("12 weeks", _span(TRIAL_DOC, "12 weeks"))
+
+    references = number_references("Glucose fell over 12 weeks.", [record])
+
+    assert [reference.text for reference in references] == ["12"]
+    assert references[0].span.verify(TRIAL_DOC)
+
+
+def test_a_figure_is_matched_token_wise_not_by_digit_substring() -> None:
+    """Substring matching accepts "40" from a quote reporting 412 and 70."""
+
+    document = "We randomised 412 adults aged 70 and over."
+    record = EvidenceRecord(
+        source_key="doi:10.9/substring",
+        document_text=document,
+        classification=Classification(design="rct", subject="human"),
+        sample_size=Extracted.found(412, _span(document, "412 adults aged 70")),
+        state="approved",
+    )
+
+    assert number_references("A cohort of 412 people.", [record])
+    assert number_references("Some 40 participants.", [record]) == []
