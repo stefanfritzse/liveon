@@ -102,6 +102,10 @@ app = FastAPI(title="Live On Longevity Coach", root_path=ROOT_PATH, lifespan=lif
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 templates.env.globals.update(now=lambda: datetime.now(timezone.utc))
+# Resolved at render time, so the nav reflects the current configuration. The link is
+# shown only when the console is actually usable: an "Admin" link that everyone can see
+# but nobody can use was the original problem.
+templates.env.globals["admin_console_enabled"] = lambda: admin_console_enabled()
 templates.env.filters["markdown_to_text"] = markdown_to_plain_text
 templates.env.filters["markdown_to_html"] = markdown_to_html
 

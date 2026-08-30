@@ -266,13 +266,34 @@ def test_default_username_is_admin(
 
 
 @pytest.mark.parametrize("path", ["/", "/articles", "/tips", "/coach"])
-def test_public_pages_do_not_link_to_the_admin_console(
+def test_pages_do_not_link_a_console_that_is_switched_off(
+    client: TestClient, path: str, unconfigured: None
+) -> None:
+    """With no password set there is no usable console, so nothing advertises one."""
+
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert '/admin"' not in response.text
+
+
+@pytest.mark.parametrize("path", ["/", "/articles", "/tips", "/coach"])
+def test_pages_link_the_console_once_it_is_enabled(
     client: TestClient, path: str, configured: None
 ) -> None:
     response = client.get(path)
 
     assert response.status_code == 200
-    assert '/admin"' not in response.text
+    assert '/admin"' in response.text
+
+
+def test_linking_the_console_does_not_make_it_open(
+    client: TestClient, configured: None
+) -> None:
+    """The link is a convenience; the credentials are still the gate."""
+
+    assert '/admin"' in client.get("/").text
+    assert client.get("/admin").status_code == 401
 
 
 def test_delete_forms_require_confirmation(client: TestClient, configured: None) -> None:

@@ -226,6 +226,11 @@
           <li><a href="{{ request.scope.get('root_path', '') }}/articles">Articles</a></li>
           <li><a href="{{ request.scope.get('root_path', '') }}/tips">Tips</a></li>
           <li><a href="{{ request.scope.get('root_path', '') }}/coach">Ask the Coach</a></li>
+          {% if admin_console_enabled() %}
+            <li>
+              <a href="{{ request.scope.get('root_path', '') }}/admin" class="admin-link">Admin</a>
+            </li>
+          {% endif %}
         </ul>
       </nav>
       <div class="container">
