@@ -41,6 +41,11 @@ from app.services.coach import (
     resolve_llm_timeout,
     separate_disclaimer,
 )
+from app.services.admin_credentials import (
+    MIN_PASSWORD_LENGTH,
+    AdminCredentialStore,
+    create_admin_credential_store,
+)
 from app.services.pipeline_scheduler import (
     CADENCES,
     create_pipeline_scheduler,
@@ -94,6 +99,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except Exception:  # noqa: BLE001 - shutdown must not raise
                 logger.exception("Failed to close the content repository")
         app.state.content_repository = None
+
+        credential_store = getattr(app.state, "admin_credential_store", None)
+        if credential_store is not None:
+            credential_store.close()
+        app.state.admin_credential_store = None
 
 
 ROOT_PATH = _normalize_root_path(os.getenv("LIVEON_ROOT_PATH", ""))
@@ -1151,20 +1161,55 @@ _admin_security = HTTPBasic(auto_error=False)
 _ADMIN_AUTH_HEADERS = {"WWW-Authenticate": 'Basic realm="Live On admin console"'}
 
 
-def admin_credentials() -> tuple[str, str] | None:
-    """Return the configured admin username/password, or ``None`` when disabled."""
+def get_credential_store() -> AdminCredentialStore:
+    """Return the process-wide store holding the console's own password."""
 
-    password = os.getenv("LIVEON_ADMIN_PASSWORD") or ""
-    if not password:
-        return None
-    username = (os.getenv("LIVEON_ADMIN_USER") or "admin").strip() or "admin"
-    return username, password
+    store = getattr(app.state, "admin_credential_store", None)
+    if store is None:
+        store = create_admin_credential_store()
+        app.state.admin_credential_store = store
+    return store
+
+
+def admin_username() -> str:
+    return (os.getenv("LIVEON_ADMIN_USER") or "admin").strip() or "admin"
+
+
+def _environment_password() -> str:
+    return os.getenv("LIVEON_ADMIN_PASSWORD") or ""
 
 
 def admin_console_enabled() -> bool:
-    """Return ``True`` when admin credentials have been configured."""
+    """Return ``True`` when the console has a password to check against.
 
-    return admin_credentials() is not None
+    Either a password set from the console itself, or the environment variable that
+    bootstraps a fresh deployment. With neither, the console stays switched off.
+    """
+
+    try:
+        if get_credential_store().is_configured():
+            return True
+    except Exception:  # noqa: BLE001 - a broken store must not open the console
+        logger.exception("Could not read the admin credential store")
+        return False
+    return bool(_environment_password())
+
+
+def verify_admin_password(password: str) -> bool:
+    """Check ``password`` against the stored one, falling back to the environment.
+
+    A password set from the console takes precedence: changing it there is meant to
+    take effect immediately, without editing a secret and restarting the pod.
+    """
+
+    store = get_credential_store()
+    if store.is_configured():
+        return store.verify(password)
+
+    configured = _environment_password()
+    if not configured:
+        return False
+    return secrets.compare_digest(password.encode("utf-8"), configured.encode("utf-8"))
 
 
 def require_admin(
@@ -1172,8 +1217,7 @@ def require_admin(
 ) -> str:
     """Authenticate an admin request, returning the verified username."""
 
-    expected = admin_credentials()
-    if expected is None:
+    if not admin_console_enabled():
         raise HTTPException(
             status_code=503,
             detail=(
@@ -1182,7 +1226,6 @@ def require_admin(
             ),
         )
 
-    expected_user, expected_password = expected
     if credentials is None:
         raise HTTPException(
             status_code=401,
@@ -1190,14 +1233,12 @@ def require_admin(
             headers=_ADMIN_AUTH_HEADERS,
         )
 
-    # Compare both fields unconditionally so the response time does not reveal
-    # which half of the credential was wrong.
+    # Both halves are checked unconditionally so the response time does not reveal
+    # which one was wrong.
     user_ok = secrets.compare_digest(
-        credentials.username.encode("utf-8"), expected_user.encode("utf-8")
+        credentials.username.encode("utf-8"), admin_username().encode("utf-8")
     )
-    password_ok = secrets.compare_digest(
-        credentials.password.encode("utf-8"), expected_password.encode("utf-8")
-    )
+    password_ok = verify_admin_password(credentials.password)
     if not (user_ok and password_ok):
         logger.warning(
             "Rejected admin credentials", extra={"event": "admin.auth_failed"}
@@ -1259,6 +1300,7 @@ def require_admin_write(
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(
     request: Request,
+    notice: str | None = None,
     repository: ContentRepository = Depends(get_repository),
     _: str = Depends(require_admin),
 ) -> HTMLResponse:
@@ -1267,6 +1309,8 @@ async def admin_dashboard(
     articles = repository.get_latest_articles(limit=20)
     tips = repository.get_latest_tips(limit=20)
     scheduler = _get_scheduler()
+    notice_kind, notice_message = _ADMIN_NOTICES.get(notice or "", (None, None))
+    store = get_credential_store()
 
     return templates.TemplateResponse(
         request,
@@ -1278,6 +1322,11 @@ async def admin_dashboard(
             "pipeline_jobs": scheduler.describe_jobs() if scheduler else [],
             "scheduler_enabled": scheduler is not None,
             "cadences": CADENCES,
+            "notice_kind": notice_kind,
+            "notice_message": notice_message,
+            "min_password_length": MIN_PASSWORD_LENGTH,
+            "password_source": "console" if store.is_configured() else "environment",
+            "password_updated_at": store.updated_at(),
         },
     )
 
@@ -1323,21 +1372,89 @@ async def run_pipeline_admin(
 #: Guard on the form body, which is a handful of bytes in normal use.
 _MAX_FORM_BYTES = 4096
 
+#: Outcomes the console reports after a redirect. Kept as codes rather than free text
+#: so nothing user-supplied is echoed back into the page.
+_ADMIN_NOTICES: dict[str, tuple[str, str]] = {
+    "password-changed": (
+        "success",
+        "Password updated. Your browser will ask for the new one on the next action.",
+    ),
+    "password-wrong": ("error", "That current password is not correct."),
+    "password-mismatch": ("error", "The new password and its confirmation do not match."),
+    "password-short": (
+        "error",
+        f"Choose a password of at least {MIN_PASSWORD_LENGTH} characters.",
+    ),
+    "password-unchanged": ("error", "The new password is the same as the current one."),
+    "cadence-saved": ("success", "Publishing schedule updated."),
+}
 
-async def _read_form_field(request: Request, name: str) -> str:
-    """Return one field from a URL-encoded form body.
+
+async def _read_form(request: Request) -> dict[str, str]:
+    """Return the fields of a URL-encoded form body.
 
     Parsed with the standard library rather than Starlette's ``request.form()``,
-    which requires ``python-multipart`` even for URL-encoded bodies. One `<select>`
-    does not justify an extra runtime dependency.
+    which requires ``python-multipart`` even for URL-encoded bodies. Two small forms
+    do not justify an extra runtime dependency.
     """
 
     body = await request.body()
     if len(body) > _MAX_FORM_BYTES:
         raise HTTPException(status_code=413, detail="Form submission too large.")
 
-    fields = dict(parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True))
+    return dict(parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True))
+
+
+async def _read_form_field(request: Request, name: str) -> str:
+    fields = await _read_form(request)
     return (fields.get(name) or "").strip()
+
+
+@app.post("/admin/password")
+async def change_admin_password(
+    request: Request,
+    username: str = Depends(require_admin_write),
+) -> RedirectResponse:
+    """Change the console password.
+
+    The current password is required even though the request is already
+    authenticated: browsers cache Basic credentials, so an unattended session should
+    not be enough to lock the owner out.
+    """
+
+    fields = await _read_form(request)
+    current = fields.get("current_password") or ""
+    new_password = fields.get("new_password") or ""
+    confirmation = fields.get("confirm_password") or ""
+
+    def _back(code: str) -> RedirectResponse:
+        return RedirectResponse(
+            f"{request.url_for('admin_dashboard')}?notice={code}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    if not verify_admin_password(current):
+        logger.warning(
+            "Rejected password change: current password incorrect",
+            extra={"event": "admin.password_change_denied", "actor": username},
+        )
+        return _back("password-wrong")
+
+    if new_password != confirmation:
+        return _back("password-mismatch")
+
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        return _back("password-short")
+
+    if new_password == current:
+        return _back("password-unchanged")
+
+    get_credential_store().set_password(new_password)
+    logger.info(
+        "Admin password changed",
+        extra={"event": "admin.password_changed", "actor": username},
+    )
+    return _back("password-changed")
 
 
 @app.post("/admin/pipelines/{job_name}/interval")
@@ -1378,7 +1495,7 @@ async def set_pipeline_interval_admin(
         },
     )
     return RedirectResponse(
-        request.url_for("admin_dashboard"),
+        f"{request.url_for('admin_dashboard')}?notice=cadence-saved",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

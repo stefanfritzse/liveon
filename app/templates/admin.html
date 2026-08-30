@@ -36,6 +36,49 @@
       width: auto;
     }
 
+    .admin-notice {
+      border-left: 4px solid;
+      border-radius: 0.4rem;
+      margin: 0 0 1.5rem;
+      padding: 0.85rem 1rem;
+    }
+
+    .admin-notice--success {
+      background: var(--liveon-surface-alt);
+      border-color: var(--liveon-accent);
+    }
+
+    .admin-notice--error {
+      background: var(--liveon-surface-alt);
+      border-color: var(--liveon-danger);
+      color: var(--liveon-danger);
+      font-weight: 600;
+    }
+
+    .password-form {
+      display: grid;
+      gap: 0.4rem;
+      max-width: 26rem;
+    }
+
+    .password-form input {
+      margin: 0;
+    }
+
+    .password-form label {
+      font-weight: 600;
+    }
+
+    .password-form small {
+      margin: 0.25rem 0 0.5rem;
+    }
+
+    .password-form button {
+      justify-self: start;
+      margin: 0;
+      width: auto;
+    }
+
     .visually-hidden {
       clip: rect(0 0 0 0);
       clip-path: inset(50%);
@@ -62,6 +105,47 @@
       }
     });
   </script>
+
+  {% if notice_message %}
+    <p class="admin-notice admin-notice--{{ notice_kind }}" role="status">
+      {{ notice_message }}
+    </p>
+  {% endif %}
+
+  <section>
+    <header>
+      <h2>Admin password</h2>
+      <p class="article-meta">
+        {% if password_source == 'console' %}
+          Set from this console{% if password_updated_at %} on {{ password_updated_at[:10] }}{% endif %}.
+        {% else %}
+          Currently taken from the <code>LIVEON_ADMIN_PASSWORD</code> environment
+          variable. Setting one here replaces it, with no restart needed.
+        {% endif %}
+      </p>
+    </header>
+
+    <form method="post" action="{{ request.scope.get('root_path', '') }}/admin/password" class="password-form">
+      <label for="current-password">Current password</label>
+      <input type="password" id="current-password" name="current_password"
+             autocomplete="current-password" required />
+
+      <label for="new-password">New password</label>
+      <input type="password" id="new-password" name="new_password"
+             autocomplete="new-password" minlength="{{ min_password_length }}" required />
+
+      <label for="confirm-password">Confirm new password</label>
+      <input type="password" id="confirm-password" name="confirm_password"
+             autocomplete="new-password" minlength="{{ min_password_length }}" required />
+
+      <small class="article-meta">
+        At least {{ min_password_length }} characters. Your browser will ask for the
+        new password the next time you act in the console.
+      </small>
+
+      <button type="submit">Change password</button>
+    </form>
+  </section>
 
   <section>
     <header>

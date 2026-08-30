@@ -126,10 +126,32 @@ When the Ollama daemon is bound to `0.0.0.0`, still point `LIVEON_OLLAMA_URL` (o
 
 `/admin` lists stored articles and tips and can permanently delete them, so it is protected:
 
-- **It is disabled unless `LIVEON_ADMIN_PASSWORD` is set.** An unconfigured deployment answers `503` rather than exposing delete buttons to anyone who finds the URL.
+- **It is disabled unless a password exists.** An unconfigured deployment answers `503` rather than exposing delete buttons to anyone who finds the URL.
 - Access uses HTTP Basic auth, so the browser prompts for the credentials.
 - Deletions require a same-origin submission and a confirmation dialog, and each one is logged with the acting username.
-- The console is deliberately not linked from the site navigation; browse to `/admin` directly.
+- The Admin link appears in the site navigation only once a password is configured. Credentials remain the gate; the link is a convenience.
+
+### Changing the password
+
+`LIVEON_ADMIN_PASSWORD` bootstraps a fresh deployment. After that, use the **Admin
+password** form in the console: it asks for the current password, stores the new one
+hashed (scrypt, salted) in the database, and takes effect immediately — no secret to
+edit and no restart. A password set this way takes precedence over the environment
+variable, so changing the secret afterwards has no effect until the stored one is
+cleared.
+
+If the console password is forgotten, clear the stored credential and the environment
+variable applies again:
+
+```powershell
+python -c "from app.services.admin_credentials import create_admin_credential_store as s; s().clear()"
+```
+
+Run it with the same `LIVEON_DB_PATH` the app uses. In Kubernetes:
+
+```powershell
+kubectl exec deploy/longevity-coach-deployment -- python -c "from app.services.admin_credentials import create_admin_credential_store as s; s().clear()"
+```
 
 ```powershell
 $env:LIVEON_ADMIN_PASSWORD = "choose-a-password"
