@@ -9,12 +9,19 @@ than the prompt does. Three layers run in order:
    sources are, not from what anything says about them.
 3. **An advisory model pass** — asked only what code cannot compute: is the draft
    overstating its sources, is contradicting evidence being ignored, is the stated
-   applicability honest. It can lower the grade, add violations, or refuse. It cannot
-   raise a grade, clear a violation, or approve something the gates rejected.
+   applicability honest.
 
 The asymmetry in layer 3 is the whole design. A reviewer that can be talked into approving
 is not a reviewer, so the model is wired so that its only available moves are the safe
 ones.
+
+**The model does not choose the verdict.** It answers three closed questions and code
+computes the status from the answers. An earlier version let it return a status of its own
+alongside free-text "concerns", and a real run showed exactly why that fails: it returned a
+publishing status while objecting that the claims contradicted the studies behind them, and
+listed as a third "concern" the observation that the population was described correctly. A
+field that mixes objections with observations, and a verdict the objector picks, is not a
+control. Questions have answers; answers can be acted on.
 """
 
 from __future__ import annotations
@@ -39,17 +46,29 @@ from app.utils.langchain_compat import BaseMessage, ChatPromptTemplate
 
 LOGGER = logging.getLogger(__name__)
 
-__all__ = ["REVIEW_PROMPT_VERSION", "EvidenceReviewer", "max_regenerations"]
+__all__ = [
+    "REVIEW_PROMPT_VERSION",
+    "REVIEW_QUESTIONS",
+    "EvidenceReviewer",
+    "max_regenerations",
+]
 
-REVIEW_PROMPT_VERSION = "1"
+#: Bumped: the advisory pass now answers closed questions instead of returning a verdict.
+REVIEW_PROMPT_VERSION = "2"
 
 #: Gates whose failure is about the *evidence*: no rewrite can fix a retracted paper, a
 #: topic published last week, or a source nobody can classify.
 _EVIDENCE_FAILURES = frozenset({"G6", "G9", "G10"})
 
-#: Statuses the advisory pass is permitted to return. "approved" is accepted only when
-#: the deterministic layers already approved.
-_MODEL_STATUSES = frozenset({"approved", "downgraded", "regenerate", "rejected"})
+#: What the advisory pass is asked, and what a "yes" means for the draft. Each is a
+#: judgement the deterministic layers genuinely cannot make; each has an answer rather
+#: than an opinion; and each, answered yes, means the prose is wrong rather than the
+#: evidence, so the response is to rewrite.
+REVIEW_QUESTIONS: dict[str, str] = {
+    "overstates_evidence": "A claim says more than its sources support.",
+    "ignores_contradicting_evidence": "Disagreeing evidence is hidden or averaged away.",
+    "applicability_misleading": "The population described is not the population studied.",
+}
 
 
 class SupportsInvoke(Protocol):
@@ -70,28 +89,35 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are a sceptical evidence reviewer for a health publication. Automated checks have "
     "already verified the citations, the numbers, the study designs and the grade. Your job "
     "is the judgement they cannot make: whether the writing overstates what the studies "
-    "found. You may lower a grade or refuse a draft. You may not raise a grade."
+    "found. You answer specific questions. You do not decide whether anything is published."
 )
 
 DEFAULT_HUMAN_PROMPT = """
-Review these claims against the evidence summarised below.
+Answer three questions about the claims below. Return valid JSON:
 
-Return valid JSON:
 {{
-  "status": "approved" | "downgraded" | "regenerate" | "rejected",
+  "overstates_evidence": true or false,
+  "ignores_contradicting_evidence": true or false,
+  "applicability_misleading": true or false,
   "grade": "high" | "moderate" | "low" | "preliminary" | "insufficient",
-  "concerns": ["one short sentence per problem"],
   "notes": "one or two sentences of reasoning"
 }}
 
-Judge only these questions:
-- Does any claim say more than its evidence supports?
-- Is contradicting evidence ignored or hidden?
-- Is the population the claim describes the population that was actually studied?
-- Would a careful reader be misled about how settled this is?
+- overstates_evidence: does any claim say more than its sources support?
+- ignores_contradicting_evidence: is disagreeing evidence hidden, or averaged into a
+  middle position?
+- applicability_misleading: is the population the claims describe the population that was
+  actually studied?
 
-Do not check citations, arithmetic, study design or the grade: those are already verified.
-If nothing is wrong, return "approved" with the computed grade unchanged.
+Answer true only when it is actually so. Every true answer sends the draft back to be
+rewritten, so an answer of true about wording you merely dislike costs a rewrite and
+changes nothing.
+
+"grade" may repeat the computed grade or name a lower one; a higher one is discarded.
+"notes" is recorded for the log and decides nothing. Do not return a verdict: you are
+answering questions, not deciding whether this is published.
+
+Do not check citations, arithmetic, study design or the grade. Those are already verified.
 
 Computed grade: {grade}
 Rationale: {rationale}
@@ -250,8 +276,33 @@ class EvidenceReviewer:
                 prompt_version=self.prompt_version,
             )
 
-        proposed_status = str(payload.get("status") or "").strip().lower()
-        status = proposed_status if proposed_status in _MODEL_STATUSES else "approved"
+        answers = {name: _as_bool(payload.get(name)) for name in REVIEW_QUESTIONS}
+
+        if all(answer is None for answer in answers.values()):
+            # It replied, but not to what was asked. An unanswered review is not a pass.
+            LOGGER.info(
+                "Advisory reviewer answered none of the questions put to it",
+                extra={
+                    "event": "evidence.review_unanswered",
+                    "bundle_id": bundle.bundle_id,
+                },
+            )
+            return ReviewDecision(
+                status="regenerate",
+                grade=grade,
+                rationale=rationale,
+                violations=violations,
+                notes="Advisory review did not answer the questions asked.",
+                reviewed_at=moment,
+                model_id=self.model_id,
+                prompt_version=self.prompt_version,
+            )
+
+        flagged = [
+            Violation(gate="ADVISORY", detail=REVIEW_QUESTIONS[name])
+            for name, answer in answers.items()
+            if answer is True
+        ]
 
         # I4: the model may lower the grade, never raise it.
         proposed_grade = str(payload.get("grade") or "").strip().lower()
@@ -267,25 +318,24 @@ class EvidenceReviewer:
                 },
             )
 
-        concerns = [
-            Violation(gate="ADVISORY", detail=str(concern).strip())
-            for concern in payload.get("concerns") or []
-            if str(concern).strip()
-        ]
-
-        if status == "approved" and final_grade != grade:
-            # The model approved but argued the grade down; that is a downgrade, and
-            # naming it keeps the distinction visible in the run log.
+        # The verdict is computed, not chosen. Every question, answered yes, says the
+        # prose is wrong rather than the evidence — so the draft is rewritten.
+        if flagged:
+            status = "regenerate"
+        elif final_grade != grade:
             status = "downgraded"
+        else:
+            status = "approved"
         if final_grade == "insufficient":
             status = "rejected"
 
+        notes = str(payload.get("notes") or "").strip()
         return ReviewDecision(
             status=status,
             grade=final_grade,
-            rationale=[*rationale, *(f"Reviewer: {c.detail}" for c in concerns)],
-            violations=[*violations, *concerns],
-            notes=str(payload.get("notes") or "").strip(),
+            rationale=[*rationale, *(f"Reviewer: {item.detail}" for item in flagged)],
+            violations=[*violations, *flagged],
+            notes=notes,
             reviewed_at=moment,
             model_id=self.model_id,
             prompt_version=self.prompt_version,
@@ -298,6 +348,25 @@ class EvidenceReviewer:
         bundle.violations = list(decision.violations)
         bundle.review_status = decision.status
         bundle.review = decision
+
+
+def _as_bool(value: Any) -> bool | None:
+    """Read an answer, or ``None`` when the model did not give one.
+
+    Local models answer yes/no questions with strings as often as with booleans, and the
+    difference between "no" and "did not answer" matters here: one is a pass, the other is
+    a review that did not happen.
+    """
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in ("true", "yes", "y"):
+            return True
+        if cleaned in ("false", "no", "n"):
+            return False
+    return None
 
 
 #: Everything except G8, for the second pass.

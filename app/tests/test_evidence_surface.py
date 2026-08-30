@@ -311,7 +311,9 @@ def test_the_pipeline_writes_a_reconstructable_run(tmp_path: Path) -> None:
     record = log.get(result.run_id)
     assert record is not None
     assert record.outcome == "published"
-    assert record.prompt_versions["review"] == "1"
+    from app.services.evidence.reviewer import REVIEW_PROMPT_VERSION
+
+    assert record.prompt_versions["review"] == REVIEW_PROMPT_VERSION
 
     stages = {event["stage"] for event in log.events(result.run_id)}
     assert {"acquire", "rank", "review", "write", "publish"} <= stages

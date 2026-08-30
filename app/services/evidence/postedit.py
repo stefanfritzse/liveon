@@ -7,7 +7,8 @@ acquires a decimal place it never had.
 
 So three gates run again, on the final prose:
 
-* **G2** — every number in the body must be one the bundle already anchored.
+* **G2** — every number in the body is either one the bundle anchored, or one that
+  appears verbatim in a cited source.
 * **G4** — causal language still requires randomised evidence.
 * **G8** — the claim ceiling, evaluated at the bundle's grade.
 
@@ -45,7 +46,7 @@ def recheck_published_text(
     """Return violations in the final text of an article or tip."""
 
     violations: list[Violation] = []
-    violations.extend(_numbers(text, bundle))
+    violations.extend(_numbers(text, bundle, records))
     violations.extend(_causal(text, bundle, records))
     violations.extend(check_claim_ceiling(text, grade=bundle.grade))
 
@@ -63,7 +64,7 @@ def recheck_published_text(
 
 
 def _anchored_numbers(bundle: EvidenceBundle) -> set[str]:
-    """Every figure the bundle can vouch for, normalised."""
+    """Figures the bundle vouches for, each carrying span-level provenance."""
 
     return {
         normalise_number(number.text)
@@ -73,22 +74,51 @@ def _anchored_numbers(bundle: EvidenceBundle) -> set[str]:
     }
 
 
-def _numbers(text: str, bundle: EvidenceBundle) -> list[Violation]:
-    available = _anchored_numbers(bundle)
+def _source_numbers(records: Mapping[str, EvidenceRecord]) -> set[str]:
+    """Figures that appear verbatim somewhere in a cited source.
+
+    Writers are shown the titles of the studies they cite, and a title routinely carries
+    a fact worth repeating — "Impact of a 4-week time-restricted eating intervention".
+    Reporting that duration is accurate and improves the writing, but it is not one of the
+    claim's numbers, so checking only those refuses it. Refusing an accurate figure taken
+    from the cited paper is brittleness rather than integrity.
+
+    This is still I2: the figure resolves to verbatim text in a stored source. It is the
+    weaker of the two guarantees — the claims keep span-level provenance, this only knows
+    the number is in the paper — so it applies to context the writer adds, never to the
+    claims themselves, which the claim-level gate governs.
+    """
+
+    return {
+        normalise_number(token)
+        for record in records.values()
+        for token in numeric_tokens(record.document_text)
+        if normalise_number(token)
+    }
+
+
+def _numbers(
+    text: str, bundle: EvidenceBundle, records: Mapping[str, EvidenceRecord]
+) -> list[Violation]:
+    anchored = _anchored_numbers(bundle)
+    cited = {key: records[key] for key in bundle.source_keys() if key in records}
+    in_sources = _source_numbers(cited)
 
     violations: list[Violation] = []
     for token in numeric_tokens(text):
-        if normalise_number(token) not in available:
-            violations.append(
-                Violation(
-                    gate="G2",
-                    detail=(
-                        f"Edited text contains {token!r}, which is not among the figures "
-                        "the bundle anchored."
-                    ),
-                    claim_text=_containing_sentence(text, token),
-                )
+        normalised = normalise_number(token)
+        if normalised in anchored or normalised in in_sources:
+            continue
+        violations.append(
+            Violation(
+                gate="G2",
+                detail=(
+                    f"Edited text contains {token!r}, which is neither among the figures "
+                    "the bundle anchored nor present in any cited source."
+                ),
+                claim_text=_containing_sentence(text, token),
             )
+        )
     return violations
 
 

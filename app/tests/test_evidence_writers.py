@@ -301,3 +301,27 @@ def test_stripping_handles_tidies_the_gaps_it_leaves() -> None:
 
 def test_stripping_handles_preserves_paragraphs() -> None:
     assert strip_handles("One [E1].\n\nTwo [E2].") == "One.\n\nTwo."
+
+
+def test_a_figure_from_a_cited_source_may_be_used_as_context() -> None:
+    """A duration in the paper's own title is accurate, and refusing it is brittleness."""
+
+    records = {KEY: _record()}
+    records[KEY].document_text = (
+        "Impact of a 4-week time-restricted eating intervention\n\n" + DOCUMENT
+    )
+
+    text = "A 4-week trial reported that mortality fell by 4.2 percent."
+
+    assert recheck_published_text(text, _bundle(), records) == []
+
+
+def test_a_figure_in_no_cited_source_is_still_refused() -> None:
+    """The weaker guarantee is still a guarantee: the number must be in the paper."""
+
+    violations = recheck_published_text(
+        "A 37-week trial reported this.", _bundle(), {KEY: _record()}
+    )
+
+    assert violations and violations[0].gate == "G2"
+    assert "nor present in any cited source" in violations[0].detail

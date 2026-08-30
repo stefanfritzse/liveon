@@ -34,7 +34,7 @@ from app.services.evidence.extractor import ExtractorAgent
 from app.services.evidence.gates import run_gates
 from app.services.evidence.grading import compute_grade
 from app.services.evidence.postedit import recheck_published_text
-from app.services.evidence.reviewer import EvidenceReviewer
+from app.services.evidence.reviewer import REVIEW_QUESTIONS, EvidenceReviewer
 from app.services.evidence.store import EvidenceStore
 from app.services.evidence.synthesizer import SynthesizerAgent
 from app.services.research.pubmed import parse_pubmed_articles
@@ -42,6 +42,9 @@ from app.services.sqlite_repo import LocalSQLiteContentRepository
 from app.services.tip_publisher import TipPublisher
 
 CORPUS = Path(__file__).parent / "fixtures" / "corpus"
+
+#: An advisory reply that raises no objection.
+_CLEAN_REVIEW = {name: False for name in REVIEW_QUESTIONS}
 NOW = datetime(2026, 8, 30, tzinfo=timezone.utc)
 
 
@@ -342,11 +345,11 @@ def test_invariant_7_a_reviewer_refusal_stops_publication() -> None:
     bundle = _bundle(
         Claim(text="The trial reported lower mortality.", evidence_keys=[record.source_key])
     )
-    refusing = StubLLM({"status": "rejected", "grade": "moderate", "concerns": ["overstated"]})
+    objecting = StubLLM({**_CLEAN_REVIEW, "overstates_evidence": True})
 
-    decision = _review(bundle, record, llm=refusing)
+    decision = _review(bundle, record, llm=objecting)
 
-    assert decision.status == "rejected"
+    assert decision.status == "regenerate"
     assert decision.is_approved is False
 
 
@@ -363,7 +366,7 @@ def test_invariant_8_a_model_grade_above_the_computed_one_is_discarded() -> None
             evidence_keys=[record.source_key],
         )
     )
-    optimistic = StubLLM({"status": "approved", "grade": "high"})
+    optimistic = StubLLM({**_CLEAN_REVIEW, "grade": "high"})
 
     decision = _review(bundle, record, llm=optimistic)
 

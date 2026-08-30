@@ -106,8 +106,10 @@ Write a short article from these reviewed claims. Return valid JSON:
 }}
 
 Rules:
-- Use only the claims below. Do not add findings, numbers, mechanisms or studies.
+- Use only the claims below. Do not add findings, mechanisms or studies.
 - Keep every number exactly as written. Do not round, convert, or restate it.
+- Any figure you write must come from a claim or from a source title shown below. Do not
+  introduce one from anywhere else, including your own knowledge.
 - Cite with the handles as given, e.g. [E1]. Never write a URL, a DOI or a journal name.
 - Match the certainty of the claim: if it says "was associated with", do not write
   "reduces".
@@ -136,8 +138,9 @@ Write one short daily tip from these reviewed claims. Return valid JSON:
 }}
 
 Rules:
-- Use only the claims below. Do not add findings, numbers or studies.
-- Keep every number exactly as written.
+- Use only the claims below. Do not add findings or studies.
+- Keep every number exactly as written, and write no figure that is not in a claim or a
+  source title shown below.
 - Name a concrete behaviour someone can do today.
 - No doses, no medical instructions, no promises about diseases.
 - Match the certainty of the claim. The evidence grade for this set is {grade}.

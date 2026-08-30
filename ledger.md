@@ -169,14 +169,26 @@ token-wise, by both the gate and the synthesizer.
 five sources, grade `preliminary` (G7 capping for surrogate endpoints), post-edit check passed,
 would have published. The claims report null results as null results.
 
-**Still open: the advisory reviewer approves while objecting.** It returned `downgraded` with three
-"concerns", one of which was substantive — *"The claims about lean mass-related measures contradict
-the expected outcomes"* — and the bundle published anyway carrying that claim. Another "concern" was
-not a concern at all (*"The population is correctly described as postmenopausal women"*). The model
-is using that field as a notepad. The design says the advisory layer may only downgrade or refuse,
-and it did neither; nothing is technically broken, but a concerns list that mixes objections with
-observations is decorative rather than a control. Worth deciding whether a substantive concern
-should force a downgrade, or whether the field should be dropped as unreliable.
+**Resolved: the advisory reviewer no longer picks the verdict.** In run 1 it returned a publishing
+status while objecting that the claims contradicted the studies behind them, and offered as a third
+"concern" the observation that the population was described correctly. Two faults, one cause: we
+asked an open-ended question and then let the answerer decide what to do about its own answer.
+
+It now answers three closed questions — does any claim overstate its sources, is disagreeing evidence
+hidden, is the described population the studied one — and code computes the status. Any yes sends the
+draft back to be rewritten. It may still argue the grade down, never up. `notes` is recorded for the
+log and decides nothing, and is documented as deciding nothing. A reply that answers none of the
+questions is a review that did not happen, so it is a refusal rather than a pass.
+
+That is the same principle as everywhere else here: the model interprets, code decides. It had been
+quietly violated in the one place where a model was making the publication call.
+
+**Also fixed, found by re-running:** the post-edit check refused "over a 4-week period", where the
+cited paper is *titled* "Impact of a 4-week time-restricted eating intervention". The check tested a
+narrower rule than I2 states — a figure had to be one of the claim's numbers — so an accurate
+duration taken from a source title we had handed the writer was unpublishable. A figure the writer
+adds as context now needs to appear verbatim in a cited source; the claims themselves keep the
+stronger span-level rule. Run 5 published.
 
 ---
 
@@ -366,17 +378,31 @@ Not in improvements.md; recorded so a later session does not relitigate them.
     from the run that exposed the clustering fault. Hand-written fixtures could not have caught it —
     they all used one consistent intervention string, which is precisely the thing reality does not
     do. Capture real metadata whenever a live run surprises us.
+50. **The advisory reviewer answers questions; it does not return a verdict.** Given a status field
+    it will publish while objecting, and given a free-text "concerns" field it will file
+    observations as concerns. Closed questions have answers, and answers can be acted on in code.
+51. **A reply that answers none of the questions is a refusal, not a pass.** There is a difference
+    between "no problems" and "did not look", and only one of them is a review.
+52. **A figure the writer adds as context must appear in a cited source.** The claims keep
+    span-level provenance; context — a duration, an age range — needs only to be verbatim in the
+    paper. Refusing an accurate figure taken from a source title we handed the writer is
+    brittleness, not integrity, and it made the pipeline unable to publish at all.
 
 ---
 
 ## Next session: start here
 
-**The live run has happened** (steps 1 and 2, twice). What remains before the flag goes on:
+**The live run has happened** — five dry runs, three defects found and fixed, the last two runs
+clean end to end. What remains before the flag goes on:
 
-1. Judge the second dry run's output — is the article worth publishing, now that it is synthesised
-   across ten trials rather than written from one?
-2. Decide the advisory-reviewer question above.
-3. Then steps 3 to 5 of the checklist.
+1. Judge the output editorially. It is honest and correctly graded `preliminary`, and two of its
+   three claims are null results. Whether a preliminary-grade piece is what the site should lead
+   with is an editorial call, not a technical one.
+2. Then steps 3 to 5 of the checklist.
+
+Worth knowing for whoever does step 3: every run so far has landed on the same topic, because the
+store holds ten papers about one intervention. Widen `LIVEON_RESEARCH_QUERIES` before judging what
+the pipeline produces in general.
 
 **Then slice 5 — upkeep** (improvements.md item 12), the only correction mechanism an autonomous
 system has:
