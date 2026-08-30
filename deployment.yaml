@@ -29,6 +29,12 @@ spec:
         # clients identify themselves with a contact address.
         - name: LIVEON_NCBI_EMAIL
           value: "fritzenshyllinge@gmail.com"
+        # Tips come from reviewed research. Articles stay on the prose pipeline until this
+        # has run unattended for a while; drop LIVEON_EVIDENCE_PIPELINE_JOBS to move them.
+        - name: LIVEON_EVIDENCE_PIPELINE
+          value: "1"
+        - name: LIVEON_EVIDENCE_PIPELINE_JOBS
+          value: "tips"
         - name: LIVEON_ROOT_PATH
           value: "/liveon"
         command: ["python", "-m", "app.scripts.seed_content"]
@@ -54,6 +60,12 @@ spec:
         # clients identify themselves with a contact address.
         - name: LIVEON_NCBI_EMAIL
           value: "fritzenshyllinge@gmail.com"
+        # Tips come from reviewed research. Articles stay on the prose pipeline until this
+        # has run unattended for a while; drop LIVEON_EVIDENCE_PIPELINE_JOBS to move them.
+        - name: LIVEON_EVIDENCE_PIPELINE
+          value: "1"
+        - name: LIVEON_EVIDENCE_PIPELINE_JOBS
+          value: "tips"
         - name: LIVEON_ROOT_PATH
           value: "/liveon"
         - name: LIVEON_LLM_PROVIDER

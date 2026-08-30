@@ -58,7 +58,8 @@ second is still being judged.
 | Offline corpus (14 cases) | done | [fixtures/corpus/](app/tests/fixtures/corpus/) |
 | The thirteen invariants | done | [test_evidence_benchmark.py](app/tests/test_evidence_benchmark.py) |
 | CI gate | done | [.github/workflows/tests.yml](.github/workflows/tests.yml) |
-| Flip the flag on | **not done, on purpose** | — |
+| Flip the flag on — tips | **done** 2026-08-30 | [deployment.yaml](deployment.yaml) |
+| Flip the flag on — articles | not yet; tips first | — |
 | **After the first live run** | | |
 | Canonical topic naming from MeSH | done | [vocabulary.py](app/services/evidence/vocabulary.py) |
 | Live MeSH regression fixture | done | [fixtures/live_mesh.py](app/tests/fixtures/live_mesh.py) |
@@ -78,7 +79,15 @@ second is still being judged.
 
 ### Read this before assuming anything works end to end
 
-**The flag is still off, and that is a decision rather than an oversight.** improvements.md lists
+**The flag is on for tips.** `LIVEON_EVIDENCE_PIPELINE=1` with
+`LIVEON_EVIDENCE_PIPELINE_JOBS=tips`: the daily tip now comes from reviewed research, and
+articles stay on the prose pipeline until the tip path has run unattended for a while.
+
+The first real publication went badly and the second went well, which is what the staging
+was for — see "What turning it on found" below.
+
+**(Historical, kept for the reasoning.) The flag was off, and that was a decision rather
+than an oversight.** improvements.md lists
 "flip `LIVEON_EVIDENCE_PIPELINE` to 1" as the last step of slice 4. It has not been done, because
 the evidence path has never run against the live PubMed API or a real local model — every test uses
 fixture XML and stub responses. Turning it on blind would swap a working prose pipeline for one
@@ -199,6 +208,58 @@ narrower rule than I2 states — a figure had to be one of the claim's numbers �
 duration taken from a source title we had handed the writer was unpublishable. A figure the writer
 adds as context now needs to appear verbatim in a cited source; the claims themselves keep the
 stronger span-level rule. Run 5 published.
+
+---
+
+## What turning it on found
+
+Four real tip runs, publishing to the live database.
+
+**Run 1 published something substandard.** "Try Intermittent Fasting", from a
+preliminary-grade bundle whose own claims said only "was associated with", and whose body
+reframed two biomarkers falling as being "beneficial for managing inflammation and iron
+metabolism". Withdrawn. Two gaps behind it: the surrogate rule (G5) ran over claims but not
+over the final text, and nothing checked the *title*, which is where the instruction was.
+
+**The over-correction, and the steer that fixed it.** The first fix added a rule refusing
+any suggestion on evidence below `moderate`. That was wrong for this product: the purpose
+is to find interesting research, edit it and republish it, and refusing a finding for being
+preliminary is a judgement about the source research rather than a bound on what the
+publisher says in its own voice. The grade badge, the preserved hedging and the stated
+limitations are how weak evidence is made honest. The rule is gone; the claim ceiling is
+the five classes improvements.md 0.2 fixed, and nothing more.
+
+Two further over-strict rules were narrowed rather than removed:
+
+* `individual_advice` fired on "If you have mild to moderate hearing loss…" — a conditional
+  is not a diagnosis, and refusing that shape refuses most practical health writing there
+  is. It now fires only when the conditional does not directly govern the phrase, so "if you
+  feel tired often, you probably have diabetes" is still refused.
+* G2 fired on "Spend 10 minutes a day". A figure that *reports a finding* must trace to a
+  source; a figure that is the shape of a suggestion asserts nothing about a study.
+  Practical quantities in a suggestion are now exempt from the post-edit check, and figures
+  in reporting sentences are unchanged.
+
+**Two accuracy bugs, both reader-facing.** `numeric_tokens` treated the 6 in "IL-6" as an
+unsourced figure — the same for omega-3, COVID-19, vitamin B12 — and `describe_grade`
+rendered "2 human meta-analysiss". Both fixed.
+
+**One rubric correction.** G7 capped pooled evidence at `preliminary` whenever no single
+sample size was extractable, which is the normal case for a meta-analysis abstract: it
+reports how many *trials* it pooled. That penalised the strongest design in the rubric for
+a convention of how its abstract is written. Aggregate designs are now exempt from that
+particular cap.
+
+**Run 4 published this, and it is the standard to hold to:**
+
+> **Use Hearing Aids for Better Quality of Life** — *If you have mild to moderate hearing
+> loss, using hearing aids can improve your hearing-specific and overall quality of life.
+> This finding is based on moderate evidence, though some studies may have biases due to
+> inadequate blinding.*
+>
+> Moderate — 1 human meta-analysis. One source, a Cochrane review.
+
+Actionable, scoped to the population actually studied, honest about the limitation, graded.
 
 ---
 
@@ -426,34 +487,52 @@ Not in improvements.md; recorded so a later session does not relitigate them.
 60. **Contradiction reopening is deliberately weak.** Disagreement is read from extracted outcome
     directions, which are model output, so it never retracts anything — it marks the topic as worth
     covering again. A contradiction is a story, not a correction.
+61. **The claim ceiling bounds what the publisher says, never how good the research is.**
+    A rule refusing suggestions on preliminary evidence lived here briefly and was removed:
+    the product exists to find interesting research and report it with its strength
+    attached, and refusing a finding for being preliminary is a judgement about the source.
+    Dosing, diagnosis, curing a disease and replacing medical care stay refused at every
+    grade, because those are about what is said to a reader rather than about the study.
+62. **Drift and invention are the critic's job, not the ceiling's.** The post-edit re-check
+    (numbers trace to source, causal language matches the design, a biomarker is not a
+    clinical benefit) and the advisory reviewer are where a republished piece is held to
+    its source. Blanket content rules are the wrong instrument for it.
+63. **A conditional is not a diagnosis.** "If you have mild hearing loss, hearing aids help"
+    addresses whoever it applies to and asserts nothing about this reader.
+64. **A practical quantity is not a finding.** "Spend ten minutes a day" asserts nothing
+    about a study; "mortality fell by 4.2 percent" does. Only the second needs a source.
+65. **Digits inside names are not figures.** IL-6, omega-3, COVID-19, vitamin B12.
+66. **Pooled designs are exempt from the missing-sample-size cap.** A meta-analysis abstract
+    reports trials pooled, not one participant count.
 
 ---
 
 ## Next session: start here
 
-**The live run has happened** — five dry runs, three defects found and fixed, the last two runs
-clean end to end. What remains before the flag goes on:
+**Tips are live on the evidence pipeline.** What to do next, in order:
 
-1. Judge the output editorially. It is honest and correctly graded `preliminary`, and two of its
-   three claims are null results. Whether a preliminary-grade piece is what the site should lead
-   with is an editorial call, not a technical one.
-2. Then steps 3 to 5 of the checklist.
-
-Worth knowing for whoever does step 3: every run so far has landed on the same topic, because the
-store holds ten papers about one intervention. Widen `LIVEON_RESEARCH_QUERIES` before judging what
-the pipeline produces in general.
+67. **Watch a few unattended tip runs.** They now happen on the scheduler rather than by hand. Read
+   them with `run_evidence_pipeline --show-runs`. The thing to watch for is refusal *rate*: a run
+   that refuses every candidate publishes nothing, and several of those in a row means the store
+   needs more evidence or a gate needs narrowing.
+68. **Then move articles over** by dropping `LIVEON_EVIDENCE_PIPELINE_JOBS` from deployment.yaml.
+   Articles are longer, so there is more surface for the writer to drift on; the post-edit re-check
+   is what catches it.
+69. **Keep acquiring.** The store holds 57 approved records across 28 topics, but only five topics
+   have enough for real synthesis. More queries, or a higher `LIVEON_MAX_RESULTS_PER_QUERY`, gives
+   ranking something to choose between.
 
 **Then slice 5 — upkeep** (improvements.md item 12), the only correction mechanism an autonomous
 system has:
 
-61. **Retraction and correction sweep** — a weekly job that re-queries every `source_key` in
+70. **Retraction and correction sweep** — a weekly job that re-queries every `source_key` in
    `evidence_usage` for `RetractionIn`, `ErratumIn` and expressions of concern. The store already
    holds the usage links and `set_retraction`; what is missing is the job and the decision about what
    to do with affected content (`LIVEON_RETRACTION_POLICY`, default `annotate`).
-62. **Supersession** — a newer systematic review on the same `topic_key` sets `superseded_by` on the
+71. **Supersession** — a newer systematic review on the same `topic_key` sets `superseded_by` on the
    bundles it replaces and lowers their ranking weight. The field exists on `EvidenceRecord` and is
    unused.
-63. **Consensus drift** — when new records reverse a published claim, queue the topic as a candidate
+72. **Consensus drift** — when new records reverse a published claim, queue the topic as a candidate
    article. A contradiction is itself the story.
 
 **Item 13, the coach, is now bounded.** It was the highest-risk surface in the product — personalised

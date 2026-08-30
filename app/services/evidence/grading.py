@@ -222,10 +222,23 @@ def describe_grade(grade: str, records: Sequence[EvidenceRecord]) -> str:
         counts[label] = counts.get(label, 0) + 1
 
     parts = [
-        f"{count} {label}" if count == 1 else f"{count} {label}s"
+        f"{count} {label}" if count == 1 else f"{count} {_pluralise(label)}"
         for label, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     ]
     return f"{grade.capitalize()} — {', '.join(parts)}"
+
+
+#: Study-design names whose plural is not formed by adding an "s".
+_IRREGULAR_PLURALS = {"meta-analysis": "meta-analyses", "analysis": "analyses"}
+
+
+def _pluralise(label: str) -> str:
+    """Pluralise a design label. "2 human meta-analysiss" reached a reader once."""
+
+    for singular, plural in _IRREGULAR_PLURALS.items():
+        if label.endswith(singular):
+            return label[: -len(singular)] + plural
+    return f"{label}s"
 
 
 def _design_label(record: EvidenceRecord) -> str:

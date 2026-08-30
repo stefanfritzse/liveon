@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.evidence.claim_policy import check_claim_ceiling, sentences
+from app.services.evidence.claim_policy import check_claim_ceiling, sentences  # noqa: F401
 
 
 def _rules(text: str, grade: str = "moderate") -> set[str]:
@@ -179,3 +179,66 @@ def test_describing_a_diagnosed_study_population_passes() -> None:
 
     assert _rules("Participants were diagnosed with type 2 diabetes at baseline.") == set()
     assert _rules("The cohort had an existing diagnosis of hypertension.") == set()
+
+
+# -- what the ceiling deliberately does NOT judge ----------------------
+
+
+@pytest.mark.parametrize("grade", ["preliminary", "low", "moderate", "high"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Try intermittent fasting.",
+        "Start adding more protein to breakfast.",
+        "Aim for seven hours of sleep.",
+    ],
+)
+def test_a_suggestion_is_not_refused_for_resting_on_weak_evidence(
+    text: str, grade: str
+) -> None:
+    """The grade badge is how weak evidence is made honest. Refusal is not.
+
+    A rule blocking suggestions below `moderate` lived here briefly. It judged the source
+    research rather than the writing, and the purpose of this system is to find research
+    worth reporting and report it with its strength attached.
+    """
+
+    assert check_claim_ceiling(text, grade=grade) == []
+
+
+def test_the_ceiling_is_the_five_classes_the_plan_fixed() -> None:
+    from app.services.evidence.claim_policy import CEILING_RULES
+
+    assert set(CEILING_RULES) == {
+        "dosing",
+        "individual_advice",
+        "disease_claim",
+        "care_substitution",
+        "superlative_certainty",
+    }
+
+
+# -- conditionals are not diagnoses ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "If you have mild to moderate hearing loss, hearing aids can help.",
+        "When you have trouble sleeping, a consistent bedtime helps.",
+        "People who have joint pain often find swimming easier.",
+        "Anyone who has high blood pressure should be monitored by their doctor.",
+    ],
+)
+def test_a_conditional_is_not_a_diagnosis(text: str) -> None:
+    """Refusing "if you have X" refuses most practical health writing there is."""
+
+    assert "individual_advice" not in _rules(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["You probably have diabetes.", "These symptoms diagnose a thyroid condition."],
+)
+def test_telling_the_reader_what_they_have_is_still_refused(text: str) -> None:
+    assert "individual_advice" in _rules(text)

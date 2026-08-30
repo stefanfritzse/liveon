@@ -265,3 +265,32 @@ def test_the_model_identity_falls_back_to_the_class_name() -> None:
         pass
 
     assert evidence_jobs._model_id(Anonymous()) == "Anonymous"
+
+
+def test_discovery_covers_the_subject_rather_than_one_corner_of_it() -> None:
+    """The first live runs all landed on one intervention, because one query asked for it."""
+
+    queries = research_queries()
+
+    assert len(queries) >= 6
+    joined = " ".join(queries).lower()
+    for area in ("longevity", "resistance training", "sleep", "diet", "fasting", "vitamin d"):
+        assert area in joined
+
+
+def test_every_query_filters_for_gradable_evidence() -> None:
+    """Filtering at discovery is cheaper than grading weak work and refusing it."""
+
+    assert all("[pt]" in query for query in research_queries())
+
+
+def test_the_per_query_result_count_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.evidence_jobs import max_results_per_query
+
+    assert max_results_per_query() == 8
+
+    monkeypatch.setenv("LIVEON_MAX_RESULTS_PER_QUERY", "3")
+    assert max_results_per_query() == 3
+
+    monkeypatch.setenv("LIVEON_MAX_RESULTS_PER_QUERY", "nonsense")
+    assert max_results_per_query() == 8

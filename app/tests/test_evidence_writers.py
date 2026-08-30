@@ -20,6 +20,7 @@ from app.models.evidence import (
     EvidenceRecord,
     Extracted,
     NumberRef,
+    Outcome,
     Span,
 )
 from app.services.evidence.citations import citation_url, strip_handles
@@ -325,3 +326,53 @@ def test_a_figure_in_no_cited_source_is_still_refused() -> None:
 
     assert violations and violations[0].gate == "G2"
     assert "nor present in any cited source" in violations[0].detail
+
+
+def test_a_surrogate_marker_cannot_become_a_benefit_in_the_final_text() -> None:
+    """The published tip said two markers fell, then called it beneficial for health."""
+
+    records = _records()
+    records[KEY].outcomes = [
+        Outcome(name="IL-6", is_surrogate=Extracted.found(True, _span("412 adults")))
+    ]
+
+    violations = recheck_published_text(
+        "This suggests it could improve quality of life.", _bundle(), records
+    )
+
+    assert violations and violations[0].gate == "G5"
+
+
+def test_reporting_the_marker_itself_is_still_allowed() -> None:
+    records = _records()
+    records[KEY].outcomes = [
+        Outcome(name="IL-6", is_surrogate=Extracted.found(True, _span("412 adults")))
+    ]
+
+    assert recheck_published_text("IL-6 levels fell.", _bundle(), records) == []
+
+
+def test_a_practical_quantity_in_a_suggestion_is_not_a_finding() -> None:
+    """"Spend ten minutes a day" asserts nothing about a study."""
+
+    text = "Spend 10 minutes a day on a mindfulness app."
+
+    assert recheck_published_text(text, _bundle(), _records()) == []
+
+
+def test_a_figure_reporting_a_result_is_still_checked() -> None:
+    """The protection that matters is unchanged: invented findings are refused."""
+
+    violations = recheck_published_text(
+        "Mortality fell by 37 percent in the trial.", _bundle(), _records()
+    )
+
+    assert violations and violations[0].gate == "G2"
+
+
+def test_a_study_duration_in_a_reporting_sentence_is_still_checked() -> None:
+    violations = recheck_published_text(
+        "The trial ran for 37 weeks and found a benefit.", _bundle(), _records()
+    )
+
+    assert violations and violations[0].gate == "G2"

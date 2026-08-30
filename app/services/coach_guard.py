@@ -175,7 +175,7 @@ def screen_answer(text: str, *, grade: str = "insufficient") -> tuple[str, list[
     violations: list[Violation] = []
 
     for sentence in _split_sentences(text):
-        found = check_claim_ceiling(sentence, grade=grade)
+        found = check_claim_ceiling(sentence, grade=grade, recommendations_allowed=True)
         if found:
             violations.extend(found)
             break
@@ -224,7 +224,7 @@ class SentenceGate:
             if sentence is None:
                 break
             self.buffer = remainder
-            found = check_claim_ceiling(sentence, grade=self.grade)
+            found = check_claim_ceiling(sentence, grade=self.grade, recommendations_allowed=True)
             if found:
                 self.violations.extend(found)
                 self.stopped = True
@@ -249,7 +249,7 @@ class SentenceGate:
         if not remainder.strip():
             return []
 
-        found = check_claim_ceiling(remainder, grade=self.grade)
+        found = check_claim_ceiling(remainder, grade=self.grade, recommendations_allowed=True)
         if found:
             self.violations.extend(found)
             self.stopped = True

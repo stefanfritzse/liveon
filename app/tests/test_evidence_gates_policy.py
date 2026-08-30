@@ -344,3 +344,25 @@ def test_every_gate_declares_a_severity() -> None:
 
     assert set(GATE_SEVERITY) == {f"G{index}" for index in range(1, 11)}
     assert set(CAP_GRADES) <= {gate for gate, kind in GATE_SEVERITY.items() if kind == "cap"}
+
+
+def test_pooled_evidence_is_not_capped_for_lacking_a_single_sample_size() -> None:
+    """A meta-analysis abstract reports how many trials it pooled, not one participant
+    count. Capping it at preliminary for that penalises the strongest design in the rubric
+    for a convention of how its abstract is written."""
+
+    pooled = _record(
+        classification=Classification(design="meta_analysis", subject="human"),
+        sample_size=Extracted.not_reported(),
+    )
+
+    bundle = _bundle(Claim(text="Pooled trials found a benefit.", evidence_keys=[KEY]))
+
+    assert g7_sample_size_floor(bundle, {KEY: pooled}) == []
+
+
+def test_a_single_trial_without_a_sample_size_is_still_capped() -> None:
+    single = _record(sample_size=Extracted.not_reported())
+    bundle = _bundle(Claim(text="A trial found a benefit.", evidence_keys=[KEY]))
+
+    assert g7_sample_size_floor(bundle, {KEY: single}) != []

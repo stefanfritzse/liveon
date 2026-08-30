@@ -40,6 +40,7 @@ LOGGER = logging.getLogger(__name__)
 __all__ = [
     "APPROVED_STATES",
     "CAUSAL_LANGUAGE",
+    "CLINICAL_LANGUAGE",
     "GATE_SEVERITY",
     "CAP_GRADES",
     "HEDGED_LANGUAGE",
@@ -117,6 +118,9 @@ _HEDGED = HEDGED_LANGUAGE
 #: Designs that carry a randomised comparison, and so license causal language.
 RANDOMISED_DESIGNS: frozenset[str] = frozenset({"rct", "meta_analysis"})
 
+#: Designs that pool other studies rather than running one.
+_AGGREGATE_DESIGNS: frozenset[str] = frozenset({"meta_analysis", "systematic_review"})
+
 #: Subjects that are not evidence of human benefit, whatever the study reports.
 NON_HUMAN_SUBJECTS: frozenset[str] = frozenset({"animal", "in_vitro", "in_silico"})
 
@@ -127,13 +131,17 @@ _HUMAN_LANGUAGE = re.compile(
     re.IGNORECASE,
 )
 
-#: Outcomes a reader would actually notice, as opposed to a biomarker moving.
-_CLINICAL_LANGUAGE = re.compile(
+#: Outcomes a reader would actually notice, as opposed to a biomarker moving. Public
+#: because the post-edit re-check applies the same rule to the final prose.
+CLINICAL_LANGUAGE = re.compile(
     r"\b(live[sd]? longer|lifespan|longevity|mortality|death|died|survival|"
     r"heart attacks?|strokes?|fractures?|dementia|disability|hospitalisations?|"
     r"hospitalizations?|quality of life|healthspan)\b",
     re.IGNORECASE,
 )
+
+#: Private alias so the gate body below keeps reading naturally.
+_CLINICAL_LANGUAGE = CLINICAL_LANGUAGE
 
 #: Numbers in prose: 12, 3.4, 1,200, 45%, 0.83. Deliberately greedy about separators so a
 #: figure cannot slip past G2 by being written with a comma.
@@ -146,15 +154,36 @@ _YEAR_RANGE = range(1900, 2101)
 
 
 def numeric_tokens(text: str) -> list[str]:
-    """Return the quantitative tokens in ``text``, with years excluded."""
+    """Return the quantitative tokens in ``text``.
 
+    Years are excluded, and so are digits that are part of a *name* rather than a
+    measurement: IL-6, omega-3, COVID-19, vitamin B12, a 16:8 schedule. Those are
+    identifiers that happen to contain a numeral, and treating them as unsourced figures
+    refuses honest sentences — "IL-6 levels fell" is not a quantitative claim about 6.
+    """
+
+    source = text or ""
     tokens: list[str] = []
-    for match in _NUMBER_RE.finditer(text or ""):
+    for match in _NUMBER_RE.finditer(source):
         token = match.group(0)
-        if _is_year(token):
+        if _is_year(token) or _is_part_of_a_name(source, match.start(), match.end()):
             continue
         tokens.append(token)
     return tokens
+
+
+def _is_part_of_a_name(text: str, start: int, end: int) -> bool:
+    """Whether the numeral at ``start`` belongs to an identifier rather than a quantity."""
+
+    before = text[start - 1] if start else ""
+    if before.isalpha():  # B12, D3
+        return True
+    if before in "-:" and start >= 2 and (text[start - 2].isalpha() or text[start - 2].isdigit()):
+        return True  # IL-6, omega-3, COVID-19, 16:8
+    after = text[end] if end < len(text) else ""
+    if after.isalpha() and not text[end:].startswith(("st", "nd", "rd", "th")):
+        return True  # 5k, 3x
+    return False
 
 
 def _is_year(token: str) -> bool:
@@ -522,14 +551,22 @@ def g7_sample_size_floor(
             (record.sample_size.value or 0 for record in human if record.sample_size.is_known),
             default=None,
         )
+        # A meta-analysis or systematic review pools many studies and its abstract usually
+        # reports the number of *trials*, not one participant count. Capping it at
+        # preliminary for that would penalise the strongest design in the rubric for a
+        # convention of how its abstract is written.
+        pooled = any(
+            record.classification.design in _AGGREGATE_DESIGNS for record in human
+        )
         if largest is None:
-            violations.append(
-                Violation(
-                    gate="G7",
-                    detail="No cited human study reports its sample size.",
-                    claim_text=claim.text,
+            if not pooled:
+                violations.append(
+                    Violation(
+                        gate="G7",
+                        detail="No cited human study reports its sample size.",
+                        claim_text=claim.text,
+                    )
                 )
-            )
         elif largest < 30:
             violations.append(
                 Violation(

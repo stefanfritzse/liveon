@@ -63,11 +63,33 @@ _DIRECTIVE = re.compile(
 )
 #: Active diagnosis only. "Participants were diagnosed with type 2 diabetes at baseline"
 #: describes a study population and must survive; "these symptoms diagnose X" does not.
-_DIAGNOSIS = re.compile(
-    r"\b(?:diagnose|diagnoses|diagnosing)\b|\bself-diagnos\w*\b"
-    r"|\byou (?:probably |likely |may |might )?have\b",
+_DIAGNOSING = re.compile(
+    r"\b(?:diagnose|diagnoses|diagnosing)\b|\bself-diagnos\w*\b", re.IGNORECASE
+)
+
+#: Telling a reader what they have.
+_YOU_HAVE = re.compile(r"\byou (?:probably |likely |may |might )?have\b", re.IGNORECASE)
+
+#: ...unless it is hypothetical. "If you have mild hearing loss, hearing aids help" is
+#: ordinary, useful health writing addressed to whoever it applies to; it asserts nothing
+#: about the reader. Treating it as a diagnosis refuses most practical advice there is.
+_HYPOTHETICAL = re.compile(
+    r"\b(if|when|whenever|unless|whether|where|while|though|although|assuming|supposing)"
+    r"\s+$",
     re.IGNORECASE,
 )
+
+
+def _asserts_diagnosis(sentence: str) -> bool:
+    """Whether the sentence tells the reader what condition they have."""
+
+    if _DIAGNOSING.search(sentence):
+        return True
+
+    match = _YOU_HAVE.search(sentence)
+    if match is None:
+        return False
+    return not _HYPOTHETICAL.search(sentence[: match.start()])
 
 # -- 3. defeating a named disease -------------------------------------------
 
@@ -121,18 +143,26 @@ def check_claim_ceiling(
     grade: str = "insufficient",
     claim_text: str = "",
     source_key: str = "",
+    recommendations_allowed: bool = False,
 ) -> list[Violation]:
     """Return G8 violations for ``text``.
 
-    ``grade`` is consulted for one rule only: certainty language is permitted in a ``high``
-    grade bundle and nowhere else. Everything else is refused at every grade.
+    ``grade`` is consulted by one rule: certainty language needs a ``high`` bundle.
+    Everything else is refused at every grade, because none of it is about how good the
+    evidence is.
+
+    ``recommendations_allowed`` is accepted and ignored. A rule refusing suggestions on
+    weak evidence lived here briefly; it judged the research rather than the writing, and
+    reporting a preliminary finding with its grade attached is the point of the grade.
     """
 
     violations: list[Violation] = []
     attribution = claim_text or text
 
     for sentence in sentences(text):
-        for rule, detail in _violations_in(sentence, grade=grade):
+        for rule, detail in _violations_in(
+            sentence, grade=grade, recommendations_allowed=recommendations_allowed
+        ):
             violations.append(
                 Violation(
                     gate="G8",
@@ -144,7 +174,9 @@ def check_claim_ceiling(
     return violations
 
 
-def _violations_in(sentence: str, *, grade: str) -> Iterable[tuple[str, str]]:
+def _violations_in(
+    sentence: str, *, grade: str, recommendations_allowed: bool = False
+) -> Iterable[tuple[str, str]]:
     dose = _DOSE_AMOUNT.search(sentence)
     if dose and _DOSE_CONTEXT.search(sentence):
         yield "dosing", f"names a dose to take ({dose.group(0).strip()})"
@@ -152,7 +184,7 @@ def _violations_in(sentence: str, *, grade: str) -> Iterable[tuple[str, str]]:
     has_condition = bool(_CONDITION_RE.search(sentence))
     addresses_reader = bool(_SECOND_PERSON.search(sentence))
 
-    if _DIAGNOSIS.search(sentence):
+    if _asserts_diagnosis(sentence):
         yield "individual_advice", "reads as diagnosis rather than description"
     elif has_condition and addresses_reader and _DIRECTIVE.search(sentence):
         yield "individual_advice", "instructs a reader who has a named condition"

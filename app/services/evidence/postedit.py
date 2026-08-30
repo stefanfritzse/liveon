@@ -7,9 +7,11 @@ acquires a decimal place it never had.
 
 So three gates run again, on the final prose:
 
-* **G2** — every number in the body is either one the bundle anchored, or one that
-  appears verbatim in a cited source.
+* **G2** — every number that *reports a finding* is either one the bundle anchored or one
+  that appears verbatim in a cited source. Practical quantities in a suggestion — "spend
+  ten minutes a day" — are not claims about the evidence and are left alone.
 * **G4** — causal language still requires randomised evidence.
+* **G5** — a surrogate marker is still not a clinical benefit.
 * **G8** — the claim ceiling, evaluated at the bundle's grade.
 
 This is a different question from the one the reviewer answered. The reviewer asked
@@ -21,12 +23,14 @@ rewritten.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Mapping, Sequence
 
 from app.models.evidence import EvidenceBundle, EvidenceRecord, Violation
 from app.services.evidence.claim_policy import check_claim_ceiling, sentences
 from app.services.evidence.gates import (
     CAUSAL_LANGUAGE,
+    CLINICAL_LANGUAGE,
     HEDGED_LANGUAGE,
     RANDOMISED_DESIGNS,
     normalise_number,
@@ -48,6 +52,7 @@ def recheck_published_text(
     violations: list[Violation] = []
     violations.extend(_numbers(text, bundle, records))
     violations.extend(_causal(text, bundle, records))
+    violations.extend(_surrogate(text, bundle, records))
     violations.extend(check_claim_ceiling(text, grade=bundle.grade))
 
     if violations:
@@ -97,6 +102,39 @@ def _source_numbers(records: Mapping[str, EvidenceRecord]) -> set[str]:
     }
 
 
+#: Units that measure a practice rather than a result.
+_PRACTICE_UNIT = re.compile(
+    r"^[\s-]*(minutes?|mins?|hours?|seconds?|times?|days?|weeks?|nights?|sessions?)\b",
+    re.IGNORECASE,
+)
+
+#: Sentences that suggest rather than report.
+_SUGGESTION = re.compile(
+    r"^\s*(?:try|spend|aim|take|walk|do|start|begin|set|give|keep|add|use|consider|today|"
+    r"each|every|even|make)\b|\byou (?:can|could|might|may|only need)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_practice_quantity(text: str, token: str) -> bool:
+    """Whether this figure is the shape of a suggestion rather than a finding.
+
+    "Mortality fell by 4.2 percent" asserts something about a study and must be sourced.
+    "Spend ten minutes a day" asserts nothing about a study — it is how long to try
+    something for. Refusing the second protects nobody and costs every practical tip the
+    system would otherwise write.
+    """
+
+    for sentence in sentences(text):
+        index = sentence.find(token)
+        if index == -1:
+            continue
+        after = sentence[index + len(token) :]
+        if _PRACTICE_UNIT.match(after) and _SUGGESTION.search(sentence):
+            return True
+    return False
+
+
 def _numbers(
     text: str, bundle: EvidenceBundle, records: Mapping[str, EvidenceRecord]
 ) -> list[Violation]:
@@ -108,6 +146,8 @@ def _numbers(
     for token in numeric_tokens(text):
         normalised = normalise_number(token)
         if normalised in anchored or normalised in in_sources:
+            continue
+        if _is_practice_quantity(text, token):
             continue
         violations.append(
             Violation(
@@ -151,6 +191,40 @@ def _causal(
                     detail=(
                         f"Edited text asserts {causal_word.group(0)!r} on "
                         f"{', '.join(sorted(designs)) or 'unclassified'} evidence."
+                    ),
+                    claim_text=sentence,
+                )
+            )
+    return violations
+
+
+def _surrogate(
+    text: str, bundle: EvidenceBundle, records: Mapping[str, EvidenceRecord]
+) -> list[Violation]:
+    """A biomarker that moved is still not a life that improved.
+
+    The claim-level G5 checks the claims; this checks the sentences actually published.
+    The first real tip described two surrogate markers falling and then concluded it was
+    "beneficial for managing inflammation and iron metabolism" — the claims were clean and
+    the paragraph built on them was not.
+    """
+
+    cited = [records[key] for key in bundle.source_keys() if key in records]
+    outcomes = [outcome for record in cited for outcome in record.outcomes]
+    known = [outcome.is_surrogate for outcome in outcomes if outcome.is_surrogate.is_known]
+    if not known or not all(flag.value for flag in known):
+        return []
+
+    violations: list[Violation] = []
+    for sentence in sentences(text):
+        clinical = CLINICAL_LANGUAGE.search(sentence)
+        if clinical:
+            violations.append(
+                Violation(
+                    gate="G5",
+                    detail=(
+                        f"Edited text claims {clinical.group(0)!r} where every measured "
+                        "endpoint is a surrogate marker."
                     ),
                     claim_text=sentence,
                 )

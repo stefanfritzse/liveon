@@ -257,3 +257,11 @@ def test_animal_evidence_is_named_as_animal_evidence_in_the_summary() -> None:
 def test_unassessed_content_says_so() -> None:
     assert describe_grade("insufficient", [_record("doi:a")]) == "Not assessed"
     assert describe_grade("moderate", []) == "Not assessed"
+
+
+def test_design_labels_are_pluralised_properly() -> None:
+    """"2 human meta-analysiss" reached a reader once."""
+
+    records = [_record("doi:a", design="meta_analysis"), _record("doi:b", design="meta_analysis")]
+
+    assert describe_grade("high", records) == "High — 2 human meta-analyses"
