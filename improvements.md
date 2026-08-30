@@ -3,7 +3,7 @@
 **Goal:** replace the RSS→prose content pipeline with an evidence-first research pipeline, so that
 every published claim traces to a real scientific source and its strength is stated honestly.
 
-**Baseline:** commit `f078224` (branch `no_google`), 2026-08-30, 362 tests passing.
+**Baseline:** commit `f078224` (branch `no_google`), 2026-08-30, 424 tests passing.
 **Runtime:** local Ollama (`qwen2.5:14b` class), offline-friendly, no cloud or Google dependency.
 **Operating constraint:** the pipeline is **fully autonomous**. Nothing is held for human approval,
 so every gate in this plan must be executable code, covered by tests, and safe when it fails.
@@ -82,7 +82,7 @@ describe work that is partly done, and one describes a mechanism that does not e
 | Storage | [sqlite_repo.py](app/services/sqlite_repo.py) stores `to_document()` JSON in a `data` column and `from_document` tolerates missing keys. | New model fields are additive; no migration needed. Item 8 is template work. |
 | Scheduling | Runners return `bool`; [_execute](app/services/pipeline_scheduler.py#L384) stamps `last_run` only on success, on an hourly tick. | "Nothing new today" advances the cadence; "feeds are down" retries hourly forever. Item 9 must change this signature. |
 | Coach | [coach.py](app/services/coach.py) has no retrieval — system prompt plus history. | The most safety-sensitive surface sits entirely outside the evidence layer. Item 13. |
-| Tests | 362 passing; [conftest.py](app/tests/conftest.py) has no network guard. | New HTTP clients will silently reach the network in CI unless one is added (item 11). |
+| Tests | 424 passing; [conftest.py](app/tests/conftest.py) has no network guard. | New HTTP clients will silently reach the network in CI unless one is added (item 11). |
 
 ---
 
@@ -524,7 +524,7 @@ Retention: `LIVEON_RUN_RETENTION_DAYS` (default 365), pruned on scheduler start.
 **Test hygiene first, or none of this is trustworthy:**
 
 - Add an autouse `conftest.py` fixture that fails any test making a real network call (patch the
-  `httpx` transport). Without it, 362 existing tests plus new research clients will quietly hit the
+  `httpx` transport). Without it, the existing suite plus new research clients will quietly hit the
   internet in CI.
 - The corpus is **checked-in offline fixtures** — real PubMed/Europe PMC payloads under
   `app/tests/fixtures/corpus/`, one directory per case, each with the record and its expected labels.

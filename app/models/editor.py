@@ -7,6 +7,7 @@ from typing import Sequence
 
 from app.models.content import Article
 from app.models.summarizer import ArticleDraft
+from app.services.evidence.citations import allowlisted_evidence, rejected_evidence
 
 
 @dataclass(slots=True)
@@ -123,20 +124,13 @@ def allowlisted_sources(
     URLs are provenance, not prose, so the model gets no say in them: anything
     it supplies is kept only when it matches a feed URL, and the feed URLs are
     always preserved.
+
+    This is the URL specialisation of
+    :func:`app.services.evidence.citations.allowlisted_evidence`; the evidence layer
+    applies the same rule to canonical source keys, which a model cannot spell at all.
     """
 
-    allowed = {_source_key(value) for value in feed_sources if value.strip()}
-    seen: set[str] = set()
-    kept: list[str] = []
-    # Feed first, so the feed's spelling of a URL wins over the model's.
-    for value in list(feed_sources) + list(model_sources):
-        cleaned = value.strip()
-        key = _source_key(cleaned)
-        if not cleaned or key not in allowed or key in seen:
-            continue
-        seen.add(key)
-        kept.append(cleaned)
-    return kept
+    return allowlisted_evidence(feed_sources, model_sources, key=_source_key)
 
 
 def rejected_sources(
@@ -145,14 +139,4 @@ def rejected_sources(
 ) -> list[str]:
     """Return the model-supplied sources dropped by :func:`allowlisted_sources`."""
 
-    allowed = {_source_key(value) for value in feed_sources if value.strip()}
-    seen: set[str] = set()
-    dropped: list[str] = []
-    for value in model_sources:
-        cleaned = value.strip()
-        key = _source_key(cleaned)
-        if not cleaned or key in allowed or key in seen:
-            continue
-        seen.add(key)
-        dropped.append(cleaned)
-    return dropped
+    return rejected_evidence(feed_sources, model_sources, key=_source_key)

@@ -14,6 +14,13 @@ class TipDraft:
     body: str
     tags: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Provenance travels with the draft rather than in ``metadata``, because metadata was
+    # dropped at persistence and a tip that cannot name its source is unpublishable.
+    source_urls: list[str] = field(default_factory=list)
+    evidence_bundle_id: str | None = None
+    evidence_keys: list[str] = field(default_factory=list)
+    evidence_grade: str | None = None
+    evidence_summary: str | None = None
 
     def with_defaults(self) -> "TipDraft":
         """Return a copy with trimmed fields and fallback defaults."""
@@ -32,4 +39,17 @@ class TipDraft:
             body=self.body.strip(),
             tags=cleaned_tags,
             metadata=cleaned_metadata,
+            source_urls=[
+                url.strip()
+                for url in self.source_urls
+                if isinstance(url, str) and url.strip()
+            ],
+            evidence_bundle_id=(self.evidence_bundle_id or "").strip() or None,
+            evidence_keys=[
+                key.strip()
+                for key in self.evidence_keys
+                if isinstance(key, str) and key.strip()
+            ],
+            evidence_grade=(self.evidence_grade or "").strip() or None,
+            evidence_summary=(self.evidence_summary or "").strip() or None,
         )

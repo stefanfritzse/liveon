@@ -103,7 +103,24 @@ class Article:
     published_date: datetime = field(default_factory=_default_datetime)
     source_urls: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    # Provenance carried through from the evidence layer. ``evidence_keys`` are canonical
+    # source keys owned by the store, not URLs a model produced, so a published claim can
+    # be traced back to the document span it came from.
+    evidence_bundle_id: str | None = None
+    evidence_keys: list[str] = field(default_factory=list)
+    evidence_grade: str | None = None
+    evidence_summary: str | None = None
     id: str | None = None
+
+    @property
+    def evidence_assessed(self) -> bool:
+        """Whether this article went through evidence review.
+
+        Content published before the evidence layer existed has no bundle and is badged
+        as unassessed rather than being retro-graded on no information.
+        """
+
+        return bool(self.evidence_bundle_id or self.evidence_grade)
 
     def to_document(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -113,6 +130,10 @@ class Article:
             "published_date": self.published_date,
             "source_urls": list(self.source_urls),
             "tags": list(self.tags),
+            "evidence_bundle_id": self.evidence_bundle_id,
+            "evidence_keys": list(self.evidence_keys),
+            "evidence_grade": self.evidence_grade,
+            "evidence_summary": self.evidence_summary,
         }
         if self.id:
             payload["id"] = self.id
@@ -137,6 +158,10 @@ class Article:
             published_date=published,
             source_urls=source_urls,
             tags=tags,
+            evidence_bundle_id=_optional_str(data.get("evidence_bundle_id")),
+            evidence_keys=_listify_strings(data.get("evidence_keys")),
+            evidence_grade=_optional_str(data.get("evidence_grade")),
+            evidence_summary=_optional_str(data.get("evidence_summary")),
             id=doc_id,
         )
 
@@ -149,7 +174,19 @@ class Tip:
     content_body: str
     published_date: datetime = field(default_factory=_default_datetime)
     tags: list[str] = field(default_factory=list)
+    # Tips previously lost their sources entirely at this boundary: the generator context
+    # carried them, the publisher did not persist them, and nothing downstream could say
+    # where a tip came from.
+    source_urls: list[str] = field(default_factory=list)
+    evidence_bundle_id: str | None = None
+    evidence_keys: list[str] = field(default_factory=list)
+    evidence_grade: str | None = None
+    evidence_summary: str | None = None
     id: str | None = None
+
+    @property
+    def evidence_assessed(self) -> bool:
+        return bool(self.evidence_bundle_id or self.evidence_grade)
 
     def to_document(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -157,6 +194,11 @@ class Tip:
             "content_body": self.content_body,
             "published_date": self.published_date,
             "tags": list(self.tags),
+            "source_urls": list(self.source_urls),
+            "evidence_bundle_id": self.evidence_bundle_id,
+            "evidence_keys": list(self.evidence_keys),
+            "evidence_grade": self.evidence_grade,
+            "evidence_summary": self.evidence_summary,
         }
         if self.id:
             payload["id"] = self.id
@@ -177,6 +219,11 @@ class Tip:
             content_body=content_body,
             published_date=published,
             tags=tags,
+            source_urls=_listify_strings(data.get("source_urls") or data.get("sources")),
+            evidence_bundle_id=_optional_str(data.get("evidence_bundle_id")),
+            evidence_keys=_listify_strings(data.get("evidence_keys")),
+            evidence_grade=_optional_str(data.get("evidence_grade")),
+            evidence_summary=_optional_str(data.get("evidence_summary")),
             id=doc_id,
         )
 

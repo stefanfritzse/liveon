@@ -11,6 +11,8 @@ env/
 
 # Local data and run artifacts
 data/
+# Cached research API responses (replayable, machine-local)
+cache/research/
 *.db
 *.db-wal
 *.db-shm

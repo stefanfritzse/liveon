@@ -59,6 +59,14 @@ class TipPublisher:
             content_body=normalised.body,
             published_date=published,
             tags=list(normalised.tags),
+            # Provenance was previously dropped here: the draft carried its sources and
+            # the stored tip did not, so nothing downstream could say where a published
+            # tip came from.
+            source_urls=list(normalised.source_urls),
+            evidence_bundle_id=normalised.evidence_bundle_id,
+            evidence_keys=list(normalised.evidence_keys),
+            evidence_grade=normalised.evidence_grade,
+            evidence_summary=normalised.evidence_summary,
         )
         stored = self.repository.save_tip(tip)
         return TipPublicationResult(tip=stored, created=True)
