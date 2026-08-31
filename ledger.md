@@ -553,168 +553,85 @@ Still outstanding from slice 1: **Europe PMC**, **ClinicalTrials.gov**, and the 
 wrapper**. Europe PMC matters most — open-access full text is what would let extraction fill the
 fields abstracts leave `not_reported`, which is currently the main thing capping grades.
 
-## Deploying on this machine
+## Deploying and serving Live On
 
-**Read this first: there are three deploy paths and only one of them is real.**
+Rebuilt 2026-08-31 after Live On sat `Failed` overnight. **Deploying and serving are now two
+different things.** They used to be one process, and that was the whole bug.
 
-1. `C:\Users\stefa\sambandscentral\scripts\liveon_k8s_start.ps1` — **the real one.** Run by
-   Sambands Central as the app `liveon`, defined by `controller_manifest.json` in this repo
-   (untracked). It builds, applies, waits for rollout, and then runs
-   `kubectl port-forward --address 127.0.0.1,<tailscale-ip>` **in the foreground**. That
-   foreground port-forward *is* the supervised process, and it is what publishes the site to
-   the phone over Tailscale. It sets:
-       MINIKUBE_HOME=C:\ProgramData\SambandsCentral\k8s\minikube
-       KUBECONFIG=C:\ProgramData\SambandsCentral\k8s\kube\config
-2. `deploy.ps1` in this repo — a parallel script using the *default* MINIKUBE_HOME and
-   kubeconfig. Fine for local iteration; it serves nothing over Tailscale.
-3. Doing it by hand with `kubectl`.
+### How it works now
 
-**The cluster is shared between all three.** Anything that replaces the pod — a
-`kubectl rollout restart`, a `deploy.ps1` run, an eviction — kills path 1's port-forward,
-because a port-forward is bound to one specific pod. It exits, Sambands Central marks Live
-On `Failed`, and leaves it there. **The site then disappears from the phone until somebody
-taps Start.** There is no retry and no auto-restart.
+| Concern | Script | Supervised? |
+|---|---|---|
+| Build + roll out | `sambandscentral/scripts/liveon_k8s_deploy.ps1` | no, runs to completion |
+| Keep the site reachable | `sambandscentral/scripts/liveon_k8s_serve.ps1` | **yes**, `restart_policy: on_failure` |
+| Stop | `sambandscentral/scripts/liveon_k8s_stop.ps1` | stop_command |
+| Shared paths/helpers | `sambandscentral/scripts/liveon_common.ps1` | dot-sourced by all three |
 
-That is exactly what happened on 2026-08-30: a `rollout restart` run by hand at 16:57 local
-replaced the pod, and at 16:58:47 the supervised process died with
+`deploy.ps1` in this repo is now a thin wrapper around the canonical deploy script. It is no
+longer a second implementation: two scripts against one cluster, pointed at two different
+`MINIKUBE_HOME`s, is what produced a convincing but completely wrong "the node's SSH
+credentials have drifted" diagnosis.
 
-    error forwarding port 8080 to pod <id>: No such container: <id>
-    error: lost connection to pod
+**Serving no longer tunnels to a pod.** A `liveon-proxy` container (socat) sits on the
+`minikube` docker network and forwards `127.0.0.1:8080` to the Service's NodePort;
+`tailscale serve` publishes that on the tailnet at `http://pappasdator2:8080`, matching how
+the other services on this machine are exposed. kube-proxy chooses the pod, so a rollout is
+invisible.
 
-**Before touching the deployment, check whether Live On is running in Sambands Central, and
-expect to restart it afterwards.**
+### What that changed, measured
+
+- **A full build-apply-rollout while polling `/healthz` every 250ms: 74 probes, 0 failures.**
+  The same operation used to be a permanent outage.
+- Killing the serve loop leaves the site up: the proxy carries `--restart=unless-stopped`, so
+  serving does not depend on the supervisor being alive.
+- `Stop` removes the proxy and scales to 0; `Start` scales back up and re-establishes. Verified
+  round trip.
+
+### Why the old arrangement failed
+
+A `kubectl port-forward` is bound to **one pod**. Replace the pod and it exits, permanently,
+and Sambands Central left the app `Failed` because no manifest on this machine had ever opted
+into `restart_policy` -- the supervisor has implemented it, with exponential backoff, all
+along. On 2026-08-30 a `rollout restart` run by hand replaced the pod and the supervised
+process died with `No such container` / `lost connection to pod`.
+
+That `rollout restart` existed because the manifests deployed `:latest`: the spec stayed
+byte-identical, `kubectl apply` was a no-op, and a rebuild silently kept serving the old pod.
+Images are now tagged `yyyyMMdd-HHmmss-<sha>`, so apply is a real change, the rollout happens
+because the image changed, and `rollout restart` is gone.
+
+### Two traps worth remembering
+
+- **PowerShell 5.1 turns native stderr into a terminating error.** With
+  `$ErrorActionPreference='Stop'`, `docker build` -- which writes all its progress to stderr --
+  aborts the script the moment anything redirects it, which is exactly what capturing logs to
+  a file does. `Invoke-Native` / `Get-NativeOutput` in `liveon_common.ps1` run native tools
+  with that suppressed and judge them by exit code. The same trap made a `kubectl get` probe
+  answer "the deployment does not exist" whenever kubectl wrote one line to stderr.
+- **`Invoke-WebRequest` needs `-UseBasicParsing`.** Without it, PowerShell 5.1 routes the
+  response through the Internet Explorer engine and throws in a non-interactive session --
+  reporting a healthy service as broken.
 
 ### Correction: minikube's credentials were never broken
 
-An earlier version of this section claimed the node's SSH key had "drifted" out of sync and
-that `minikube ssh`/`status`/`docker-env` were permanently broken. **That was wrong, and the
-conclusions drawn from it were wrong.**
+An earlier version of this section claimed the node's SSH key had drifted and that
+`minikube ssh`/`status`/`docker-env` were permanently broken. **That was wrong.** There are
+two minikube homes on this machine, and the cluster belongs to the other one:
 
-There are two minikube homes on this machine:
+- `C:\ProgramData\SambandsCentral\k8s\minikube\.minikube` (2026-08-29) -- **this cluster.**
+  Its key matches the node's `authorized_keys` exactly.
+- `~/.minikube` (2025-11-04) -- a stale, unrelated profile whose key never should have matched.
 
-- `C:\ProgramData\SambandsCentral\k8s\minikube\.minikube` (created 2026-08-29) — **the one
-  this cluster actually belongs to.** Its key matches the node's `authorized_keys` exactly.
-- `~/.minikube` (2025-11-04) — a stale, unrelated profile. Its key does not match, and never
-  should have been expected to.
+**Do not append any SSH key to the node.** That was proposed on a false premise. All scripts
+now share `liveon_common.ps1`, so nothing can point at the wrong home again.
 
-The handshake failures came from pointing minikube at the wrong home, not from credential
-damage. With `MINIKUBE_HOME` and `KUBECONFIG` set the way `liveon_k8s_start.ps1` sets them
-everything works — the app's own log shows `docker-env` and a full image build succeeding.
+### Still open
 
-**Do not append any SSH key to the node.** That was proposed on the strength of the wrong
-diagnosis; nothing is broken, and it would have been a change made for no reason.
-
-`deploy.ps1`'s host-build fallback is therefore not compensating for a broken cluster, only
-for being pointed at the wrong home. It is harmless and still a reasonable safety net, but
-the better fix is for it to honour the same `MINIKUBE_HOME`/`KUBECONFIG` as path 1.
-
-### Real bugs found in deploy.ps1 (these still stand)
-
-- **`kubectl apply` was a no-op on every rebuild.** The manifest pins
-  `longevity-coach:latest`, so a new image leaves the Deployment spec byte-identical, apply
-  changes nothing, and `rollout status` reports success against the *old* pod. Fixed with
-  `kubectl rollout restart`. Note this makes the pod-replacement problem above worse rather
-  than better: it now always replaces the pod, so it will always kill path 1's port-forward.
-- **The health check reported a healthy service as broken.** `Invoke-WebRequest` without
-  `-UseBasicParsing` routes through the Internet Explorer engine and throws *"PowerShell is
-  in NonInteractive mode"* when IE's first-run configuration is absent.
+Nothing here tells anyone the site is down; the outage was found because a human opened the
+page on their phone. The smallest useful addition is a periodic probe of the tailnet URL that
+alerts on failure. Not built.
 
 Database backup: `liveon-backup-20260830-164434.db` (69,632 bytes).
-
-## Proposal: serve Live On robustly
-
-Written 2026-08-31 after Live On sat `Failed` overnight. Everything below was measured on
-this machine, not assumed.
-
-### What is actually wrong
-
-The supervised process *is* a `kubectl port-forward`. A port-forward is a debugging tool
-bound to **one pod**: replace the pod and it exits, permanently. Serving is also welded to
-deploying, so a deploy kills serving and restarting serving re-runs a deploy.
-
-Measured failure modes:
-
-| # | Trigger | Today | Seen |
-|---|---|---|---|
-| F1 | Pod replaced (rollout, `deploy.ps1`, manual) | forward exits; app `Failed` until a human taps Start | 2026-08-30 16:58 |
-| F2 | Port 8080 already bound | start dies in ~8s | 2026-08-30 09:59 |
-| F3 | Pod evicted / rescheduled | as F1 | latent |
-| F4 | Docker Desktop or machine restart | everything down, nothing comes back | latent |
-| F5 | Two deploy paths, one cluster | pod churn, races | design |
-
-### The measurements
-
-- The Service is already `NodePort` **30811** on node **192.168.49.2**.
-- That node IP is **not** reachable from the Windows host (docker driver, WSL2 backend):
-  `curl` fails. The minikube container publishes only 22/2376/5000/8443/32443, on
-  *ephemeral* host ports that change on every `minikube start`. So "just point at the
-  NodePort" is not available from the host.
-- It **is** reachable from any container on the `minikube` docker network: HTTP 200, both
-  as `192.168.49.2:30811` and as `minikube:30811` (docker's embedded DNS resolves the
-  container name, so no hardcoded IP is needed).
-- A proxy container on that network, publishing to the host, **survived a full pod
-  replacement**: 76 of 77 probes returned 200, with a single ~0.25s gap. The port-forward,
-  by contrast, dies and stays dead.
-- The Deployment is already well configured for this: readiness probe on `/healthz`, and
-  `RollingUpdate` 25%/25% at 1 replica resolves to `maxUnavailable=0, maxSurge=1`, so a new
-  pod becomes Ready before the old one goes away.
-- Sambands Central **already implements** `restart_policy: "on_failure"` with exponential
-  backoff (base 5s, max 300s, reset after 60s stable, monitor tick 10s). **No app on this
-  machine opts in**, Live On included.
-- `tailscale serve` is already the pattern here, proxying `127.0.0.1:8011` and
-  `127.0.0.1:8766` for other services. Live On is the exception: it binds the port-forward
-  straight to `100.76.217.70:8080`.
-- `liveon_k8s_start.ps1` already takes a `-SkipBuild` switch, so the deploy/serve split was
-  anticipated.
-
-### The proposal, in order of value per unit of risk
-
-**Tier 1 — five minutes, no design change, do this regardless.**
-
-1. Add `"restart_policy": "on_failure"` to `controller_manifest.json`. The machinery exists
-   and is tested; Live On simply never opted in. This alone turns "down until someone
-   notices" into "back within ~5s". It is a safety net, not the fix — with today's script an
-   auto-restart re-runs a whole build.
-2. Pin `nodePort: 30811` in `service.yaml`. It is currently *allocated*, not *declared*, so
-   deleting and recreating the Service would hand out a different port and silently break
-   anything pointing at it.
-
-**Tier 2 — the actual fix: stop tunnelling to a pod.**
-
-3. Split `liveon_k8s_start.ps1` into `deploy` (build, apply, roll out; runs to completion)
-   and `serve` (maintains the route; runs forever). Sambands Central should supervise
-   **serve**, not the pair. Deploying then stops taking the site down, and restarting the
-   route stops rebuilding an image.
-4. Make `serve` a long-lived proxy container instead of a port-forward:
-
-       docker run -d --name liveon-proxy --restart=unless-stopped \
-         --network=minikube -p 127.0.0.1:8080:8080 \
-         alpine/socat tcp-listen:8080,fork,reuseaddr tcp:minikube:30811
-
-   kube-proxy then does the routing, so pod replacement is invisible (measured: 0.25s), and
-   docker's restart policy covers reboots and daemon restarts (F4). No kubectl, no
-   kubeconfig, no credentials in the serving path. The supervised process becomes a thin
-   `docker start` + `docker wait liveon-proxy`, which blocks while the container runs, so the
-   dashboard's Running/Stopped/Start/Stop still mean what they say.
-5. Bind the proxy to `127.0.0.1` only and expose it with `tailscale serve`, matching the two
-   services already done that way. That drops the LAN exposure of binding the tailnet IP
-   directly, and removes F2's cause — nothing else contends for 8080.
-
-**Tier 3 — remove the conditions that caused it.**
-
-6. Give `deploy.ps1` the same `MINIKUBE_HOME`/`KUBECONFIG` as the real script, or delete it.
-   Two scripts pointing at different minikube homes is what produced yesterday's wrong
-   "credentials are broken" diagnosis.
-7. Stop deploying `:latest`. Tag by content or timestamp and set the tag in the manifest.
-   `kubectl apply` becomes meaningful again, the `rollout restart` workaround (which *always*
-   replaces the pod, making F1 certain) can be dropped, and it becomes possible to say what
-   is actually running.
-
-### What this does not fix
-
-Nothing here tells anyone the site is down. The outage was found because a human happened to
-open the page on their phone. If that matters, the smallest useful addition is a periodic
-external probe of the tailnet URL that alerts on failure — worth deciding separately.
 
 ## The white squares beside the tag chips
 

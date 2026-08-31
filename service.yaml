@@ -9,4 +9,7 @@ spec:
     - protocol: TCP
       port: 8080
       targetPort: 8080
+      # Pinned, not left to allocation: the serving proxy forwards to this port, so a
+      # re-created Service handing out a different one would silently break the route.
+      nodePort: 30811
   type: NodePort
