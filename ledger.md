@@ -79,9 +79,20 @@ second is still being judged.
 
 ### Read this before assuming anything works end to end
 
-**The flag is on for tips.** `LIVEON_EVIDENCE_PIPELINE=1` with
-`LIVEON_EVIDENCE_PIPELINE_JOBS=tips`: the daily tip now comes from reviewed research, and
-articles stay on the prose pipeline until the tip path has run unattended for a while.
+**The flag is on for everything.** `LIVEON_EVIDENCE_PIPELINE=1` with
+`LIVEON_EVIDENCE_PIPELINE_JOBS` **removed** (2026-08-31), so the master switch covers both
+tips and articles. Set it back to `tips` or `articles` to isolate one path again.
+
+The first article run through the evidence path published on 2026-08-31:
+
+    Exercise Benefits for Older Adults and People with Spinal Cord Injury
+    Moderate -- 2 human meta-analyses, 2 human systematic reviews
+    topic exercise|crf, 4 associative claims, 49 sources acquired
+
+and the site renders `Evidence: Moderate` on it, with the limitations panel. Verified
+end to end: dry run first, then a real run, then the stored row, then the served HTML --
+because provenance silently vanishing at the database boundary is a bug this project has
+had before.
 
 The first real publication went badly and the second went well, which is what the staging
 was for — see "What turning it on found" below.
@@ -128,6 +139,7 @@ for now. Then:
        LIVEON_EVIDENCE_PIPELINE_JOBS=tips     # articles keeps the path that is known to work
 
 5. **Only then widen it.** Drop `LIVEON_EVIDENCE_PIPELINE_JOBS` to switch both jobs.
+   Done 2026-08-31.
 
 A local model writing into prompts that have never seen its actual output is the part of this design
 with the least evidence behind it. Exit status follows the outcome policy: a refusal exits 0, because
@@ -515,9 +527,13 @@ Not in improvements.md; recorded so a later session does not relitigate them.
    them with `run_evidence_pipeline --show-runs`. The thing to watch for is refusal *rate*: a run
    that refuses every candidate publishes nothing, and several of those in a row means the store
    needs more evidence or a gate needs narrowing.
-68. **Then move articles over** by dropping `LIVEON_EVIDENCE_PIPELINE_JOBS` from deployment.yaml.
-   Articles are longer, so there is more surface for the writer to drift on; the post-edit re-check
-   is what catches it.
+68. ~~**Then move articles over**~~ **Done 2026-08-31.** `LIVEON_EVIDENCE_PIPELINE_JOBS` is gone
+   from deployment.yaml and both jobs run the evidence path. The post-edit re-check earned its
+   keep immediately: on the first article the writer was rejected on G5 and G8 across several
+   attempts before a draft passed, and the run log shows those retries rather than hiding them.
+   What to watch now is **refusal rate on articles** -- they are longer than tips, so there is
+   more surface to drift on, and a fail-closed path that refuses everything publishes nothing.
+   Read runs with `run_evidence_pipeline --show-runs`.
 69. **Keep acquiring.** The store holds 57 approved records across 28 topics, but only five topics
    have enough for real synthesis. More queries, or a higher `LIVEON_MAX_RESULTS_PER_QUERY`, gives
    ranking something to choose between.
