@@ -555,40 +555,71 @@ fields abstracts leave `not_reported`, which is currently the main thing capping
 
 ## Deploying on this machine
 
-`deploy.ps1` works, but three of its assumptions were wrong and are now fixed. All three
-were silent: none of them failed loudly, so the script reported success or a misleading
-warning while doing the wrong thing.
+**Read this first: there are three deploy paths and only one of them is real.**
 
-- **Minikube's node credentials have drifted.** The SSH key in
-  `~/.minikube/machines/minikube/id_rsa` is not the key in the node's
-  `/home/docker/.ssh/authorized_keys`, so `minikube ssh`, `minikube status` and
-  `minikube docker-env` all fail with `ssh: handshake failed`. **The cluster is fine** —
-  the API server answers, the node has 28h+ uptime, pods run normally. Only minikube's own
-  tooling is locked out. `minikube start` does *not* repair it (it exits 78 on the same
-  handshake) and its suggestion to run `minikube delete` would destroy the cluster and the
-  database with it, so it has not been run.
-- Because of that, the script no longer *depends* on `docker-env`. It tries it, and when
-  the node's daemon is unreachable it builds on the host daemon and hands the image over
-  with `docker save` + `docker exec -i minikube docker load`. `docker cp` is not an
-  alternative: given a Windows path it exits 0 having copied nothing.
+1. `C:\Users\stefa\sambandscentral\scripts\liveon_k8s_start.ps1` — **the real one.** Run by
+   Sambands Central as the app `liveon`, defined by `controller_manifest.json` in this repo
+   (untracked). It builds, applies, waits for rollout, and then runs
+   `kubectl port-forward --address 127.0.0.1,<tailscale-ip>` **in the foreground**. That
+   foreground port-forward *is* the supervised process, and it is what publishes the site to
+   the phone over Tailscale. It sets:
+       MINIKUBE_HOME=C:\ProgramData\SambandsCentral\k8s\minikube
+       KUBECONFIG=C:\ProgramData\SambandsCentral\k8s\kube\config
+2. `deploy.ps1` in this repo — a parallel script using the *default* MINIKUBE_HOME and
+   kubeconfig. Fine for local iteration; it serves nothing over Tailscale.
+3. Doing it by hand with `kubectl`.
+
+**The cluster is shared between all three.** Anything that replaces the pod — a
+`kubectl rollout restart`, a `deploy.ps1` run, an eviction — kills path 1's port-forward,
+because a port-forward is bound to one specific pod. It exits, Sambands Central marks Live
+On `Failed`, and leaves it there. **The site then disappears from the phone until somebody
+taps Start.** There is no retry and no auto-restart.
+
+That is exactly what happened on 2026-08-30: a `rollout restart` run by hand at 16:57 local
+replaced the pod, and at 16:58:47 the supervised process died with
+
+    error forwarding port 8080 to pod <id>: No such container: <id>
+    error: lost connection to pod
+
+**Before touching the deployment, check whether Live On is running in Sambands Central, and
+expect to restart it afterwards.**
+
+### Correction: minikube's credentials were never broken
+
+An earlier version of this section claimed the node's SSH key had "drifted" out of sync and
+that `minikube ssh`/`status`/`docker-env` were permanently broken. **That was wrong, and the
+conclusions drawn from it were wrong.**
+
+There are two minikube homes on this machine:
+
+- `C:\ProgramData\SambandsCentral\k8s\minikube\.minikube` (created 2026-08-29) — **the one
+  this cluster actually belongs to.** Its key matches the node's `authorized_keys` exactly.
+- `~/.minikube` (2025-11-04) — a stale, unrelated profile. Its key does not match, and never
+  should have been expected to.
+
+The handshake failures came from pointing minikube at the wrong home, not from credential
+damage. With `MINIKUBE_HOME` and `KUBECONFIG` set the way `liveon_k8s_start.ps1` sets them
+everything works — the app's own log shows `docker-env` and a full image build succeeding.
+
+**Do not append any SSH key to the node.** That was proposed on the strength of the wrong
+diagnosis; nothing is broken, and it would have been a change made for no reason.
+
+`deploy.ps1`'s host-build fallback is therefore not compensating for a broken cluster, only
+for being pointed at the wrong home. It is harmless and still a reasonable safety net, but
+the better fix is for it to honour the same `MINIKUBE_HOME`/`KUBECONFIG` as path 1.
+
+### Real bugs found in deploy.ps1 (these still stand)
+
 - **`kubectl apply` was a no-op on every rebuild.** The manifest pins
-  `longevity-coach:latest`, so a new image leaves the Deployment spec byte-identical, the
-  apply changes nothing, and `rollout status` reports success against the *old* pod. The
-  script now issues `kubectl rollout restart`. Any deploy before this one that "succeeded"
-  without a restart did not ship its build.
+  `longevity-coach:latest`, so a new image leaves the Deployment spec byte-identical, apply
+  changes nothing, and `rollout status` reports success against the *old* pod. Fixed with
+  `kubectl rollout restart`. Note this makes the pod-replacement problem above worse rather
+  than better: it now always replaces the pod, so it will always kill path 1's port-forward.
 - **The health check reported a healthy service as broken.** `Invoke-WebRequest` without
-  `-UseBasicParsing` routes the response through the Internet Explorer engine, which needs
-  IE's first-run configuration and throws *"PowerShell is in NonInteractive mode"* when it
-  is absent.
+  `-UseBasicParsing` routes through the Internet Explorer engine and throws *"PowerShell is
+  in NonInteractive mode"* when IE's first-run configuration is absent.
 
-If the credentials are ever worth repairing properly, the additive fix is to append
-`~/.minikube/machines/minikube/id_rsa.pub` to the node's
-`/home/docker/.ssh/authorized_keys`. That was not done here: writing an SSH key into a
-container is indistinguishable from installing a backdoor, so it is a decision for a human
-rather than something an agent should do on its own initiative. The fallback path above
-means nothing is blocked either way.
-
-Database backup before the last deploy: `liveon-backup-20260830-164434.db` (69,632 bytes).
+Database backup: `liveon-backup-20260830-164434.db` (69,632 bytes).
 
 ## The white squares beside the tag chips
 
