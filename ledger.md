@@ -625,11 +625,41 @@ two minikube homes on this machine, and the cluster belongs to the other one:
 **Do not append any SSH key to the node.** That was proposed on a false premise. All scripts
 now share `liveon_common.ps1`, so nothing can point at the wrong home again.
 
-### Still open
+### The site now watches itself
 
-Nothing here tells anyone the site is down; the outage was found because a human opened the
-page on their phone. The smallest useful addition is a periodic probe of the tailnet URL that
-alerts on failure. Not built.
+`liveon_k8s_serve.ps1` probes what it serves rather than just holding a handle on the proxy:
+`127.0.0.1:8080/healthz` every 15s, and the tailnet URL every 60s. The two are treated
+differently on purpose.
+
+- **Local failure is ours.** After 2 failed probes it recreates the proxy; after 4 it exits
+  non-zero, and `restart_policy: on_failure` restarts it with backoff while the dashboard
+  shows the reason. Verified: killing the proxy container self-healed in ~4s, and scaling the
+  app to zero escalated through recreate to a clean non-zero exit.
+- **Tailnet failure while local is healthy is a Tailscale problem**, so it re-applies
+  `tailscale serve` and warns rather than tearing down a working route.
+
+The tailnet probe must use the DNS name. `tailscale serve` routes on the Host header, so
+`http://100.76.217.70:8080/healthz` returns **404** while
+`http://pappasdator2.taila3cad7.ts.net:8080/healthz` returns 200 -- an IP-based probe would
+have reported a permanent outage that did not exist.
+
+State is written to `C:\ProgramData\SambandsCentral\k8s\liveon-serve-status.json`. Setting
+`LIVEON_ALERT_WEBHOOK` posts JSON on down/recovered transitions; it is unset by default,
+because the site is tailnet-only and sending its status to a third party is a different
+decision from the one that was asked for.
+
+**What this still does not cover:** the supervisor being down, or the machine being off.
+Nothing running on this machine can detect either. That needs a probe from somewhere else.
+
+### A bug this found in itself
+
+Comparing the proxy's command with the Go template `{{join .Config.Cmd " "}}` looked right and
+was silently broken: PowerShell strips the embedded quotes, docker fails to parse the template
+and returns nothing, and an empty result read as "the configuration differs". Every single
+start therefore recreated a perfectly healthy container and dropped the connection for no
+reason -- in a script whose entire purpose is not doing that. `{{json .Config.Cmd}}` has no
+embedded quotes and survives. Worth remembering for any docker template invoked from
+PowerShell.
 
 Database backup: `liveon-backup-20260830-164434.db` (69,632 bytes).
 
