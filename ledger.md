@@ -621,6 +621,101 @@ the better fix is for it to honour the same `MINIKUBE_HOME`/`KUBECONFIG` as path
 
 Database backup: `liveon-backup-20260830-164434.db` (69,632 bytes).
 
+## Proposal: serve Live On robustly
+
+Written 2026-08-31 after Live On sat `Failed` overnight. Everything below was measured on
+this machine, not assumed.
+
+### What is actually wrong
+
+The supervised process *is* a `kubectl port-forward`. A port-forward is a debugging tool
+bound to **one pod**: replace the pod and it exits, permanently. Serving is also welded to
+deploying, so a deploy kills serving and restarting serving re-runs a deploy.
+
+Measured failure modes:
+
+| # | Trigger | Today | Seen |
+|---|---|---|---|
+| F1 | Pod replaced (rollout, `deploy.ps1`, manual) | forward exits; app `Failed` until a human taps Start | 2026-08-30 16:58 |
+| F2 | Port 8080 already bound | start dies in ~8s | 2026-08-30 09:59 |
+| F3 | Pod evicted / rescheduled | as F1 | latent |
+| F4 | Docker Desktop or machine restart | everything down, nothing comes back | latent |
+| F5 | Two deploy paths, one cluster | pod churn, races | design |
+
+### The measurements
+
+- The Service is already `NodePort` **30811** on node **192.168.49.2**.
+- That node IP is **not** reachable from the Windows host (docker driver, WSL2 backend):
+  `curl` fails. The minikube container publishes only 22/2376/5000/8443/32443, on
+  *ephemeral* host ports that change on every `minikube start`. So "just point at the
+  NodePort" is not available from the host.
+- It **is** reachable from any container on the `minikube` docker network: HTTP 200, both
+  as `192.168.49.2:30811` and as `minikube:30811` (docker's embedded DNS resolves the
+  container name, so no hardcoded IP is needed).
+- A proxy container on that network, publishing to the host, **survived a full pod
+  replacement**: 76 of 77 probes returned 200, with a single ~0.25s gap. The port-forward,
+  by contrast, dies and stays dead.
+- The Deployment is already well configured for this: readiness probe on `/healthz`, and
+  `RollingUpdate` 25%/25% at 1 replica resolves to `maxUnavailable=0, maxSurge=1`, so a new
+  pod becomes Ready before the old one goes away.
+- Sambands Central **already implements** `restart_policy: "on_failure"` with exponential
+  backoff (base 5s, max 300s, reset after 60s stable, monitor tick 10s). **No app on this
+  machine opts in**, Live On included.
+- `tailscale serve` is already the pattern here, proxying `127.0.0.1:8011` and
+  `127.0.0.1:8766` for other services. Live On is the exception: it binds the port-forward
+  straight to `100.76.217.70:8080`.
+- `liveon_k8s_start.ps1` already takes a `-SkipBuild` switch, so the deploy/serve split was
+  anticipated.
+
+### The proposal, in order of value per unit of risk
+
+**Tier 1 — five minutes, no design change, do this regardless.**
+
+1. Add `"restart_policy": "on_failure"` to `controller_manifest.json`. The machinery exists
+   and is tested; Live On simply never opted in. This alone turns "down until someone
+   notices" into "back within ~5s". It is a safety net, not the fix — with today's script an
+   auto-restart re-runs a whole build.
+2. Pin `nodePort: 30811` in `service.yaml`. It is currently *allocated*, not *declared*, so
+   deleting and recreating the Service would hand out a different port and silently break
+   anything pointing at it.
+
+**Tier 2 — the actual fix: stop tunnelling to a pod.**
+
+3. Split `liveon_k8s_start.ps1` into `deploy` (build, apply, roll out; runs to completion)
+   and `serve` (maintains the route; runs forever). Sambands Central should supervise
+   **serve**, not the pair. Deploying then stops taking the site down, and restarting the
+   route stops rebuilding an image.
+4. Make `serve` a long-lived proxy container instead of a port-forward:
+
+       docker run -d --name liveon-proxy --restart=unless-stopped \
+         --network=minikube -p 127.0.0.1:8080:8080 \
+         alpine/socat tcp-listen:8080,fork,reuseaddr tcp:minikube:30811
+
+   kube-proxy then does the routing, so pod replacement is invisible (measured: 0.25s), and
+   docker's restart policy covers reboots and daemon restarts (F4). No kubectl, no
+   kubeconfig, no credentials in the serving path. The supervised process becomes a thin
+   `docker start` + `docker wait liveon-proxy`, which blocks while the container runs, so the
+   dashboard's Running/Stopped/Start/Stop still mean what they say.
+5. Bind the proxy to `127.0.0.1` only and expose it with `tailscale serve`, matching the two
+   services already done that way. That drops the LAN exposure of binding the tailnet IP
+   directly, and removes F2's cause — nothing else contends for 8080.
+
+**Tier 3 — remove the conditions that caused it.**
+
+6. Give `deploy.ps1` the same `MINIKUBE_HOME`/`KUBECONFIG` as the real script, or delete it.
+   Two scripts pointing at different minikube homes is what produced yesterday's wrong
+   "credentials are broken" diagnosis.
+7. Stop deploying `:latest`. Tag by content or timestamp and set the tag in the manifest.
+   `kubectl apply` becomes meaningful again, the `rollout restart` workaround (which *always*
+   replaces the pod, making F1 certain) can be dropped, and it becomes possible to say what
+   is actually running.
+
+### What this does not fix
+
+Nothing here tells anyone the site is down. The outage was found because a human happened to
+open the page on their phone. If that matters, the smallest useful addition is a periodic
+external probe of the tailnet URL that alerts on failure — worth deciding separately.
+
 ## The white squares beside the tag chips
 
 Reported from a screenshot: small white squares between the topic filter chips. **Not
